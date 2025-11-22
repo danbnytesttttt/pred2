@@ -1923,6 +1923,16 @@ namespace HybridPred
         float time_since_update = current_time - tracker.get_last_update_time();
         result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
 
+        // Debug logging for 0 hit chance
+        if (result.hit_chance < 0.01f && g_sdk)
+        {
+            char debug_msg[512];
+            snprintf(debug_msg, sizeof(debug_msg),
+                "[Danny.Prediction] CIRCULAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu reachable_r=%.1f",
+                arrival_time, physics_prob, behavior_prob, confidence, sample_count, reachable_region.max_radius);
+            g_sdk->log_console(debug_msg);
+        }
+
         // Clamp to [0, 1]
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
 
