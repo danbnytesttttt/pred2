@@ -611,17 +611,17 @@ namespace HybridPred
             // Use adaptive decay rate based on target mobility
             float weight = std::pow(decay_rate, static_cast<float>(i));
 
-            // FIX: Scale historical velocity by current move_speed
-            // This handles slows/speed buffs - historical velocity was at different speed
+            // FIX: Scale historical velocity to current move_speed
+            // Direction from history, magnitude from current move_speed stat
+            // This handles both slows (scale down) and speed buffs (scale up)
             math::vector3 adjusted_velocity = snapshot.velocity;
             float snapshot_speed = snapshot.velocity.magnitude();
-            if (snapshot_speed > 1.f && move_speed > 1.f)
+            if (snapshot_speed > 10.f && move_speed > 1.f)
             {
-                // Cap velocity to current move_speed (handles slows)
-                // Also scale up if speed buffed (but cap at move_speed to avoid over-prediction)
-                float speed_cap = std::min(snapshot_speed, move_speed);
-                adjusted_velocity = snapshot.velocity.normalized() * speed_cap;
+                // Scale velocity magnitude to current move_speed
+                adjusted_velocity = snapshot.velocity.normalized() * move_speed;
             }
+            // If snapshot_speed <= 10, target was stationary - keep as-is
 
             // Predict position from this snapshot with adjusted velocity
             math::vector3 predicted_pos = snapshot.position + adjusted_velocity * prediction_time;
@@ -658,13 +658,12 @@ namespace HybridPred
             // Use adaptive decay rate based on target mobility
             float weight = std::pow(decay_rate, static_cast<float>(i));
 
-            // FIX: Scale historical velocity by current move_speed (same as first pass)
+            // FIX: Scale historical velocity to current move_speed (same as first pass)
             math::vector3 adjusted_velocity = snapshot.velocity;
             float snapshot_speed = snapshot.velocity.magnitude();
-            if (snapshot_speed > 1.f && move_speed > 1.f)
+            if (snapshot_speed > 10.f && move_speed > 1.f)
             {
-                float speed_cap = std::min(snapshot_speed, move_speed);
-                adjusted_velocity = snapshot.velocity.normalized() * speed_cap;
+                adjusted_velocity = snapshot.velocity.normalized() * move_speed;
             }
 
             // Predict position from this snapshot with adjusted velocity
@@ -688,12 +687,11 @@ namespace HybridPred
             // Perpendicular in XZ plane (2D movement) - 90° rotation
             math::vector3 perpendicular(-velocity_dir.z, 0.f, velocity_dir.x);
 
-            // FIX: Use move_speed-capped velocity for dodge calculations
-            float latest_speed = latest.velocity.magnitude();
-            float capped_speed = std::min(latest_speed, move_speed);
+            // FIX: Use current move_speed for dodge calculations
+            // Direction from velocity, magnitude from move_speed stat
 
             // Compute forward and lateral displacement separately
-            math::vector3 forward = velocity_dir * capped_speed * prediction_time;
+            math::vector3 forward = velocity_dir * move_speed * prediction_time;
 
             // LEARNED lateral dodge factor from actual movement patterns
             // Compute average lateral component from direction changes
@@ -709,7 +707,7 @@ namespace HybridPred
                 lateral_factor = total_lateral / direction_change_angles_.size();
                 lateral_factor = std::clamp(lateral_factor, 0.2f, 0.9f);  // Reasonable bounds
             }
-            float dodge_distance = capped_speed * prediction_time * lateral_factor;
+            float dodge_distance = move_speed * prediction_time * lateral_factor;
             math::vector3 side = perpendicular * dodge_distance;
 
             // Juke cadence weighting: Weight lateral dodge samples based on timing
