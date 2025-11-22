@@ -211,7 +211,18 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
 
         // FIX: Use target bounding radius dynamically (Cho'Gath = 100+, Malphite = 80, etc.)
         float target_radius = obj->get_bounding_radius();
-        float effective_max_range = spell_data.range + target_radius + 25.f;  // 25 for buffer
+
+        // For vector spells, max range is cast_range + range (first cast + line length)
+        float base_range;
+        if (spell_data.spell_type == pred_sdk::spell_type::vector && spell_data.cast_range > 0.f)
+        {
+            base_range = spell_data.cast_range + spell_data.range;
+        }
+        else
+        {
+            base_range = spell_data.range;
+        }
+        float effective_max_range = base_range + target_radius + 25.f;  // 25 for buffer
 
         if (distance_to_target > effective_max_range)
         {
