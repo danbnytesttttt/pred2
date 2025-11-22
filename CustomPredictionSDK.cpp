@@ -349,6 +349,26 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         if (spell_data.spell_type == pred_sdk::spell_type::vector)
         {
             predicted_distance = result.cast_position.distance(result.first_cast_position);
+
+            // Also validate first_cast_position is within cast_range of player
+            float first_cast_range = spell_data.cast_range;
+            if (first_cast_range < 1.f) first_cast_range = spell_data.range; // Fallback if not set
+
+            float first_cast_dist = result.first_cast_position.distance(source_pos);
+            if (first_cast_dist > first_cast_range + 50.f) // Small buffer for edge cases
+            {
+                if (PredictionSettings::get().enable_debug_logging)
+                {
+                    char range_msg[256];
+                    snprintf(range_msg, sizeof(range_msg),
+                        "[REJECT] Vector first_cast out of range: %.0f > %.0f",
+                        first_cast_dist, first_cast_range);
+                    g_sdk->log_console(range_msg);
+                }
+                result.is_valid = false;
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
         }
         else
         {
