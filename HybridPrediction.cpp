@@ -2375,14 +2375,12 @@ namespace HybridPred
             // Project predicted position onto spell line to find closest point
             math::vector3 to_predicted = reachable_region.center - capsule_start;
 
-            // Use full 3D dot product for projection
+            // Use 2D dot product in XZ plane (League is essentially 2D)
             float projection = to_predicted.x * test_direction.x +
-                              to_predicted.y * test_direction.y +
                               to_predicted.z * test_direction.z;
 
-            // Don't clamp to capsule_length - we need actual perpendicular distance
-            // Just clamp to positive (must be in front of caster)
-            projection = std::max(0.f, projection);
+            // Clamp projection to spell range [0, capsule_length]
+            projection = std::max(0.f, std::min(projection, capsule_length));
             math::vector3 closest_point = capsule_start + test_direction * projection;
 
             float test_physics_prob = PhysicsPredictor::compute_time_to_dodge_probability(
