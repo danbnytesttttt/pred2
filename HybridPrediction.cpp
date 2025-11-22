@@ -2374,7 +2374,11 @@ namespace HybridPred
             // For linear spells, check if predicted position is within capsule
             // Project predicted position onto spell line to find closest point
             math::vector3 to_predicted = reachable_region.center - capsule_start;
-            float projection = to_predicted.x * test_direction.x + to_predicted.z * test_direction.z;
+
+            // Use full 3D dot product for projection
+            float projection = to_predicted.x * test_direction.x +
+                              to_predicted.y * test_direction.y +
+                              to_predicted.z * test_direction.z;
 
             // Don't clamp to capsule_length - we need actual perpendicular distance
             // Just clamp to positive (must be in front of caster)
