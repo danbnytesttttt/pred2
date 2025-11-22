@@ -342,7 +342,18 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
 
         // CRITICAL: Validate predicted position is within spell range
         // This prevents casting at targets that will walk out of range
-        float predicted_distance = result.cast_position.distance(source_pos);
+        float predicted_distance;
+
+        // For vector spells (Viktor E, Rumble R), check vector length, not distance from player
+        // spell_data.range is the vector length (first_cast to cast_position), not player to end
+        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+        {
+            predicted_distance = result.cast_position.distance(result.first_cast_position);
+        }
+        else
+        {
+            predicted_distance = result.cast_position.distance(source_pos);
+        }
 
         // For linear skillshots, the hitbox extends beyond the center point by the radius
         float range_buffer = (spell_data.spell_type == pred_sdk::spell_type::linear) ? spell_data.radius : 0.f;
@@ -362,7 +373,18 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             if (tracker)
             {
                 math::vector3 target_velocity = tracker->get_current_velocity();
-                math::vector3 to_predicted = result.cast_position - source_pos;
+
+                // For vector spells, use direction along the vector, not from player
+                math::vector3 to_predicted;
+                if (spell_data.spell_type == pred_sdk::spell_type::vector)
+                {
+                    to_predicted = result.cast_position - result.first_cast_position;
+                }
+                else
+                {
+                    to_predicted = result.cast_position - source_pos;
+                }
+
                 float to_pred_mag = to_predicted.magnitude();
 
                 if (to_pred_mag > 0.001f)
