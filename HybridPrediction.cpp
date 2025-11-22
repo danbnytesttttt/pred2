@@ -1246,7 +1246,18 @@ namespace HybridPred
         // Calculate distance to escape (distance to edge of hitbox)
         // If target is outside spell, they're already safe
         if (distance_to_center >= projectile_radius)
+        {
+            // Debug: Log when returning 0 due to outside radius
+            if (PredictionSettings::get().enable_debug_logging && g_sdk)
+            {
+                char dbg[256];
+                snprintf(dbg, sizeof(dbg),
+                    "[Danny.Prediction] TIME_DODGE: dist=%.1f >= radius=%.1f RETURNING 0",
+                    distance_to_center, projectile_radius);
+                g_sdk->log_console(dbg);
+            }
             return 0.f;
+        }
 
         // Distance needed to run to safety
         float distance_to_edge = projectile_radius - distance_to_center;
