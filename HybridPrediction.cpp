@@ -2383,6 +2383,19 @@ namespace HybridPred
             projection = std::max(0.f, std::min(projection, capsule_length));
             math::vector3 closest_point = capsule_start + test_direction * projection;
 
+            // Calculate perpendicular distance to spell line
+            float perp_dist = (reachable_region.center - closest_point).magnitude();
+
+            // Debug: Log for center angle (i=3)
+            if (i == NUM_ANGLE_TESTS / 2 && PredictionSettings::get().enable_debug_logging && g_sdk)
+            {
+                char dbg[512];
+                snprintf(dbg, sizeof(dbg),
+                    "[Danny.Prediction] LINEAR PROJ: proj=%.1f dist_center=%.1f perp=%.1f radius=%.1f",
+                    projection, dist_to_center, perp_dist, capsule_radius);
+                g_sdk->log_console(dbg);
+            }
+
             float test_physics_prob = PhysicsPredictor::compute_time_to_dodge_probability(
                 reachable_region.center,  // Predicted target position
                 closest_point,            // Closest point on spell line
