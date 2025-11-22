@@ -1721,56 +1721,9 @@ namespace HybridPred
             }
         }
 
-        // =============================================================================
-        // AUTOMATIC CONE DETECTION: Check if spell has cone angle defined
-        // SKIP for vector/circular/linear - trust the explicit spell_type over cone angle data
-        // Only use cone detection for targetted spells or unknown types
-        if (spell.spell_slot >= 0 &&
-            spell.spell_type != pred_sdk::spell_type::vector &&
-            spell.spell_type != pred_sdk::spell_type::circular &&
-            spell.spell_type != pred_sdk::spell_type::linear)
-        {
-            spell_entry* spell_entry_ptr = source->get_spell(spell.spell_slot);
-            if (spell_entry_ptr)
-            {
-                auto spell_data = spell_entry_ptr->get_data();
-                if (spell_data)
-                {
-                    auto static_data = spell_data->get_static_data();
-                    if (static_data)
-                    {
-                        float cone_angle = static_data->get_cast_cone_angle();
-                        // If spell has cone angle > 0, it's a cone spell
-                        if (cone_angle > 0.f)
-                        {
-                            // Debug: Log cone detection
-                            if (g_sdk)
-                            {
-                                char debug_msg[256];
-                                snprintf(debug_msg, sizeof(debug_msg),
-                                    "[Danny.Prediction] CONE DETECTED: angle=%.1f - using cone prediction instead of type %d",
-                                    cone_angle, static_cast<int>(spell.spell_type));
-                                g_sdk->log_console(debug_msg);
-                            }
-
-                            // Also check for cone distance override
-                            float cone_distance = static_data->get_cast_cone_distance();
-
-                            // Create modified spell data with cone distance if available
-                            pred_sdk::spell_data cone_spell = spell;
-                            if (cone_distance > 0.f)
-                            {
-                                cone_spell.range = cone_distance;
-                            }
-
-                            return compute_cone_prediction(source, target, cone_spell, tracker, edge_cases, cone_angle);
-                        }
-                    }
-                }
-            }
-        }
-
         // Dispatch to spell-type specific implementation based on pred_sdk type
+        // NOTE: Automatic cone detection removed - SDK data has cone_angle for many non-cone spells
+        // (Viktor E, Mel Q, Pyke Q, etc.) causing false positives. Use explicit spell_type instead.
         HybridPredictionResult spell_result;
 
         switch (spell.spell_type)
