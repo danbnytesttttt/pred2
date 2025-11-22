@@ -1,4 +1,4 @@
-﻿#include "CustomPredictionSDK.h"
+#include "CustomPredictionSDK.h"
 #include "EdgeCaseDetection.h"
 #include "PredictionSettings.h"
 #include "PredictionTelemetry.h"
