@@ -25,6 +25,7 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
         // Targeted spells don't need prediction - just return target position
         if (!spell_data.source || !spell_data.source->is_valid())
         {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: source invalid");
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
@@ -33,6 +34,7 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
         // CRITICAL: Check target_selector is available before calling
         if (!sdk::target_selector)
         {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: target_selector null");
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
@@ -41,6 +43,7 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
 
         if (!target || !target->is_valid())
         {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: no valid target from target_selector");
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
@@ -51,6 +54,13 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
         result.hitchance = pred_sdk::hitchance::very_high;
         result.target = target;
         result.is_valid = true;
+
+        if (PredictionSettings::get().enable_debug_logging && g_sdk)
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[Danny.Prediction] targetted() SUCCESS: %s", target->get_char_name().c_str());
+            g_sdk->log_console(msg);
+        }
     }
     catch (...)
     {
