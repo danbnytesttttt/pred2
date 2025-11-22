@@ -782,6 +782,18 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     static float last_target_score = 0.f;
     constexpr float STICKINESS_THRESHOLD = 0.15f;  // Need 15% better score to switch
 
+    // CRITICAL: Validate spell range - don't target across the map
+    if (spell_data.range < 100.f || spell_data.range > 25000.f)
+    {
+        if (PredictionSettings::get().enable_debug_logging && g_sdk)
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[Danny.Prediction] get_best_target: Invalid range %.0f", spell_data.range);
+            g_sdk->log_console(msg);
+        }
+        return nullptr;
+    }
+
     // Calculate search range: Only slightly beyond spell range
     // Tight buffer prevents targeting far enemies that cause prediction issues
     float search_range = spell_data.range;
@@ -790,6 +802,12 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
         // Small buffer for targets walking into range (100 units max)
         float buffer = std::min(spell_data.range * 0.1f, 100.f);
         search_range = spell_data.range + buffer;
+    }
+    else
+    {
+        // Cap global spell search to reasonable range (3000 units)
+        // Global spells should use explicit targeting, not auto-target
+        search_range = std::min(spell_data.range, 3000.f);
     }
 
     // IMPROVED: Iterate ALL enemies and compare scores
