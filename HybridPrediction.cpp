@@ -1739,6 +1739,16 @@ namespace HybridPred
                         // If spell has cone angle > 0, it's a cone spell
                         if (cone_angle > 0.f)
                         {
+                            // Debug: Log cone detection
+                            if (g_sdk)
+                            {
+                                char debug_msg[256];
+                                snprintf(debug_msg, sizeof(debug_msg),
+                                    "[Danny.Prediction] CONE DETECTED: angle=%.1f - using cone prediction instead of type %d",
+                                    cone_angle, static_cast<int>(spell.spell_type));
+                                g_sdk->log_console(debug_msg);
+                            }
+
                             // Also check for cone distance override
                             float cone_distance = static_data->get_cast_cone_distance();
 
