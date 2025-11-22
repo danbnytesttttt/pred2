@@ -2421,6 +2421,16 @@ namespace HybridPred
         // Use best hit chance from angular optimization
         result.hit_chance = std::clamp(best_hit_chance, 0.f, 1.f);
 
+        // Debug logging for 0 hit chance
+        if (result.hit_chance < 0.01f && g_sdk)
+        {
+            char debug_msg[512];
+            snprintf(debug_msg, sizeof(debug_msg),
+                "[Danny.Prediction] LINEAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu move_speed=%.1f",
+                arrival_time, physics_prob, behavior_prob, confidence, sample_count, move_speed);
+            g_sdk->log_console(debug_msg);
+        }
+
 #if HYBRID_PRED_ENABLE_REASONING
         // Generate mathematical reasoning
         std::ostringstream reasoning;
