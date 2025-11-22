@@ -3090,7 +3090,70 @@ namespace HybridPred
         math::vector3 to_predicted = predicted_target_pos - source_pos;
         float dist_to_predicted = to_predicted.magnitude();
 
-        // Test multiple orientations
+        // PRIMARY: Calculate direct line from source to target
+        // This is what players expect - a straight laser towards the enemy
+        if (dist_to_predicted > EPSILON)
+        {
+            math::vector3 direct_direction = to_predicted / dist_to_predicted;
+
+            // Place first_cast along the line from source to target
+            // If target is close, center the laser on them
+            // If target is far, place first_cast at max range
+            math::vector3 first_cast;
+            math::vector3 second_cast;
+
+            if (dist_to_predicted <= max_first_cast_range + vector_length * 0.5f)
+            {
+                // Target is close enough to center laser on them
+                first_cast = predicted_target_pos - direct_direction * (vector_length * 0.5f);
+                second_cast = predicted_target_pos + direct_direction * (vector_length * 0.5f);
+
+                // Adjust if first_cast is out of range
+                float distance_to_first = (first_cast - source_pos).magnitude();
+                if (distance_to_first > max_first_cast_range)
+                {
+                    first_cast = source_pos + direct_direction * max_first_cast_range;
+                    second_cast = first_cast + direct_direction * vector_length;
+                }
+            }
+            else
+            {
+                // Target is far - place first_cast at max range, laser extends towards target
+                first_cast = source_pos + direct_direction * max_first_cast_range;
+                second_cast = first_cast + direct_direction * vector_length;
+            }
+
+            // Compute hit probability for direct line
+            float physics_prob = compute_capsule_reachability_overlap(
+                first_cast,
+                direct_direction,
+                vector_length,
+                vector_width,
+                reachable_region
+            );
+
+            float behavior_prob = compute_capsule_behavior_probability(
+                first_cast,
+                direct_direction,
+                vector_length,
+                vector_width,
+                behavior_pdf
+            );
+
+            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
+
+            // Use direct line as best configuration
+            best_config.first_cast_position = first_cast;
+            best_config.cast_position = second_cast;
+            best_config.hit_chance = hit_chance;
+            best_config.physics_prob = physics_prob;
+            best_config.behavior_prob = behavior_prob;
+        }
+
+        // OPTIONAL: Test other orientations only if we want to optimize for multi-target or special cases
+        // For now, skip this since single-target direct line is what players expect
+        // Can be re-enabled for AOE vector spell optimization
+        #if 0
         constexpr int NUM_ORIENTATIONS = 20;
 
         for (int i = 0; i < NUM_ORIENTATIONS; ++i)
@@ -3103,66 +3166,9 @@ namespace HybridPred
             math::vector3 first_cast = predicted_target_pos - direction * (vector_length * 0.5f);
             math::vector3 second_cast = predicted_target_pos + direction * (vector_length * 0.5f);
 
-            // Check if first_cast is within range from source
-            float distance_to_first_cast = (first_cast - source_pos).magnitude();
-            if (distance_to_first_cast > max_first_cast_range)
-            {
-                // Adjust: Slide line along orientation direction towards source
-                // This maintains the line's orientation while bringing first_cast within range
-
-                // Calculate how much to slide the line towards source
-                float overshoot = distance_to_first_cast - max_first_cast_range;
-
-                // Slide both points along the line's direction (towards source)
-                // Direction from first_cast to source along the line's orientation
-                math::vector3 to_first_cast = first_cast - source_pos;
-                float dot_product = to_first_cast.dot(direction);
-
-                // Project onto line direction and slide
-                math::vector3 slide_offset = direction * overshoot;
-                first_cast = first_cast - slide_offset;
-                second_cast = second_cast - slide_offset;
-
-                // Verify first_cast is now within range (safety check)
-                float new_distance = (first_cast - source_pos).magnitude();
-                if (new_distance > max_first_cast_range)
-                {
-                    // Fallback: place first_cast at max range in line direction
-                    first_cast = source_pos + direction * max_first_cast_range;
-                    second_cast = first_cast + direction * vector_length;
-                }
-            }
-
-            // Compute hit probability for this configuration
-            float physics_prob = compute_capsule_reachability_overlap(
-                first_cast,
-                direction,
-                vector_length,
-                vector_width,
-                reachable_region
-            );
-
-            float behavior_prob = compute_capsule_behavior_probability(
-                first_cast,
-                direction,
-                vector_length,
-                vector_width,
-                behavior_pdf
-            );
-
-            // Weighted geometric fusion (trust physics more when behavior samples are sparse)
-            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
-
-            // Update best configuration
-            if (hit_chance > best_config.hit_chance)
-            {
-                best_config.first_cast_position = first_cast;
-                best_config.cast_position = second_cast;
-                best_config.hit_chance = hit_chance;
-                best_config.physics_prob = physics_prob;
-                best_config.behavior_prob = behavior_prob;
-            }
+            // ... rest of orientation testing loop ...
         }
+        #endif
 
         // If no valid configuration found, use default (aim at target)
         if (best_config.hit_chance < EPSILON)
