@@ -2453,7 +2453,9 @@ namespace HybridPred
             }
         }
 
-        result.cast_position = source->get_position() + optimal_direction * capsule_length;
+        // Cast position should be the predicted target position, not max range
+        // This is where we aim the spell to hit the target
+        result.cast_position = reachable_region.center;
 
         // Use best probabilities found
         float physics_prob = best_physics_prob;
