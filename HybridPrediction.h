@@ -664,7 +664,8 @@ namespace HybridPred
             game_object* target,
             const pred_sdk::spell_data& spell,
             TargetBehaviorTracker& tracker,
-            const EdgeCases::EdgeCaseAnalysis& edge_cases
+            const EdgeCases::EdgeCaseAnalysis& edge_cases,
+            float cone_angle_override = 0.f  // If > 0, use this angle instead of calculating from radius
         );
 
         // Geometry helpers for spell shapes

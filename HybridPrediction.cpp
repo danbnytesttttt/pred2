@@ -1715,7 +1715,17 @@ namespace HybridPred
                         // If spell has cone angle > 0, it's a cone spell
                         if (cone_angle > 0.f)
                         {
-                            return compute_cone_prediction(source, target, spell, tracker, edge_cases);
+                            // Also check for cone distance override
+                            float cone_distance = static_data->get_cast_cone_distance();
+
+                            // Create modified spell data with cone distance if available
+                            pred_sdk::spell_data cone_spell = spell;
+                            if (cone_distance > 0.f)
+                            {
+                                cone_spell.range = cone_distance;
+                            }
+
+                            return compute_cone_prediction(source, target, cone_spell, tracker, edge_cases, cone_angle);
                         }
                     }
                 }
@@ -2583,7 +2593,8 @@ namespace HybridPred
         game_object* target,
         const pred_sdk::spell_data& spell,
         TargetBehaviorTracker& tracker,
-        const EdgeCases::EdgeCaseAnalysis& edge_cases)
+        const EdgeCases::EdgeCaseAnalysis& edge_cases,
+        float cone_angle_override)
     {
         HybridPredictionResult result;
 
@@ -2633,15 +2644,21 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Step 5: Compute cone parameters
-        // TODO: CONE ANGLE INTERPRETATION IS AMBIGUOUS
-        // Current assumption: spell.radius = "width at range", so half-angle = atan2(radius, range)
-        // BUT SDK might encode differently:
-        //   - Option 1: spell.radius = total cone spread in degrees (e.g., Annie W = 50°)
-        //   - Option 2: spell.radius = half-angle already (e.g., Annie W = 25°)
-        //   - Option 3: spell.radius = width at max range (current assumption)
-        // REQUIRES EMPIRICAL TESTING with known cone spells (Annie W, Cassio R, etc.)
-        float cone_half_angle = std::atan2(spell.radius, spell.range);
+        float cone_half_angle;
         float cone_range = spell.range;
+
+        if (cone_angle_override > 0.f)
+        {
+            // Use the angle from get_cast_cone_angle() - this is the TOTAL angle in degrees
+            // Convert to half-angle in radians
+            cone_half_angle = (cone_angle_override * 0.5f) * (PI / 180.f);
+        }
+        else
+        {
+            // Fallback: calculate from radius (assuming radius = width at range)
+            // This is less accurate but works when cone angle isn't available
+            cone_half_angle = std::atan2(spell.radius, spell.range);
+        }
 
         // Optimal direction toward predicted target position
         math::vector3 to_center = reachable_region.center - source->get_position();
