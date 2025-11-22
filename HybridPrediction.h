@@ -131,20 +131,20 @@ namespace HybridPred
         // If we have very few behavior samples, trust physics more
         if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            // Ramp from 0.7 (no samples) down to 0.5 (minimum samples)
+            // Ramp from 0.8 (no samples) down to 0.5 (minimum samples)
             float factor = static_cast<float>(sample_count) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.7f - 0.2f * factor;  // 0.7 → 0.5
+            physics_weight = 0.8f - 0.3f * factor;  // 0.8 → 0.5
         }
         else if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR * 2)
         {
-            // Ramp from 0.5 (minimum) down to 0.3 (abundant)
+            // Ramp from 0.5 (minimum) down to 0.4 (abundant)
             float factor = static_cast<float>(sample_count - MIN_SAMPLES_FOR_BEHAVIOR) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.5f - 0.2f * factor;  // 0.5 → 0.3
+            physics_weight = 0.5f - 0.1f * factor;  // 0.5 → 0.4
         }
         else
         {
-            // Abundant data: trust behavior more (physics weight = 0.3)
-            physics_weight = 0.3f;
+            // Abundant data: still trust physics significantly (weight = 0.4)
+            physics_weight = 0.4f;
         }
 
         // Staleness detection: If velocity data hasn't updated recently, increase physics weight
@@ -157,9 +157,16 @@ namespace HybridPred
             physics_weight = std::min(physics_weight + staleness_penalty, 0.8f);
         }
 
-        // Weighted geometric mean
-        float fused = std::pow(physics_prob, physics_weight) * std::pow(behavior_prob, 1.0f - physics_weight);
-        return fused * confidence;
+        // Use weighted LINEAR interpolation instead of geometric mean
+        // This prevents behavior from dragging down high physics too much
+        float fused = physics_weight * physics_prob + (1.0f - physics_weight) * behavior_prob;
+
+        // Apply confidence as a multiplier, but with a floor based on physics
+        // If physics is high, don't let low confidence kill it completely
+        float min_confidence = 0.3f + 0.4f * physics_prob;  // 30-70% floor based on physics
+        float effective_confidence = std::max(confidence, min_confidence);
+
+        return fused * effective_confidence;
     }
 
     // =========================================================================
