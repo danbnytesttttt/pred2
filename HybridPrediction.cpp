@@ -1723,7 +1723,8 @@ namespace HybridPred
 
         // =============================================================================
         // AUTOMATIC CONE DETECTION: Check if spell has cone angle defined
-        if (spell.spell_slot >= 0)
+        // SKIP for vector spells - they use their own two-position optimization
+        if (spell.spell_slot >= 0 && spell.spell_type != pred_sdk::spell_type::vector)
         {
             spell_entry* spell_entry_ptr = source->get_spell(spell.spell_slot);
             if (spell_entry_ptr)
