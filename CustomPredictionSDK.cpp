@@ -770,11 +770,13 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     static float last_target_score = 0.f;
     constexpr float STICKINESS_THRESHOLD = 0.15f;  // Need 15% better score to switch
 
-    // Calculate search range: Tactical vs Global spells
+    // Calculate search range: Only slightly beyond spell range
+    // Tight buffer prevents targeting far enemies that cause prediction issues
     float search_range = spell_data.range;
     if (spell_data.range < 2500.f)
     {
-        float buffer = std::min(spell_data.range * 0.5f, 300.f);
+        // Small buffer for targets walking into range (100 units max)
+        float buffer = std::min(spell_data.range * 0.1f, 100.f);
         search_range = spell_data.range + buffer;
     }
 
