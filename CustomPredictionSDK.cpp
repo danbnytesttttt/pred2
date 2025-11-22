@@ -342,12 +342,24 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
 
         // CRITICAL: Validate predicted position is within spell range
         // This prevents casting at targets that will walk out of range
-        float predicted_distance = result.cast_position.distance(source_pos);
+        float predicted_distance;
+        float effective_range;
 
-        // For linear skillshots, the hitbox extends beyond the center point by the radius
-        float range_buffer = (spell_data.spell_type == pred_sdk::spell_type::linear) ? spell_data.radius : 0.f;
-
-        float effective_range = spell_data.range + range_buffer;
+        // For vector spells, validate first_cast_position against cast_range
+        // (cast_position is the second cast which extends further)
+        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+        {
+            predicted_distance = result.first_cast_position.distance(source_pos);
+            // Use cast_range for vector spells (first cast range)
+            effective_range = (spell_data.cast_range > 0.f) ? spell_data.cast_range : spell_data.range;
+        }
+        else
+        {
+            predicted_distance = result.cast_position.distance(source_pos);
+            // For linear skillshots, the hitbox extends beyond the center point by the radius
+            float range_buffer = (spell_data.spell_type == pred_sdk::spell_type::linear) ? spell_data.radius : 0.f;
+            effective_range = spell_data.range + range_buffer;
+        }
 
         // FIX: Account for movement during cast animation
         // Prediction calculates where they'll be when spell ARRIVES
@@ -661,7 +673,18 @@ pred_sdk::pred_data CustomPredictionSDK::convert_to_pred_data(
     // Copy positions
     result.cast_position = hybrid_result.cast_position;
     result.first_cast_position = hybrid_result.first_cast_position;  // For vector spells (Viktor E, Rumble R, Irelia E)
-    result.predicted_position = hybrid_result.cast_position;
+
+    // For vector spells, predicted_position should be where target is expected to be hit
+    // (center of vector line), not the second cast position
+    if (spell_data.spell_type == pred_sdk::spell_type::vector)
+    {
+        // Target is predicted to be at the midpoint of the vector line
+        result.predicted_position = (hybrid_result.first_cast_position + hybrid_result.cast_position) * 0.5f;
+    }
+    else
+    {
+        result.predicted_position = hybrid_result.cast_position;
+    }
     result.target = target;
     result.is_valid = hybrid_result.is_valid;
 
@@ -685,16 +708,16 @@ pred_sdk::pred_data CustomPredictionSDK::convert_to_pred_data(
 pred_sdk::hitchance CustomPredictionSDK::convert_hit_chance_to_enum(float hit_chance)
 {
     // Map [0,1] to hitchance enum
-    // Adjusted thresholds for more aggressive casting (less "holding")
+    // Thresholds aligned with SDK enum values (high=70, very_high=85, etc.)
     if (hit_chance >= 0.95f)
         return pred_sdk::hitchance::guaranteed_hit;
-    else if (hit_chance >= 0.80f)  // very_high: kept at 80%
+    else if (hit_chance >= 0.85f)  // very_high: 85% (matches SDK enum value 85)
         return pred_sdk::hitchance::very_high;
-    else if (hit_chance >= 0.65f)  // high: kept at 65%
+    else if (hit_chance >= 0.70f)  // high: 70% (matches SDK enum value 70)
         return pred_sdk::hitchance::high;
-    else if (hit_chance >= 0.50f)  // medium: 50%
+    else if (hit_chance >= 0.50f)  // medium: 50% (matches SDK enum value 50)
         return pred_sdk::hitchance::medium;
-    else if (hit_chance >= 0.30f)  // low: 30%
+    else if (hit_chance >= 0.30f)  // low: 30% (matches SDK enum value 30)
         return pred_sdk::hitchance::low;
     else
         return pred_sdk::hitchance::any;

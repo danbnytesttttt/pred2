@@ -3066,29 +3066,44 @@ namespace HybridPred
             float distance_to_first_cast = (first_cast - source_pos).magnitude();
             if (distance_to_first_cast > max_first_cast_range)
             {
-                // Adjust: Slide line along orientation direction towards source
-                // This maintains the line's orientation while bringing first_cast within range
+                // Adjust: Slide line towards source while maintaining orientation
+                // This keeps the line's direction but moves both points closer to source
 
                 // Calculate how much to slide the line towards source
                 float overshoot = distance_to_first_cast - max_first_cast_range;
 
-                // Slide both points along the line's direction (towards source)
-                // Direction from first_cast to source along the line's orientation
-                math::vector3 to_first_cast = first_cast - source_pos;
-                float dot_product = to_first_cast.dot(direction);
+                // Compute direction from first_cast towards source (radial direction)
+                math::vector3 to_source = source_pos - first_cast;
+                float to_source_dist = to_source.magnitude();
 
-                // Project onto line direction and slide
-                math::vector3 slide_offset = direction * overshoot;
-                first_cast = first_cast - slide_offset;
-                second_cast = second_cast - slide_offset;
+                if (to_source_dist > EPSILON)
+                {
+                    // Slide both points towards source by exact overshoot amount
+                    math::vector3 slide_direction = to_source / to_source_dist;
+                    math::vector3 slide_offset = slide_direction * overshoot;
+                    first_cast = first_cast + slide_offset;
+                    second_cast = second_cast + slide_offset;
+                }
 
                 // Verify first_cast is now within range (safety check)
                 float new_distance = (first_cast - source_pos).magnitude();
                 if (new_distance > max_first_cast_range)
                 {
-                    // Fallback: place first_cast at max range in line direction
-                    first_cast = source_pos + direction * max_first_cast_range;
-                    second_cast = first_cast + direction * vector_length;
+                    // Fallback: place first_cast at max range towards predicted target
+                    math::vector3 to_predicted = predicted_target_pos - source_pos;
+                    float dist_to_pred = to_predicted.magnitude();
+                    if (dist_to_pred > EPSILON)
+                    {
+                        math::vector3 radial_dir = to_predicted / dist_to_pred;
+                        first_cast = source_pos + radial_dir * max_first_cast_range;
+                        second_cast = first_cast + direction * vector_length;
+                    }
+                    else
+                    {
+                        // Target at source position - use line direction
+                        first_cast = source_pos + direction * max_first_cast_range;
+                        second_cast = first_cast + direction * vector_length;
+                    }
                 }
             }
 
