@@ -2371,15 +2371,20 @@ namespace HybridPred
             );
 
             // Compute hit probability for this angle using time-to-dodge method
-            // This is superior to area intersection for linear skillshots
-            math::vector3 test_cast_pos = capsule_start + test_direction * capsule_length;
+            // For linear spells, check if predicted position is within capsule
+            // Project predicted position onto spell line to find closest point
+            math::vector3 to_predicted = reachable_region.center - capsule_start;
+            float projection = to_predicted.x * test_direction.x + to_predicted.z * test_direction.z;
+            projection = std::clamp(projection, 0.f, capsule_length);
+            math::vector3 closest_point = capsule_start + test_direction * projection;
+
             float test_physics_prob = PhysicsPredictor::compute_time_to_dodge_probability(
-                target->get_position(),  // Current target position
-                test_cast_pos,           // Where spell will be
-                capsule_radius,          // Spell hitbox radius
-                move_speed,              // Target move speed
-                arrival_time,            // Time until spell arrives
-                HUMAN_REACTION_TIME      // 250ms reaction time
+                reachable_region.center,  // Predicted target position
+                closest_point,            // Closest point on spell line
+                capsule_radius,           // Spell hitbox radius
+                move_speed,               // Target move speed
+                arrival_time,             // Time until spell arrives
+                HUMAN_REACTION_TIME       // 250ms reaction time
             );
 
             float test_behavior_prob = compute_capsule_behavior_probability(
