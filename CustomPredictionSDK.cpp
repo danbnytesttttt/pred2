@@ -213,6 +213,14 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         float target_radius = obj->get_bounding_radius();
         float effective_max_range = spell_data.range + target_radius + 25.f;  // 25 for buffer
 
+        // For vector spells, max hit range = cast_range + range (e.g., Viktor E = 525 + 1100 = 1625)
+        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+        {
+            float first_cast_range = spell_data.cast_range;
+            if (first_cast_range < 1.f) first_cast_range = spell_data.range; // Fallback if not set
+            effective_max_range = first_cast_range + spell_data.range + target_radius + 25.f;
+        }
+
         if (distance_to_target > effective_max_range)
         {
             if (PredictionSettings::get().enable_debug_logging)
