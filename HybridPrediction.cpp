@@ -2386,8 +2386,10 @@ namespace HybridPred
             // Project predicted position onto spell line to find closest point
             math::vector3 to_predicted = reachable_region.center - capsule_start;
 
-            // Use 2D dot product in XZ plane (League is essentially 2D)
+            // Use full 3D dot product for correct projection onto spell line
+            // 2D projection causes Y errors that scale with distance
             float projection = to_predicted.x * test_direction.x +
+                              to_predicted.y * test_direction.y +
                               to_predicted.z * test_direction.z;
 
             // Clamp projection to spell range [0, capsule_length]
