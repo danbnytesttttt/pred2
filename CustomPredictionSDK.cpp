@@ -22,12 +22,16 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
     {
         PRED_DEBUG_LOG("[Danny.Prediction] targetted() called (point-and-click spell)");
 
-        // Targeted spells don't need prediction - just return target position
+        // If source is null/invalid, use local player as default
         if (!spell_data.source || !spell_data.source->is_valid())
         {
-            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: source invalid");
-            result.hitchance = pred_sdk::hitchance::any;
-            return result;
+            spell_data.source = g_sdk->object_manager->get_local_player();
+            if (!spell_data.source || !spell_data.source->is_valid())
+            {
+                PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: local player invalid");
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
         }
 
         // Use target selector to find best target
