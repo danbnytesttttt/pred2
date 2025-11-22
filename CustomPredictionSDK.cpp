@@ -58,6 +58,18 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
             return result;
         }
 
+        // Check if target is in range - don't return valid if out of range
+        // This prevents orbwalking towards far targets
+        float distance = target->get_position().distance(spell_data.source->get_position());
+        float effective_range = spell_data.range + target->get_bounding_radius();
+
+        if (distance > effective_range)
+        {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: target out of range");
+            result.hitchance = pred_sdk::hitchance::any;
+            return result;
+        }
+
         // For targeted spells, prediction is trivial
         result.cast_position = target->get_position();
         result.predicted_position = target->get_position();
