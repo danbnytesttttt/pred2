@@ -139,9 +139,21 @@ public:
     );
 
     /**
+     * Predict optimal cast direction for cone AOE spell
+     * Tests multiple directions and returns the one hitting most targets within cone angle
+     */
+    aoe_pred_result predict_cone_aoe(
+        pred_sdk::spell_data spell_data,
+        int min_hits = 2,
+        float min_single_hc = 0.25f,
+        bool priority_weighted = false
+    );
+
+    /**
      * Auto-routing AOE prediction based on spell_type
      * - circular -> predict_aoe_cluster
      * - linear/vector -> predict_linear_aoe
+     * - cone (auto-detected) -> predict_cone_aoe
      */
     aoe_pred_result predict_aoe(
         pred_sdk::spell_data spell_data,
