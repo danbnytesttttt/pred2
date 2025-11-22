@@ -2440,6 +2440,16 @@ namespace HybridPred
                 optimal_direction = test_direction;
                 best_physics_prob = test_physics_prob;
                 best_behavior_prob = test_behavior_prob;
+
+                // Debug: Log when we update best
+                if (PredictionSettings::get().enable_debug_logging && g_sdk)
+                {
+                    char dbg[256];
+                    snprintf(dbg, sizeof(dbg),
+                        "[Danny.Prediction] BEST UPDATE: angle=%d phys=%.3f behav=%.3f hit=%.3f",
+                        i, test_physics_prob, test_behavior_prob, test_hit_chance);
+                    g_sdk->log_console(dbg);
+                }
             }
         }
 
