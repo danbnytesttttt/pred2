@@ -40,35 +40,71 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
             }
         }
 
-        // Use target selector to find best target
-        // CRITICAL: Check target_selector is available before calling
-        if (!sdk::target_selector)
+        // Find best target within spell range
+        // Don't just use target_selector - it might return someone across the map
+        if (!g_sdk || !g_sdk->object_manager)
         {
-            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: target_selector null");
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: object_manager null");
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
 
-        auto* target = sdk::target_selector->get_hero_target();
+        math::vector3 source_pos = spell_data.source->get_position();
+        game_object* best_target = nullptr;
 
-        if (!target || !target->is_valid())
+        // Get sorted heroes from target selector for priority, then filter by range
+        std::vector<game_object*> candidates;
+        if (sdk::target_selector)
         {
-            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: no valid target from target_selector");
+            auto sorted = sdk::target_selector->get_sorted_heroes();
+            for (auto* hero : sorted)
+            {
+                if (hero && hero->is_valid() && !hero->is_dead() &&
+                    hero->get_team_id() != spell_data.source->get_team_id() &&
+                    hero->is_visible())
+                {
+                    candidates.push_back(hero);
+                }
+            }
+        }
+
+        // Fallback to all heroes if target selector unavailable
+        if (candidates.empty())
+        {
+            auto heroes = g_sdk->object_manager->get_heroes();
+            for (auto* hero : heroes)
+            {
+                if (hero && hero->is_valid() && !hero->is_dead() &&
+                    hero->get_team_id() != spell_data.source->get_team_id() &&
+                    hero->is_visible())
+                {
+                    candidates.push_back(hero);
+                }
+            }
+        }
+
+        // Find best target within spell range (use target_selector priority order)
+        for (auto* hero : candidates)
+        {
+            float distance = hero->get_position().distance(source_pos);
+            float effective_range = spell_data.range + hero->get_bounding_radius();
+
+            if (distance <= effective_range)
+            {
+                // First valid target in priority order wins
+                best_target = hero;
+                break;
+            }
+        }
+
+        if (!best_target)
+        {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: no target in range");
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
 
-        // Check if target is in range - don't return valid if out of range
-        // This prevents orbwalking towards far targets
-        float distance = target->get_position().distance(spell_data.source->get_position());
-        float effective_range = spell_data.range + target->get_bounding_radius();
-
-        if (distance > effective_range)
-        {
-            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: target out of range");
-            result.hitchance = pred_sdk::hitchance::any;
-            return result;
-        }
+        game_object* target = best_target;
 
         // For targeted spells, prediction is trivial
         result.cast_position = target->get_position();
