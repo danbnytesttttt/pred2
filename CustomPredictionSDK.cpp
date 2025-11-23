@@ -264,6 +264,60 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             g_sdk->log_console(debug_msg);
         }
 
+        // Dump spell data when requested (menu button)
+        if (PredictionSettings::get().dump_spell_data)
+        {
+            // Get hitchance string
+            const char* hc_str = "unknown";
+            switch (spell_data.expected_hitchance)
+            {
+                case pred_sdk::hitchance::very_high: hc_str = "very_high"; break;
+                case pred_sdk::hitchance::high: hc_str = "high"; break;
+                case pred_sdk::hitchance::medium: hc_str = "medium"; break;
+                case pred_sdk::hitchance::low: hc_str = "low"; break;
+                case pred_sdk::hitchance::any: hc_str = "any"; break;
+                default: hc_str = "unknown"; break;
+            }
+
+            // Get spell type string
+            const char* type_str = "unknown";
+            switch (spell_data.spell_type)
+            {
+                case pred_sdk::spell_type::linear: type_str = "linear"; break;
+                case pred_sdk::spell_type::circular: type_str = "circular"; break;
+                case pred_sdk::spell_type::targetted: type_str = "targetted"; break;
+                case pred_sdk::spell_type::vector: type_str = "vector"; break;
+                default: type_str = "unknown"; break;
+            }
+
+            // Get target name
+            const char* target_name = obj->get_char_name() ? obj->get_char_name() : "Unknown";
+
+            g_sdk->log_console("========== SPELL DATA DUMP ==========");
+            char dump_msg[512];
+            snprintf(dump_msg, sizeof(dump_msg), "Target: %s", target_name);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Type: %s", type_str);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Range: %.0f", spell_data.range);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Radius: %.0f", spell_data.radius);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Delay: %.3f sec", spell_data.delay);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Speed: %.0f", spell_data.projectile_speed);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Expected Hitchance: %s", hc_str);
+            g_sdk->log_console(dump_msg);
+            snprintf(dump_msg, sizeof(dump_msg), "Collision: minion=%d, hero=%d, wall=%d",
+                spell_data.collision_minion, spell_data.collision_hero, spell_data.collision_wall);
+            g_sdk->log_console(dump_msg);
+            g_sdk->log_console("======================================");
+
+            // Disable after dumping
+            PredictionSettings::get().dump_spell_data = false;
+        }
+
         // CRITICAL: Check range BEFORE prediction to avoid wasting computation
         // Cache positions to prevent inconsistency from flash/dash
         math::vector3 source_pos = spell_data.source->get_position();

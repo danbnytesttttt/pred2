@@ -75,6 +75,12 @@ namespace Prediction
                 PredictionSettings::get().enable_visuals = value;
                 });
 
+            g_menu->add_checkbox("dump_spell", "Dump Spell Data (Next Cast)", false, [](bool value) {
+                PredictionSettings::get().dump_spell_data = value;
+                if (value)
+                    g_sdk->log_console("[Danny.Prediction] Spell data dump enabled - will log next prediction");
+                });
+
             g_menu->add_label("Prediction Features");
 
             g_menu->add_checkbox("dash_pred", "Dash Endpoint Prediction", true, [](bool value) {

@@ -22,6 +22,7 @@ namespace PredictionSettings
         bool enable_debug_logging = false;  // Verbose console logging
         bool enable_telemetry = false;      // Log predictions for analysis (disabled by default)
         bool enable_visuals = false;        // Draw prediction indicators (disabled by default)
+        bool dump_spell_data = false;       // Log spell data and hitchance on next prediction
 
         // Edge case toggles
         bool enable_dash_prediction = true;  // Predict at dash endpoints
