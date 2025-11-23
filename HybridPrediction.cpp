@@ -2038,27 +2038,23 @@ namespace HybridPred
             }
         }
 
-        // Set origin to path prediction for proper coordinate mapping
-        behavior_pdf.origin = path_predicted_pos;
-
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
         float confidence = compute_confidence_score(source, target, spell, tracker, edge_cases);
         result.confidence_score = confidence;
 
-        // Step 5: Find optimal cast position using the aligned PDF
-        // Now that PDF is centered on path prediction, find the peak within it
-        math::vector3 optimal_cast_pos = path_predicted_pos;  // Default to path prediction
+        // Step 5: Find optimal cast position
+        // Path prediction is primary (follows actual waypoints, more accurate for position)
+        // PDF provides adjustment for behavior patterns (jukes, hesitation)
+        math::vector3 optimal_cast_pos = path_predicted_pos;  // Primary: path prediction
 
         if (behavior_pdf.total_probability > EPSILON)
         {
-            // Search for the highest probability point in the translated PDF
-            // This finds where within the behavior pattern the target is most likely to be
-            math::vector3 best_pos = behavior_pdf.origin;
+            // Find PDF peak (behavior-based adjustment)
+            math::vector3 pdf_peak = behavior_pdf.origin;
             float best_prob = 0.f;
 
-            // Grid search centered on the new origin (path prediction)
             constexpr int SEARCH_RADIUS = 6;
             float step = behavior_pdf.cell_size;
 
@@ -2070,18 +2066,31 @@ namespace HybridPred
                     test.x += i * step;
                     test.z += j * step;
 
-                    // Query directly - origin change already translates the distribution
                     float prob = behavior_pdf.sample(test);
 
                     if (prob > best_prob)
                     {
                         best_prob = prob;
-                        best_pos = test;
+                        pdf_peak = test;
                     }
                 }
             }
 
-            optimal_cast_pos = best_pos;
+            // Heavy weight on path prediction to avoid undershooting
+            // PDF peak only for small lateral adjustments (jukes)
+            math::vector3 to_pdf = pdf_peak - path_predicted_pos;
+
+            // Only apply lateral component of PDF adjustment, not forward/backward
+            math::vector3 path_dir = (path_predicted_pos - current_pos);
+            float path_dist = path_dir.magnitude();
+            if (path_dist > 10.f)
+            {
+                path_dir = path_dir / path_dist;
+                // Project PDF offset onto perpendicular (lateral only)
+                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
+                float lateral_adjust = to_pdf.dot(path_perp);
+                optimal_cast_pos = path_predicted_pos + path_perp * lateral_adjust * 0.5f;
+            }
         }
 
         // NAVMESH CLAMPING: Ensure cast position is on pathable terrain
