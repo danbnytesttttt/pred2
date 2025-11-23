@@ -2263,6 +2263,18 @@ namespace HybridPred
             }
         }
 
+        // Active juker penalty - targets with frequent direction changes are harder to predict
+        // Even if we predict the juke direction, there's uncertainty in timing and execution
+        const auto& dodge = tracker.get_dodge_pattern();
+        float total_juke_freq = dodge.left_dodge_frequency + dodge.right_dodge_frequency;
+        if (total_juke_freq > 0.4f)  // More than 40% of movements are jukes
+        {
+            // Scale penalty by how active the juker is
+            // 40% juke freq = 0.95x, 80% juke freq = 0.75x
+            float juke_penalty = 1.0f - (total_juke_freq - 0.4f) * 0.5f;
+            confidence *= std::clamp(juke_penalty, 0.75f, 1.0f);
+        }
+
         return std::clamp(confidence, 0.1f, 1.0f);
     }
 
