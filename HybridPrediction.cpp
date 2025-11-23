@@ -2046,12 +2046,13 @@ namespace HybridPred
             return true;
 
         // Check if walking in a perfectly straight line
-        // Requires at least 3 samples to establish pattern (reduced from 5)
+        // Requires at least 8 samples (~400ms) to establish pattern
+        // This ensures target has had time to juke before we flag as "obvious"
         const auto& history = tracker.get_history();
-        if (history.size() >= 3)
+        if (history.size() >= 8)
         {
-            // Check last 3 velocity vectors for consistency
-            constexpr float DIRECTION_TOLERANCE = 0.15f;  // ~20 degrees tolerance (more forgiving)
+            // Check last 8 velocity vectors for consistency
+            constexpr float DIRECTION_TOLERANCE = 0.05f;  // ~10 degrees tolerance (strict)
             bool is_straight = true;
 
             math::vector3 base_direction = history[history.size() - 1].velocity;
@@ -2062,7 +2063,7 @@ namespace HybridPred
             {
                 base_direction = base_direction / base_speed;  // Manual normalize
 
-                size_t check_count = std::min(history.size(), static_cast<size_t>(3));
+                size_t check_count = std::min(history.size(), static_cast<size_t>(8));
                 for (size_t i = history.size() - check_count; i < history.size() - 1; ++i)
                 {
                     math::vector3 vel = history[i].velocity;
@@ -2548,10 +2549,10 @@ namespace HybridPred
                 }
                 // If < MIN_SAMPLES, don't boost - they might be about to move
             }
-            else if (current_speed < 150.f)
+            else if (current_speed < 100.f)
             {
-                // Slow movement: modest boost floor to 50%
-                test_physics_prob = std::max(test_physics_prob, 0.5f);
+                // Very slow movement: modest boost floor to 40%
+                test_physics_prob = std::max(test_physics_prob, 0.4f);
             }
 
             float test_behavior_prob = compute_capsule_behavior_probability(
