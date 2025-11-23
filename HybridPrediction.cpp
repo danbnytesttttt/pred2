@@ -1984,19 +1984,15 @@ namespace HybridPred
         result.cast_position = optimal_cast_pos;
 
         // Step 6: Evaluate final hit chance at optimal position
-        // Use effective radius = spell radius + target bounding radius
-        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
-        float effective_radius = spell.radius + target->get_bounding_radius();
-
         float physics_prob = PhysicsPredictor::compute_physics_hit_probability(
             optimal_cast_pos,
-            effective_radius,
+            spell.radius,
             reachable_region
         );
 
         float behavior_prob = BehaviorPredictor::compute_behavior_hit_probability(
             optimal_cast_pos,
-            effective_radius,
+            spell.radius,
             behavior_pdf
         );
 
@@ -2452,9 +2448,7 @@ namespace HybridPred
         math::vector3 direction = to_target / dist_to_target;  // Safe manual normalize
         math::vector3 capsule_start = source->get_position();
         float capsule_length = spell.range;
-        // Use effective radius = spell radius + target bounding radius
-        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
-        float capsule_radius = spell.radius + target->get_bounding_radius();
+        float capsule_radius = spell.radius;
 
         // For linear spells, find optimal direction using angular search
         // Test multiple angles (±10°) around the predicted center to maximize hit probability
@@ -2767,7 +2761,6 @@ namespace HybridPred
         float time_since_update = current_time - tracker.get_last_update_time();
         VectorConfiguration best_config = optimize_vector_orientation(
             source,
-            target,
             reachable_region.center,
             reachable_region,
             behavior_pdf,
@@ -2901,15 +2894,11 @@ namespace HybridPred
         result.cast_position = source->get_position() + direction * cone_range;
 
         // Step 6: Compute hit probabilities for cone
-        // Use effective range = cone range + target bounding radius
-        // This accounts for edge-to-edge collision (cone edge touching target hitbox edge)
-        float effective_range = cone_range + target->get_bounding_radius();
-
         float physics_prob = compute_cone_reachability_overlap(
             source->get_position(),
             direction,
             cone_half_angle,
-            effective_range,
+            cone_range,
             reachable_region
         );
 
@@ -2917,7 +2906,7 @@ namespace HybridPred
             source->get_position(),
             direction,
             cone_half_angle,
-            effective_range,
+            cone_range,
             behavior_pdf
         );
 
@@ -3251,7 +3240,6 @@ namespace HybridPred
 
     HybridFusionEngine::VectorConfiguration HybridFusionEngine::optimize_vector_orientation(
         game_object* source,
-        game_object* target,
         const math::vector3& predicted_target_pos,
         const ReachableRegion& reachable_region,
         const BehaviorPDF& behavior_pdf,
@@ -3287,9 +3275,7 @@ namespace HybridPred
 
         math::vector3 source_pos = source->get_position();
         float vector_length = spell.range;
-        // Use effective width = spell radius + target bounding radius
-        // This accounts for edge-to-edge collision
-        float vector_width = spell.radius + target->get_bounding_radius();
+        float vector_width = spell.radius;
         float max_first_cast_range = spell.cast_range;
 
         // If cast_range is 0, use range as default (some spells don't set cast_range)
