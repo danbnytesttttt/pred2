@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "sdk.hpp"
 #include "StandalonePredictionSDK.h"  // MUST be included AFTER sdk.hpp for compatibility
