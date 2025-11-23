@@ -1945,6 +1945,16 @@ namespace HybridPred
             }
         }
 
+        // RANGE CLAMPING: Ensure cast position is within spell range
+        math::vector3 source_pos = source->get_position();
+        math::vector3 to_cast = optimal_cast_pos - source_pos;
+        float distance_to_cast = to_cast.magnitude();
+        if (distance_to_cast > spell.range)
+        {
+            // Clamp to max range
+            optimal_cast_pos = source_pos + to_cast.normalized() * spell.range;
+        }
+
         result.cast_position = optimal_cast_pos;
 
         // Step 6: Evaluate final hit chance at optimal position
@@ -2584,6 +2594,15 @@ namespace HybridPred
         // Cast position should be the predicted target position, not max range
         // This is where we aim the spell to hit the target
         result.cast_position = reachable_region.center;
+
+        // RANGE CLAMPING: Ensure cast position is within spell range
+        math::vector3 to_cast = result.cast_position - capsule_start;
+        float distance_to_cast = to_cast.magnitude();
+        if (distance_to_cast > spell.range)
+        {
+            // Clamp to max range
+            result.cast_position = capsule_start + to_cast.normalized() * spell.range;
+        }
 
         // Use best probabilities found
         float physics_prob = best_physics_prob;
