@@ -738,17 +738,39 @@ namespace HybridPred
             math::vector3 forward = velocity_dir * total_distance * forward_component;
             math::vector3 side = perpendicular * total_distance * lateral_factor;
 
-            // Juke cadence weighting: Weight lateral dodge samples based on timing
-            // If prediction_time is close to juke_interval_mean, the target is likely to juke
-            // Use Gaussian weighting: higher weight near typical juke time, lower weight far from it
+            // Juke cadence weighting: Weight based on WHERE we are in their juke cycle
+            // Key insight: We need time since LAST juke to predict NEXT juke
             float juke_cadence_weight = 1.0f;  // Default
-            if (dodge_pattern_.juke_interval_variance > EPSILON)
+            if (dodge_pattern_.juke_interval_variance > EPSILON && !direction_change_times_.empty())
             {
+                // Get time since last direction change (juke)
+                float current_time = 0.f;
+                if (g_sdk && g_sdk->clock_facade)
+                    current_time = g_sdk->clock_facade->get_game_time();
+
+                float last_juke_time = direction_change_times_.back();
+                float time_since_last_juke = current_time - last_juke_time;
+
+                // Predict when next juke will happen based on their rhythm
+                // If they juke every 0.5s on average and last juked 0.2s ago, next is in 0.3s
+                float time_until_next_juke = dodge_pattern_.juke_interval_mean - time_since_last_juke;
+
+                // If negative, they're "overdue" for a juke - wrap to next cycle
+                while (time_until_next_juke < 0.f)
+                    time_until_next_juke += dodge_pattern_.juke_interval_mean;
+
+                // Gaussian weight: high when spell arrives near expected juke time
+                float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
+                float time_diff = prediction_time - time_until_next_juke;
+                juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
+                juke_cadence_weight = std::clamp(juke_cadence_weight, 0.3f, 1.0f);
+            }
+            else if (dodge_pattern_.juke_interval_variance > EPSILON)
+            {
+                // Fallback: no juke history yet, use old method
                 float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
                 float time_diff = prediction_time - dodge_pattern_.juke_interval_mean;
-                // Gaussian: k = exp(-0.5 * ((t - μ) / σ)²)
                 juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
-                // Clamp to reasonable range [0.3, 1.0] - still apply some dodge bias even off-rhythm
                 juke_cadence_weight = std::clamp(juke_cadence_weight, 0.3f, 1.0f);
             }
 
