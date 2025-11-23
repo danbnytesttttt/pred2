@@ -2045,13 +2045,14 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Step 5: Find optimal cast position
-        // Path prediction is primary (follows actual waypoints, more accurate for position)
-        // PDF provides adjustment for behavior patterns (jukes, hesitation)
-        math::vector3 optimal_cast_pos = path_predicted_pos;  // Primary: path prediction
+        // Intelligent decomposition of path prediction vs behavior PDF:
+        // - Forward/backward: Trust path prediction (velocity extrapolation lags behind)
+        // - Lateral: Trust PDF peak (captures actual juke patterns)
+        math::vector3 optimal_cast_pos = path_predicted_pos;
 
         if (behavior_pdf.total_probability > EPSILON)
         {
-            // Find PDF peak (behavior-based adjustment)
+            // Find PDF peak (behavior-based prediction center)
             math::vector3 pdf_peak = behavior_pdf.origin;
             float best_prob = 0.f;
 
@@ -2076,20 +2077,33 @@ namespace HybridPred
                 }
             }
 
-            // Heavy weight on path prediction to avoid undershooting
-            // PDF peak only for small lateral adjustments (jukes)
-            math::vector3 to_pdf = pdf_peak - path_predicted_pos;
-
-            // Only apply lateral component of PDF adjustment, not forward/backward
+            // Decompose offset into forward/lateral components
             math::vector3 path_dir = (path_predicted_pos - current_pos);
             float path_dist = path_dir.magnitude();
+
             if (path_dist > 10.f)
             {
                 path_dir = path_dir / path_dist;
-                // Project PDF offset onto perpendicular (lateral only)
                 math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-                float lateral_adjust = to_pdf.dot(path_perp);
-                optimal_cast_pos = path_predicted_pos + path_perp * lateral_adjust * 0.5f;
+
+                // Get offset from path prediction to PDF peak
+                math::vector3 offset = pdf_peak - path_predicted_pos;
+
+                // Decompose offset
+                float forward_offset = offset.dot(path_dir);   // + = ahead, - = behind
+                float lateral_offset = offset.dot(path_perp);  // juke direction
+
+                // Forward/backward: Path prediction is authoritative (fixes undershooting)
+                // Only apply forward offset if PDF is AHEAD (target decelerating)
+                // Ignore if PDF is BEHIND (that's the velocity lag we're fixing)
+                float applied_forward = (forward_offset > 0) ? forward_offset * 0.3f : 0.f;
+
+                // Lateral: PDF captures juke patterns - apply fully
+                float applied_lateral = lateral_offset;
+
+                optimal_cast_pos = path_predicted_pos
+                    + path_dir * applied_forward
+                    + path_perp * applied_lateral;
             }
         }
 
