@@ -306,6 +306,12 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         }
 
         // CRITICAL: Check fog of war status
+        if (!g_sdk || !g_sdk->clock_facade)
+        {
+            result.hitchance = pred_sdk::hitchance::any;
+            result.is_valid = false;
+            return result;
+        }
         float current_time = g_sdk->clock_facade->get_game_time();
         FogOfWarTracker::update_visibility(obj, current_time);
 
@@ -521,7 +527,7 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             try
             {
                 PredictionTelemetry::PredictionEvent event;
-                event.timestamp = g_sdk->clock_facade->get_game_time();
+                event.timestamp = (g_sdk && g_sdk->clock_facade) ? g_sdk->clock_facade->get_game_time() : 0.f;
                 event.target_name = obj->get_char_name();
 
                 // Map spell type enum to string
@@ -866,6 +872,9 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     {
         sdk_preferred = sdk::target_selector->get_hero_target();
     }
+
+    if (!g_sdk || !g_sdk->object_manager)
+        return nullptr;
 
     auto all_heroes = g_sdk->object_manager->get_heroes();
 
@@ -1783,6 +1792,8 @@ bool CustomPredictionSDK::check_collision_simple(
         }
         else if (collision_type == pred_sdk::collision_type::hero)
         {
+            if (!g_sdk || !g_sdk->object_manager)
+                continue;
             auto heroes = g_sdk->object_manager->get_heroes();
 
             for (auto* hero : heroes)

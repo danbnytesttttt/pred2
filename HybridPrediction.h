@@ -853,7 +853,10 @@ namespace HybridPred
         {
             samples_.clear();
             opportunities_.clear();
-            game_start_time_ = g_sdk->clock_facade->get_game_time();
+            if (g_sdk && g_sdk->clock_facade)
+                game_start_time_ = g_sdk->clock_facade->get_game_time();
+            else
+                game_start_time_ = 0.f;
             enabled_ = true;
         }
 

@@ -559,6 +559,8 @@ namespace EdgeCases
         int blocking_minions = 0;
 
         // Get all minions (SDK uses get_minions(), not get_enemy_minions())
+        if (!g_sdk || !g_sdk->object_manager)
+            return 1.0f;  // Can't check minions, assume clear
         auto minions = g_sdk->object_manager->get_minions();
         for (auto* minion : minions)
         {

@@ -1360,8 +1360,13 @@ namespace HybridPred
             math::vector3 escape_point_right = target_position + escape_dir_right * escape_distance;
 
             // Check if escape paths are walkable using nav mesh
-            bool can_dodge_left = g_sdk->nav_mesh->is_pathable(escape_point_left);
-            bool can_dodge_right = g_sdk->nav_mesh->is_pathable(escape_point_right);
+            bool can_dodge_left = true;
+            bool can_dodge_right = true;
+            if (g_sdk && g_sdk->nav_mesh)
+            {
+                can_dodge_left = g_sdk->nav_mesh->is_pathable(escape_point_left);
+                can_dodge_right = g_sdk->nav_mesh->is_pathable(escape_point_right);
+            }
 
             // Trapped against wall on both sides = guaranteed hit
             if (!can_dodge_left && !can_dodge_right)
@@ -1656,6 +1661,11 @@ namespace HybridPred
         // Handle stasis (Zhonya's, GA, Bard R) - PERFECT TIMING
         if (edge_cases.stasis.is_in_stasis)
         {
+            if (!g_sdk || !g_sdk->clock_facade)
+            {
+                result.is_valid = false;
+                return result;
+            }
             float current_time = g_sdk->clock_facade->get_game_time();
             float spell_travel_time = PhysicsPredictor::compute_arrival_time(
                 source->get_position(),
@@ -1743,7 +1753,9 @@ namespace HybridPred
                 spell.delay
             );
 
-            float current_time = g_sdk->clock_facade->get_game_time();
+            float current_time = 0.f;
+            if (g_sdk && g_sdk->clock_facade)
+                current_time = g_sdk->clock_facade->get_game_time();
             bool timing_valid = EdgeCases::validate_dash_timing(
                 edge_cases.dash,
                 spell_travel_time,
