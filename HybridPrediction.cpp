@@ -189,17 +189,28 @@ namespace HybridPred
                     // Cap velocity magnitude while preserving direction
                     snapshot.velocity = (snapshot.velocity / vel_magnitude) * MAX_SANE_VELOCITY;
                 }
-            }
 
-            // Detect auto-attack for post-AA movement analysis
-            if (!movement_history_.empty() && snapshot.is_auto_attacking && !movement_history_.back().is_auto_attacking)
-            {
-                last_aa_time_ = current_time;
+                // VELOCITY SMOOTHING: Exponential smoothing to reduce jitter from spam clicking
+                // Alpha 0.3 = 70% old velocity, 30% new velocity
+                constexpr float SMOOTH_ALPHA = 0.3f;
+                smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
             }
+        }
+        else
+        {
+            snapshot.velocity = math::vector3(0, 0, 0);
+            smoothed_velocity_ = math::vector3(0, 0, 0);
+        }
 
-            // Track post-AA movement delay
-            if (!movement_history_.empty() && last_aa_time_ > 0.f && snapshot.velocity.magnitude() > 10.f &&
-                movement_history_.back().velocity.magnitude() < 10.f)
+        // Detect auto-attack for post-AA movement analysis
+        if (!movement_history_.empty() && snapshot.is_auto_attacking && !movement_history_.back().is_auto_attacking)
+        {
+            last_aa_time_ = current_time;
+        }
+
+        // Track post-AA movement delay
+        if (!movement_history_.empty() && last_aa_time_ > 0.f && snapshot.velocity.magnitude() > 10.f &&
+            movement_history_.back().velocity.magnitude() < 10.f)
             {
                 float delay = current_time - last_aa_time_;
                 if (delay < 1.0f) // Only track reasonable delays
@@ -538,7 +549,8 @@ namespace HybridPred
         if (movement_history_.empty())
             return math::vector3{};
 
-        return movement_history_.back().velocity;
+        // Return smoothed velocity to reduce jitter from spam clicking
+        return smoothed_velocity_;
     }
 
     BehaviorPDF TargetBehaviorTracker::build_behavior_pdf(float prediction_time, float move_speed) const
@@ -2429,19 +2441,53 @@ namespace HybridPred
                 HUMAN_REACTION_TIME       // 250ms reaction time
             );
 
-            // FIX: Boost physics for stationary targets
+            // FIX: Boost physics for stationary targets (with duration check)
             // Physics assumes targets WILL dodge if they CAN, penalizing stationary targets at range
-            // If target is barely moving, boost physics to prevent long-range drop-off
+            // Only boost if target has been stationary for a meaningful duration (not just a brief pause)
             float current_speed = target_velocity.magnitude();
             if (current_speed < 50.f)
             {
-                // Stationary: guarantee at least 70% physics probability
-                test_physics_prob = std::max(test_physics_prob, 0.7f);
+                // Check how long they've been stationary by examining movement history
+                const auto& history = tracker.get_history();
+                int stationary_samples = 0;
+                constexpr float STATIONARY_THRESHOLD = 50.f;
+
+                // Count consecutive stationary samples from most recent
+                for (auto it = history.rbegin(); it != history.rend(); ++it)
+                {
+                    if (it->velocity.magnitude() < STATIONARY_THRESHOLD)
+                        stationary_samples++;
+                    else
+                        break;  // Movement detected, stop counting
+                }
+
+                // Require at least 0.3s of stationary (6 samples at 50ms rate)
+                // Scale boost based on duration: 0.3s = 70%, 0.5s = 80%, 1.0s+ = 85%
+                constexpr int MIN_SAMPLES_FOR_BOOST = 6;   // ~0.3s
+                constexpr int MED_SAMPLES_FOR_BOOST = 10;  // ~0.5s
+                constexpr int MAX_SAMPLES_FOR_BOOST = 20;  // ~1.0s
+
+                if (stationary_samples >= MAX_SAMPLES_FOR_BOOST)
+                {
+                    // Very confident they're AFK or not reacting
+                    test_physics_prob = std::max(test_physics_prob, 0.85f);
+                }
+                else if (stationary_samples >= MED_SAMPLES_FOR_BOOST)
+                {
+                    // Confident they're stationary
+                    test_physics_prob = std::max(test_physics_prob, 0.80f);
+                }
+                else if (stationary_samples >= MIN_SAMPLES_FOR_BOOST)
+                {
+                    // Likely stationary but could be brief pause
+                    test_physics_prob = std::max(test_physics_prob, 0.70f);
+                }
+                // If < MIN_SAMPLES, don't boost - they might be about to move
             }
             else if (current_speed < 150.f)
             {
-                // Slow movement: boost floor to 40%
-                test_physics_prob = std::max(test_physics_prob, 0.4f);
+                // Slow movement: modest boost floor to 50%
+                test_physics_prob = std::max(test_physics_prob, 0.5f);
             }
 
             float test_behavior_prob = compute_capsule_behavior_probability(

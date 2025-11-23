@@ -401,6 +401,9 @@ namespace HybridPred
         // Opportunistic casting tracking (per spell slot)
         mutable std::unordered_map<int, OpportunityWindow> opportunity_windows_;
 
+        // Smoothed velocity to reduce jitter from spam clicking
+        math::vector3 smoothed_velocity_;
+
     public:
         TargetBehaviorTracker(game_object* target);
 

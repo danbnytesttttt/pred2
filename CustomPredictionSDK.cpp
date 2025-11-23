@@ -841,9 +841,16 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     }
     else
     {
-        // Cap global spell search to reasonable range (3000 units)
-        // Global spells should use explicit targeting, not auto-target
-        search_range = std::min(spell_data.range, 3000.f);
+        // For truly global spells (Ezreal R, Jinx R, Ashe R), allow full map search
+        // Otherwise cap to reasonable range
+        if (spell_data.range > 10000.f)
+        {
+            search_range = 25000.f;  // Full map diagonal
+        }
+        else
+        {
+            search_range = std::min(spell_data.range, 3000.f);
+        }
     }
 
     // IMPROVED: Iterate ALL enemies and compare scores
