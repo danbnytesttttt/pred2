@@ -785,14 +785,15 @@ namespace HybridPred
                     forward +  // Already scaled by forward_component
                     dodge_pattern_.predicted_next_direction * (total_distance * lateral_factor);
 
-                // Pattern weight: commit to predicted juke but not excessively
-                float pattern_weight = dodge_pattern_.pattern_confidence * 1.8f;
+                // Pattern weight: commit to predicted juke but scale by timing
+                // If prediction_time matches their juke rhythm, we're more confident
+                float pattern_weight = dodge_pattern_.pattern_confidence * 1.8f * juke_cadence_weight;
                 pdf.add_weighted_sample(pattern_predicted_pos, pattern_weight);
 
                 // Also add "no juke" position - they might break the pattern
-                // Minimum weight ensures we don't completely ignore this possibility
+                // Weight higher when timing is off-rhythm (low juke_cadence_weight)
                 math::vector3 no_juke_pos = latest.position + velocity_dir * total_distance;
-                float no_juke_weight = std::max(0.3f, (1.0f - dodge_pattern_.pattern_confidence) * 1.0f);
+                float no_juke_weight = std::max(0.3f, (1.0f - dodge_pattern_.pattern_confidence) + (1.0f - juke_cadence_weight) * 0.5f);
                 pdf.add_weighted_sample(no_juke_pos, no_juke_weight);
             }
         }
