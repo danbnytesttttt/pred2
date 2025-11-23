@@ -2005,7 +2005,7 @@ namespace HybridPred
                     test.z += j * step;
 
                     // Query directly - origin change already translates the distribution
-                    float prob = behavior_pdf.get_probability_at(test);
+                    float prob = behavior_pdf.sample(test);
 
                     if (prob > best_prob)
                     {
