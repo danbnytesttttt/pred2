@@ -2445,9 +2445,14 @@ namespace HybridPred
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF
+        // Step 3: Build behavior PDF and align with path prediction
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // INTELLIGENT FIX: Translate behavior PDF to align with path prediction
+        // Same fix as circular - behavior PDF captures patterns but origin diverges from path
+        math::vector3 pdf_offset = path_predicted_pos - behavior_pdf.origin;
+        behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
 
@@ -2770,21 +2775,35 @@ namespace HybridPred
         );
 
         // Step 2: Build reachable region (physics)
+        // FIX: Use path-following prediction for better accuracy
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
 
+        // Speed-scaled dodge window
+        float dodge_window_factor = 0.3f;
+        if (move_speed > 400.f)
+        {
+            dodge_window_factor = 0.3f + (move_speed - 400.f) * 0.0005f;
+            dodge_window_factor = std::min(dodge_window_factor, 0.5f);
+        }
+
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_position(),
-            target_velocity,
-            arrival_time,
+            path_predicted_pos,
+            math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
+            arrival_time * dodge_window_factor,
             move_speed
         );
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF
+        // Step 3: Build behavior PDF and align with path prediction
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // INTELLIGENT FIX: Translate behavior PDF to align with path prediction
+        math::vector3 pdf_offset = path_predicted_pos - behavior_pdf.origin;
+        behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
 
