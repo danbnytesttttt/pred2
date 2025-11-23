@@ -1206,7 +1206,7 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_aoe_cluster(
             }
 
             result.min_hit_chance = min_hc;
-            result.avg_hit_chance = sum_hc / best_hit_chances.size();
+            result.avg_hit_chance = best_hit_chances.size() > 0 ? sum_hc / best_hit_chances.size() : 0.f;
             result.is_valid = true;
         }
     }
@@ -1401,7 +1401,7 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_linear_aoe(
             }
 
             result.min_hit_chance = min_hc;
-            result.avg_hit_chance = sum_hc / best_hit_chances.size();
+            result.avg_hit_chance = best_hit_chances.size() > 0 ? sum_hc / best_hit_chances.size() : 0.f;
             result.is_valid = true;
         }
     }
@@ -1627,7 +1627,7 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_cone_aoe(
             }
 
             result.min_hit_chance = min_hc;
-            result.avg_hit_chance = sum_hc / best_hit_chances.size();
+            result.avg_hit_chance = best_hit_chances.size() > 0 ? sum_hc / best_hit_chances.size() : 0.f;
             result.is_valid = true;
         }
     }
