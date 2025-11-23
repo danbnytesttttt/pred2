@@ -147,6 +147,16 @@ namespace HybridPred
             physics_weight = 0.4f;
         }
 
+        // FIX: Dynamic weight shift based on behavior confidence
+        // If behavior says "stationary" (high prob) but physics says "easy dodge" (low prob),
+        // trust behavior more - don't penalize just because dodge is theoretically possible
+        if (behavior_prob > 0.85f)
+        {
+            // Behavior is very confident (e.g. stationary target)
+            // Reduce physics weight so "theoretical dodge possibility" doesn't tank the score
+            physics_weight *= 0.3f;
+        }
+
         // Staleness detection: If velocity data hasn't updated recently, increase physics weight
         // This handles cases where behavior tracker has stale data (target in fog, networking issues, etc.)
         if (time_since_update > 0.5f)

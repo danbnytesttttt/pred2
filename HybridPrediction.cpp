@@ -1341,12 +1341,16 @@ namespace HybridPred
         // Linear ratio doesn't capture human dodge thresholds well
         float ratio = time_needed_to_escape / time_available;
 
-        constexpr float SIGMOID_STEEPNESS = 40.f;
-        constexpr float SIGMOID_MIDPOINT = 0.80f;
+        // FIX: Relaxed sigmoid parameters
+        // Old: MIDPOINT=0.80 penalized when target needed <80% of time to dodge (too aggressive)
+        // New: MIDPOINT=0.40 only penalizes when dodge is very easy (<40% time needed)
+        // This prevents 0% physics for stationary targets at range
+        constexpr float SIGMOID_STEEPNESS = 20.f;   // Less steep transition
+        constexpr float SIGMOID_MIDPOINT = 0.40f;   // 50% hit chance when 40% time needed to dodge
 
         // Clamp exponent to prevent overflow/underflow
         float exponent = -SIGMOID_STEEPNESS * (ratio - SIGMOID_MIDPOINT);
-        exponent = std::clamp(exponent, -50.0f, 50.0f);
+        exponent = std::clamp(exponent, -20.0f, 20.0f);
 
         float sigmoid_probability = 1.0f / (1.0f + std::exp(exponent));
 
