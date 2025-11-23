@@ -573,16 +573,44 @@ namespace EdgeCases
                 continue;
 
             // Check if minion is between source and target
-            math::vector3 to_minion = minion->get_position() - source_pos;
+            math::vector3 minion_pos = minion->get_position();
+            math::vector3 to_minion = minion_pos - source_pos;
             float distance_along_path = to_minion.dot(direction);
 
             // Minion must be between source and target
             if (distance_along_path < 0.f || distance_along_path > distance_to_target)
                 continue;
 
+            // FIX: Predict minion position when spell arrives
+            // Estimate travel time to minion position (assume ~1200 projectile speed if not specified)
+            float travel_time = distance_along_path / 1200.f;
+
+            if (minion->is_moving() && travel_time > 0.05f)
+            {
+                math::vector3 minion_path_end = minion->get_path_end_position();
+                math::vector3 move_dir = minion_path_end - minion_pos;
+                float move_dist = move_dir.magnitude();
+
+                if (move_dist > 1.0f)
+                {
+                    move_dir = move_dir / move_dist;
+                    float minion_speed = minion->get_move_speed();
+                    float predicted_move = std::min(minion_speed * travel_time, move_dist);
+                    minion_pos = minion_pos + move_dir * predicted_move;
+
+                    // Recalculate distance along path with predicted position
+                    to_minion = minion_pos - source_pos;
+                    distance_along_path = to_minion.dot(direction);
+
+                    // Skip if minion will have moved out of path
+                    if (distance_along_path < 0.f || distance_along_path > distance_to_target)
+                        continue;
+                }
+            }
+
             // Compute perpendicular distance from minion to projectile path
             math::vector3 closest_point_on_path = source_pos + direction * distance_along_path;
-            float perpendicular_distance = (minion->get_position() - closest_point_on_path).magnitude();
+            float perpendicular_distance = (minion_pos - closest_point_on_path).magnitude();
 
             // Check if minion hitbox overlaps projectile
             float minion_radius = minion->get_bounding_radius();

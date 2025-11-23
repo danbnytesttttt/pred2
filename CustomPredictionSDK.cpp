@@ -1717,6 +1717,36 @@ bool CustomPredictionSDK::check_collision_simple(
                 if (line_length < 0.001f)
                     continue;  // Start and end are same point
                 math::vector3 line_dir = line_diff / line_length;
+
+                // FIX: Predict minion position when spell arrives
+                // Calculate time for spell to reach minion's current position
+                math::vector3 to_minion_current = minion_pos - start;
+                float distance_to_minion = to_minion_current.dot(line_dir);
+
+                if (distance_to_minion > 0 && spell_data.projectile_speed > 0)
+                {
+                    float travel_time = spell_data.delay + (distance_to_minion / spell_data.projectile_speed);
+
+                    // Predict minion movement (minions move at ~325 MS along path)
+                    if (minion->is_moving())
+                    {
+                        math::vector3 minion_path_end = minion->get_path_end_position();
+                        math::vector3 move_dir = minion_path_end - minion_pos;
+                        float move_dist = move_dir.magnitude();
+
+                        if (move_dist > 1.0f)
+                        {
+                            move_dir = move_dir / move_dist;
+                            float minion_speed = minion->get_move_speed();
+                            float predicted_move = minion_speed * travel_time;
+
+                            // Don't predict beyond path end
+                            predicted_move = std::min(predicted_move, move_dist);
+                            minion_pos = minion_pos + move_dir * predicted_move;
+                        }
+                    }
+                }
+
                 math::vector3 to_minion = minion_pos - start;
 
                 float projection = to_minion.dot(line_dir);
