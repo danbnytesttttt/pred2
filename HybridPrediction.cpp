@@ -307,11 +307,9 @@ namespace HybridPred
             // Dot product to determine forward/backward
             float dot = prev_dir.dot(curr_dir);
 
-            // Use lower threshold for frequency stats (captures smaller direction changes)
-            // Pattern detection uses 0.25f to filter micro-corrections
-            constexpr float FREQUENCY_THRESHOLD = 0.15f;
-            if (cross_y > FREQUENCY_THRESHOLD) left_count++;
-            else if (cross_y < -FREQUENCY_THRESHOLD) right_count++;
+            // Original threshold for frequency stats
+            if (cross_y > 0.1f) left_count++;
+            else if (cross_y < -0.1f) right_count++;
 
             if (dot > 0.5f) forward_count++;
             else if (dot < -0.5f) backward_count++;
@@ -1984,15 +1982,19 @@ namespace HybridPred
         result.cast_position = optimal_cast_pos;
 
         // Step 6: Evaluate final hit chance at optimal position
+        // Use effective radius = spell radius + target bounding radius
+        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
+        float effective_radius = spell.radius + target->get_bounding_radius();
+
         float physics_prob = PhysicsPredictor::compute_physics_hit_probability(
             optimal_cast_pos,
-            spell.radius,
+            effective_radius,
             reachable_region
         );
 
         float behavior_prob = BehaviorPredictor::compute_behavior_hit_probability(
             optimal_cast_pos,
-            spell.radius,
+            effective_radius,
             behavior_pdf
         );
 
@@ -2448,7 +2450,8 @@ namespace HybridPred
         math::vector3 direction = to_target / dist_to_target;  // Safe manual normalize
         math::vector3 capsule_start = source->get_position();
         float capsule_length = spell.range;
-        float capsule_radius = spell.radius;
+        // Use effective radius = spell radius + target bounding radius
+        float capsule_radius = spell.radius + target->get_bounding_radius();
 
         // For linear spells, find optimal direction using angular search
         // Test multiple angles (±10°) around the predicted center to maximize hit probability
@@ -2761,6 +2764,7 @@ namespace HybridPred
         float time_since_update = current_time - tracker.get_last_update_time();
         VectorConfiguration best_config = optimize_vector_orientation(
             source,
+            target,
             reachable_region.center,
             reachable_region,
             behavior_pdf,
@@ -2894,11 +2898,14 @@ namespace HybridPred
         result.cast_position = source->get_position() + direction * cone_range;
 
         // Step 6: Compute hit probabilities for cone
+        // Use effective range = cone range + target bounding radius
+        float effective_range = cone_range + target->get_bounding_radius();
+
         float physics_prob = compute_cone_reachability_overlap(
             source->get_position(),
             direction,
             cone_half_angle,
-            cone_range,
+            effective_range,
             reachable_region
         );
 
@@ -2906,7 +2913,7 @@ namespace HybridPred
             source->get_position(),
             direction,
             cone_half_angle,
-            cone_range,
+            effective_range,
             behavior_pdf
         );
 
@@ -3240,6 +3247,7 @@ namespace HybridPred
 
     HybridFusionEngine::VectorConfiguration HybridFusionEngine::optimize_vector_orientation(
         game_object* source,
+        game_object* target,
         const math::vector3& predicted_target_pos,
         const ReachableRegion& reachable_region,
         const BehaviorPDF& behavior_pdf,
@@ -3275,7 +3283,8 @@ namespace HybridPred
 
         math::vector3 source_pos = source->get_position();
         float vector_length = spell.range;
-        float vector_width = spell.radius;
+        // Use effective width = spell radius + target bounding radius
+        float vector_width = spell.radius + target->get_bounding_radius();
         float max_first_cast_range = spell.cast_range;
 
         // If cast_range is 0, use range as default (some spells don't set cast_range)
