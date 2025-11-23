@@ -785,15 +785,14 @@ namespace HybridPred
                     forward +  // Already scaled by forward_component
                     dodge_pattern_.predicted_next_direction * (total_distance * lateral_factor);
 
-                // Reduced weight: pattern helps but doesn't dominate
-                // Players can break patterns, so don't bet everything on juke
-                float pattern_weight = dodge_pattern_.pattern_confidence * 1.2f;
+                // Pattern weight: commit to predicted juke but not excessively
+                float pattern_weight = dodge_pattern_.pattern_confidence * 1.8f;
                 pdf.add_weighted_sample(pattern_predicted_pos, pattern_weight);
 
                 // Also add "no juke" position - they might break the pattern
-                // Weight based on inverse of pattern confidence
+                // Minimum weight ensures we don't completely ignore this possibility
                 math::vector3 no_juke_pos = latest.position + velocity_dir * total_distance;
-                float no_juke_weight = (1.0f - dodge_pattern_.pattern_confidence) * 0.8f;
+                float no_juke_weight = std::max(0.3f, (1.0f - dodge_pattern_.pattern_confidence) * 1.0f);
                 pdf.add_weighted_sample(no_juke_pos, no_juke_weight);
             }
         }
@@ -2180,16 +2179,42 @@ namespace HybridPred
             }
         }
 
-        // Active juker penalty - targets with frequent direction changes are harder to predict
-        // Even if we predict the juke direction, there's uncertainty in timing and execution
-        const auto& dodge = tracker.get_dodge_pattern();
-        float total_juke_freq = dodge.left_dodge_frequency + dodge.right_dodge_frequency;
-        if (total_juke_freq > 0.4f)  // More than 40% of movements are jukes
+        // Straight-line movement boost - modest increase for predictable movement
+        // Check if target has been moving in consistent direction
+        if (history.size() >= 6)
         {
-            // Scale penalty by how active the juker is
-            // 40% juke freq = 0.95x, 80% juke freq = 0.75x
-            float juke_penalty = 1.0f - (total_juke_freq - 0.4f) * 0.5f;
-            confidence *= std::clamp(juke_penalty, 0.75f, 1.0f);
+            bool is_straight = true;
+            math::vector3 base_vel = history.back().velocity;
+            float base_speed = base_vel.magnitude();
+
+            if (base_speed > 50.f)
+            {
+                math::vector3 base_dir = base_vel / base_speed;
+
+                for (size_t i = history.size() - 6; i < history.size() - 1; ++i)
+                {
+                    float speed = history[i].velocity.magnitude();
+                    if (speed < 50.f)
+                    {
+                        is_straight = false;
+                        break;
+                    }
+
+                    math::vector3 dir = history[i].velocity / speed;
+                    float dot = base_dir.x * dir.x + base_dir.z * dir.z;
+                    if (dot < 0.95f)  // ~18 degrees tolerance
+                    {
+                        is_straight = false;
+                        break;
+                    }
+                }
+
+                if (is_straight)
+                {
+                    // Modest boost for straight-line movement
+                    confidence *= 1.08f;
+                }
+            }
         }
 
         return std::clamp(confidence, 0.1f, 1.0f);
