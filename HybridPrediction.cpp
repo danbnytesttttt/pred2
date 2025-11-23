@@ -713,9 +713,6 @@ namespace HybridPred
             // FIX: Use current move_speed for dodge calculations
             // Direction from velocity, magnitude from move_speed stat
 
-            // Compute forward and lateral displacement separately
-            math::vector3 forward = velocity_dir * move_speed * prediction_time;
-
             // LEARNED lateral dodge factor from actual movement patterns
             // Compute average lateral component from direction changes
             float lateral_factor = 0.5f;  // Default fallback
@@ -730,8 +727,16 @@ namespace HybridPred
                 lateral_factor = total_lateral / direction_change_angles_.size();
                 lateral_factor = std::clamp(lateral_factor, 0.2f, 0.9f);  // Reasonable bounds
             }
-            float dodge_distance = move_speed * prediction_time * lateral_factor;
-            math::vector3 side = perpendicular * dodge_distance;
+
+            // FIX: When juking, they CHANGE direction, not add lateral to forward
+            // Total travel distance is still speed * time, but direction changes
+            // Use normalized combination of forward and lateral components
+            float total_distance = move_speed * prediction_time;
+
+            // Forward component reduces as lateral increases (they redirect, not teleport)
+            float forward_component = std::sqrt(1.0f - lateral_factor * lateral_factor);
+            math::vector3 forward = velocity_dir * total_distance * forward_component;
+            math::vector3 side = perpendicular * total_distance * lateral_factor;
 
             // Juke cadence weighting: Weight lateral dodge samples based on timing
             // If prediction_time is close to juke_interval_mean, the target is likely to juke
@@ -774,10 +779,10 @@ namespace HybridPred
             if (dodge_pattern_.has_pattern && dodge_pattern_.pattern_confidence > 0.6f)
             {
                 // Predict position based on detected pattern
-                float pattern_distance = latest.velocity.magnitude() * prediction_time;
+                // Use same distance conservation as above
                 math::vector3 pattern_predicted_pos = latest.position +
-                    latest.velocity * prediction_time +
-                    dodge_pattern_.predicted_next_direction * (pattern_distance * lateral_factor);
+                    forward +  // Already scaled by forward_component
+                    dodge_pattern_.predicted_next_direction * (total_distance * lateral_factor);
 
                 // Heavy weight: pattern confidence dictates how much we trust this
                 // Use 2x-3x normal weight to make pattern predictions dominant
