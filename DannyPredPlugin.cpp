@@ -67,7 +67,7 @@ namespace Prediction
                 PredictionSettings::get().enable_debug_logging = value;
                 });
 
-            g_menu->add_checkbox("telemetry", "Enable Telemetry", true, [](bool value) {
+            g_menu->add_checkbox("telemetry", "Enable Telemetry", false, [](bool value) {
                 PredictionSettings::get().enable_telemetry = value;
                 });
 

@@ -22,7 +22,7 @@ namespace PredictionVisuals
         bool enabled = true;
         bool draw_current_position = true;       // Draw circle at enemy's current position
         bool draw_predicted_position = true;     // Draw circle at predicted position
-        bool draw_movement_line = true;          // Draw line current → predicted
+        bool draw_movement_line = false;         // Draw line current → predicted (disabled by default)
         float prediction_time = 0.75f;           // How far ahead to predict (seconds)
 
         uint32_t main_color = 0xFFE19D9D;  // Main color for all visuals (salmon/pink default)
