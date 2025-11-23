@@ -587,24 +587,29 @@ namespace EdgeCases
 
             if (minion->is_moving() && travel_time > 0.05f)
             {
-                math::vector3 minion_path_end = minion->get_path_end_position();
-                math::vector3 move_dir = minion_path_end - minion_pos;
-                float move_dist = move_dir.magnitude();
-
-                if (move_dist > 1.0f)
+                auto path = minion->get_path();
+                if (!path.empty())
                 {
-                    move_dir = move_dir / move_dist;
-                    float minion_speed = minion->get_move_speed();
-                    float predicted_move = std::min(minion_speed * travel_time, move_dist);
-                    minion_pos = minion_pos + move_dir * predicted_move;
+                    // Last waypoint is the path end
+                    math::vector3 minion_path_end = path.back();
+                    math::vector3 move_dir = minion_path_end - minion_pos;
+                    float move_dist = move_dir.magnitude();
 
-                    // Recalculate distance along path with predicted position
-                    to_minion = minion_pos - source_pos;
-                    distance_along_path = to_minion.dot(direction);
+                    if (move_dist > 1.0f)
+                    {
+                        move_dir = move_dir / move_dist;
+                        float minion_speed = minion->get_move_speed();
+                        float predicted_move = std::min(minion_speed * travel_time, move_dist);
+                        minion_pos = minion_pos + move_dir * predicted_move;
 
-                    // Skip if minion will have moved out of path
-                    if (distance_along_path < 0.f || distance_along_path > distance_to_target)
-                        continue;
+                        // Recalculate distance along path with predicted position
+                        to_minion = minion_pos - source_pos;
+                        distance_along_path = to_minion.dot(direction);
+
+                        // Skip if minion will have moved out of path
+                        if (distance_along_path < 0.f || distance_along_path > distance_to_target)
+                            continue;
+                    }
                 }
             }
 

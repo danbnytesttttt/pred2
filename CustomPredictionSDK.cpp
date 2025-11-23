@@ -1730,19 +1730,24 @@ bool CustomPredictionSDK::check_collision_simple(
                     // Predict minion movement (minions move at ~325 MS along path)
                     if (minion->is_moving())
                     {
-                        math::vector3 minion_path_end = minion->get_path_end_position();
-                        math::vector3 move_dir = minion_path_end - minion_pos;
-                        float move_dist = move_dir.magnitude();
-
-                        if (move_dist > 1.0f)
+                        auto path = minion->get_path();
+                        if (!path.empty())
                         {
-                            move_dir = move_dir / move_dist;
-                            float minion_speed = minion->get_move_speed();
-                            float predicted_move = minion_speed * travel_time;
+                            // Last waypoint is the path end
+                            math::vector3 minion_path_end = path.back();
+                            math::vector3 move_dir = minion_path_end - minion_pos;
+                            float move_dist = move_dir.magnitude();
 
-                            // Don't predict beyond path end
-                            predicted_move = std::min(predicted_move, move_dist);
-                            minion_pos = minion_pos + move_dir * predicted_move;
+                            if (move_dist > 1.0f)
+                            {
+                                move_dir = move_dir / move_dist;
+                                float minion_speed = minion->get_move_speed();
+                                float predicted_move = minion_speed * travel_time;
+
+                                // Don't predict beyond path end
+                                predicted_move = std::min(predicted_move, move_dist);
+                                minion_pos = minion_pos + move_dir * predicted_move;
+                            }
                         }
                     }
                 }
