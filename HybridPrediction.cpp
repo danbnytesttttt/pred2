@@ -1942,7 +1942,9 @@ namespace HybridPred
 
         // Weighted geometric fusion (trust physics more when behavior samples are sparse)
         size_t sample_count = tracker.get_history().size();
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
         result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
 
@@ -2138,9 +2140,9 @@ namespace HybridPred
         confidence *= std::exp(-distance * CONFIDENCE_DISTANCE_DECAY);
 
         // Latency factor (ping in seconds)
-        // CRASH FIX: Check net_client before accessing
+        // CRASH FIX: Check g_sdk AND net_client before accessing
         float ping = 0.f;
-        if (g_sdk->net_client)
+        if (g_sdk && g_sdk->net_client)
             ping = static_cast<float>(g_sdk->net_client->get_ping()) * 0.001f;
         confidence *= std::exp(-ping * CONFIDENCE_LATENCY_FACTOR);
 
@@ -2365,7 +2367,9 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Compute staleness for fusion
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
         size_t sample_count = tracker.get_history().size();
 
@@ -2692,7 +2696,9 @@ namespace HybridPred
         // Step 5: Optimize vector orientation
         // Test multiple orientations to find best two-position configuration
         size_t sample_count = tracker.get_history().size();
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
         VectorConfiguration best_config = optimize_vector_orientation(
             source,
@@ -2850,7 +2856,9 @@ namespace HybridPred
 
         // Weighted geometric fusion (trust physics more when behavior samples are sparse)
         size_t sample_count = tracker.get_history().size();
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
         result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
