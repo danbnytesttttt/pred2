@@ -642,6 +642,7 @@ namespace HybridPred
         math::vector3 predicted_center{};
         float total_weight = 0.f;
         int sample_count = 0;
+        float current_weight = 1.0f;  // decay_rate^0 = 1.0
 
         for (size_t i = 0; i < movement_history_.size() && sample_count < 30; ++i)
         {
@@ -649,8 +650,9 @@ namespace HybridPred
             const auto& snapshot = movement_history_[idx];
 
             // Exponential decay weighting (recent data more important)
-            // Use adaptive decay rate based on target mobility
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
+            float weight = current_weight;
+            current_weight *= decay_rate;  // Prepare next weight
 
             // FIX: Scale historical velocity to current move_speed
             // Direction from history, magnitude from current move_speed stat
@@ -694,6 +696,7 @@ namespace HybridPred
         // Second pass: Add samples to PDF (now properly centered)
         total_weight = 0.f;
         sample_count = 0;
+        current_weight = 1.0f;  // Reset for second pass
 
         for (size_t i = 0; i < movement_history_.size() && sample_count < 30; ++i)
         {
@@ -701,8 +704,9 @@ namespace HybridPred
             const auto& snapshot = movement_history_[idx];
 
             // Exponential decay weighting (recent data more important)
-            // Use adaptive decay rate based on target mobility
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
+            float weight = current_weight;
+            current_weight *= decay_rate;  // Prepare next weight
 
             // FIX: Scale historical velocity to current move_speed (same as first pass)
             math::vector3 adjusted_velocity = snapshot.velocity;
@@ -1596,13 +1600,17 @@ namespace HybridPred
 
         // ADAPTIVE DECAY RATE: Adjust based on target mobility
         float decay_rate = get_adaptive_decay_rate(latest.velocity.magnitude());
+        float current_weight = 1.0f;  // decay_rate^0 = 1.0
 
         for (size_t i = 0; i < std::min(history.size(), size_t(20)); ++i)
         {
             size_t idx = history.size() - 1 - i;
             const auto& snapshot = history[idx];
 
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
+            float weight = current_weight;
+            current_weight *= decay_rate;  // Prepare next weight
+
             predicted_pos = predicted_pos + (snapshot.position + snapshot.velocity * prediction_time) * weight;
             total_weight += weight;
         }
@@ -1967,15 +1975,19 @@ namespace HybridPred
         result.cast_position = optimal_cast_pos;
 
         // Step 6: Evaluate final hit chance at optimal position
+        // Use effective radius = spell radius + target bounding radius
+        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
+        float effective_radius = spell.radius + target->get_bounding_radius();
+
         float physics_prob = PhysicsPredictor::compute_physics_hit_probability(
             optimal_cast_pos,
-            spell.radius,
+            effective_radius,
             reachable_region
         );
 
         float behavior_prob = BehaviorPredictor::compute_behavior_hit_probability(
             optimal_cast_pos,
-            spell.radius,
+            effective_radius,
             behavior_pdf
         );
 
@@ -2431,7 +2443,9 @@ namespace HybridPred
         math::vector3 direction = to_target / dist_to_target;  // Safe manual normalize
         math::vector3 capsule_start = source->get_position();
         float capsule_length = spell.range;
-        float capsule_radius = spell.radius;
+        // Use effective radius = spell radius + target bounding radius
+        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
+        float capsule_radius = spell.radius + target->get_bounding_radius();
 
         // For linear spells, find optimal direction using angular search
         // Test multiple angles (±10°) around the predicted center to maximize hit probability
@@ -2744,6 +2758,7 @@ namespace HybridPred
         float time_since_update = current_time - tracker.get_last_update_time();
         VectorConfiguration best_config = optimize_vector_orientation(
             source,
+            target,
             reachable_region.center,
             reachable_region,
             behavior_pdf,
@@ -2877,11 +2892,15 @@ namespace HybridPred
         result.cast_position = source->get_position() + direction * cone_range;
 
         // Step 6: Compute hit probabilities for cone
+        // Use effective range = cone range + target bounding radius
+        // This accounts for edge-to-edge collision (cone edge touching target hitbox edge)
+        float effective_range = cone_range + target->get_bounding_radius();
+
         float physics_prob = compute_cone_reachability_overlap(
             source->get_position(),
             direction,
             cone_half_angle,
-            cone_range,
+            effective_range,
             reachable_region
         );
 
@@ -2889,7 +2908,7 @@ namespace HybridPred
             source->get_position(),
             direction,
             cone_half_angle,
-            cone_range,
+            effective_range,
             behavior_pdf
         );
 
@@ -3223,6 +3242,7 @@ namespace HybridPred
 
     HybridFusionEngine::VectorConfiguration HybridFusionEngine::optimize_vector_orientation(
         game_object* source,
+        game_object* target,
         const math::vector3& predicted_target_pos,
         const ReachableRegion& reachable_region,
         const BehaviorPDF& behavior_pdf,
@@ -3258,7 +3278,9 @@ namespace HybridPred
 
         math::vector3 source_pos = source->get_position();
         float vector_length = spell.range;
-        float vector_width = spell.radius;
+        // Use effective width = spell radius + target bounding radius
+        // This accounts for edge-to-edge collision
+        float vector_width = spell.radius + target->get_bounding_radius();
         float max_first_cast_range = spell.cast_range;
 
         // If cast_range is 0, use range as default (some spells don't set cast_range)

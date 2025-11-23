@@ -758,6 +758,7 @@ namespace HybridPred
 
         static VectorConfiguration optimize_vector_orientation(
             game_object* source,
+            game_object* target,
             const math::vector3& predicted_target_pos,
             const ReachableRegion& reachable_region,
             const BehaviorPDF& behavior_pdf,
