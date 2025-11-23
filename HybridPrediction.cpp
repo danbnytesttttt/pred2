@@ -601,8 +601,8 @@ namespace HybridPred
         // ADAPTIVE DECAY RATE: Adjust based on target mobility
         float decay_rate = get_adaptive_decay_rate(latest.velocity.magnitude());
 
-        // If animation locked, predict stationary at current position
-        if (latest.is_cced || latest.is_casting)
+        // If animation locked (AA, casting, or CC'd), predict stationary at current position
+        if (latest.is_auto_attacking || latest.is_casting || latest.is_cced)
         {
             pdf.origin = latest.position;
             pdf.add_weighted_sample(latest.position, 1.0f);
