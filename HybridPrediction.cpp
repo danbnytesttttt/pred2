@@ -1051,6 +1051,7 @@ namespace HybridPred
         float non_reactive_time = std::min(prediction_time, reaction_time);
         math::vector3 drift_offset = current_velocity * non_reactive_time;
         region.center = current_pos + drift_offset;
+        region.velocity = current_velocity;  // Store for momentum weighting
 
         // CRITICAL FIX: Subtract reaction time from prediction time
         // Humans cannot react instantly - they need 200-300ms to see and respond
@@ -1186,13 +1187,35 @@ namespace HybridPred
             return 1.0f;  // No dodge time = guaranteed hit
 
         // Distance from cast position to predicted target center
-        float distance = (cast_position - reachable_region.center).magnitude();
+        math::vector3 to_cast = cast_position - reachable_region.center;
+        float distance = to_cast.magnitude();
 
         // Gaussian kernel: target most likely at predicted center
         // σ = max_radius / 2.5 (so ~95% within max_radius)
         float sigma = reachable_region.max_radius / 2.5f;
         if (sigma < 1.0f)
             sigma = 1.0f;  // Minimum sigma to avoid numerical issues
+
+        // MOMENTUM WEIGHTING: Penalize aiming behind moving targets
+        // Players are more likely to continue their current direction than turn 180°
+        float vel_speed = reachable_region.velocity.magnitude();
+        if (vel_speed > 50.f && distance > 1.0f)
+        {
+            // Calculate alignment: 1.0 = forward, -1.0 = backward
+            math::vector3 vel_dir = reachable_region.velocity / vel_speed;
+            math::vector3 to_cast_dir = to_cast / distance;
+            float alignment = to_cast_dir.x * vel_dir.x + to_cast_dir.y * vel_dir.y + to_cast_dir.z * vel_dir.z;
+
+            // If cast position is behind the target's movement direction, tighten sigma
+            // This makes it harder to predict they'll turn around
+            if (alignment < 0.f)
+            {
+                // Scale penalty: fully backward (-1.0) = 30% tighter sigma
+                // Perpendicular (0) = no penalty
+                float penalty = 1.0f + (alignment * 0.3f);  // Range: 0.7 to 1.0
+                sigma *= penalty;
+            }
+        }
 
         // Gaussian weight (clamped to avoid exp overflow)
         float exponent = -(distance * distance) / (2.0f * sigma * sigma);

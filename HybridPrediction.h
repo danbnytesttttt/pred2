@@ -278,8 +278,9 @@ namespace HybridPred
         float max_radius;                // Maximum reachable distance
         std::vector<math::vector3> boundary_points; // Discretized boundary
         float area;                      // Total reachable area
+        math::vector3 velocity;          // Target velocity (for momentum weighting)
 
-        ReachableRegion() : center{}, max_radius(0.f), area(0.f) {}
+        ReachableRegion() : center{}, max_radius(0.f), area(0.f), velocity{} {}
     };
 
     /**
