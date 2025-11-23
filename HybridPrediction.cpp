@@ -1147,47 +1147,8 @@ namespace HybridPred
             region.boundary_points.push_back(boundary_point);
         }
 
-        // Area = πr² (theoretical maximum)
-        float theoretical_area = PI * max_distance * max_distance;
-
-        // TERRAIN CLIPPING: Reduce area by fraction of points that are pathable
-        // This correctly handles wall-pinned scenarios where half the circle is blocked
-        float valid_fraction = 1.0f;
-        if (g_sdk && g_sdk->nav_mesh && max_distance > 10.f)
-        {
-            // Sample points using concentric rings for better coverage
-            int pathable_count = 0;
-            int total_samples = 0;
-
-            // Sample at 3 radii: 33%, 66%, 100% of max_distance
-            constexpr int SAMPLES_PER_RING = 16;
-            constexpr float RING_RADII[] = { 0.33f, 0.66f, 1.0f };
-
-            for (float ring_fraction : RING_RADII)
-            {
-                float ring_radius = max_distance * ring_fraction;
-                for (int i = 0; i < SAMPLES_PER_RING; ++i)
-                {
-                    float angle = (2.f * PI * i) / SAMPLES_PER_RING;
-                    math::vector3 sample_point = region.center;
-                    sample_point.x += ring_radius * std::cos(angle);
-                    sample_point.z += ring_radius * std::sin(angle);
-
-                    if (g_sdk->nav_mesh->is_pathable(sample_point))
-                        pathable_count++;
-                    total_samples++;
-                }
-            }
-
-            if (total_samples > 0)
-            {
-                valid_fraction = static_cast<float>(pathable_count) / static_cast<float>(total_samples);
-                // Minimum 10% to avoid division issues
-                valid_fraction = std::max(0.1f, valid_fraction);
-            }
-        }
-
-        region.area = theoretical_area * valid_fraction;
+        // Area = πr²
+        region.area = PI * max_distance * max_distance;
 
         return region;
     }
