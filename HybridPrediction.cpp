@@ -1708,6 +1708,15 @@ namespace HybridPred
             }
 
             // Perfect timing! Cast now for guaranteed hit on stasis exit
+            // But first check if in range
+            math::vector3 to_stasis = edge_cases.stasis.exit_position - source->get_position();
+            if (to_stasis.magnitude() > spell.range)
+            {
+                result.is_valid = false;
+                result.reasoning = "Stasis target out of range";
+                return result;
+            }
+
             result.cast_position = edge_cases.stasis.exit_position;
             result.hit_chance = 1.0f;  // 100% guaranteed
             result.physics_contribution = 1.0f;
@@ -1738,6 +1747,15 @@ namespace HybridPred
             {
                 result.is_valid = false;
                 result.reasoning = "Channel will finish before spell arrives";
+                return result;
+            }
+
+            // Check if in range
+            math::vector3 to_channel = edge_cases.channel.position - source->get_position();
+            if (to_channel.magnitude() > spell.range)
+            {
+                result.is_valid = false;
+                result.reasoning = "Channeling target out of range";
                 return result;
             }
 
@@ -1785,6 +1803,16 @@ namespace HybridPred
                 // FIX: Spell arrives AFTER dash ends - RETURN ENDPOINT IMMEDIATELY
                 // Don't run physics/behavior on dashing unit - they WILL stop at endpoint
                 // Treat like stasis: guaranteed position, high confidence
+
+                // Check if dash endpoint is in range
+                math::vector3 to_dash_end = edge_cases.dash.dash_end_position - source->get_position();
+                if (to_dash_end.magnitude() > spell.range)
+                {
+                    result.is_valid = false;
+                    result.reasoning = "Dash endpoint out of range";
+                    return result;
+                }
+
                 result.cast_position = edge_cases.dash.dash_end_position;
                 result.hit_chance = 1.0f * edge_cases.dash.confidence_multiplier;
                 result.physics_contribution = 1.0f;
