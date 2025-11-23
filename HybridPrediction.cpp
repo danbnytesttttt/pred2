@@ -1170,9 +1170,17 @@ namespace HybridPred
             return math::vector3{};
 
         math::vector3 position = target->get_position();
+
+        // Check if actually moving (not just has a path)
+        // Targets can have paths but be stationary (casting, AA, CC'd)
+        math::vector3 velocity = target->get_velocity();
+        float current_speed = velocity.magnitude();
+        if (current_speed < 50.f)
+            return position;  // Stationary - don't follow stale path
+
         auto path = target->get_path();
 
-        // No path or stationary - return current position
+        // No path - return current position
         if (path.size() <= 1)
             return position;
 
