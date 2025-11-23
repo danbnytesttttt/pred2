@@ -22,7 +22,21 @@ namespace PredictionSettings
         bool enable_debug_logging = false;  // Verbose console logging
         bool enable_telemetry = false;      // Log predictions for analysis (disabled by default)
         bool enable_visuals = false;        // Draw prediction indicators (disabled by default)
-        bool dump_spell_data = false;       // Log spell data and hitchance on next prediction
+
+        // Stored spell data for dump feature
+        struct StoredSpellData {
+            float range = 0;
+            float radius = 0;
+            float delay = 0;
+            float speed = 0;
+            int spell_type = 0;
+            int hitchance = 0;
+            bool collision_minion = false;
+            bool collision_hero = false;
+            bool collision_wall = false;
+            bool valid = false;
+        };
+        StoredSpellData last_spell_data;
 
         // Edge case toggles
         bool enable_dash_prediction = true;  // Predict at dash endpoints

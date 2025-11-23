@@ -75,10 +75,58 @@ namespace Prediction
                 PredictionSettings::get().enable_visuals = value;
                 });
 
-            g_menu->add_checkbox("dump_spell", "Dump Spell Data (Next Cast)", false, [](bool value) {
-                PredictionSettings::get().dump_spell_data = value;
+            g_menu->add_checkbox("dump_spell", "Dump Spell Data", false, [](bool value) {
                 if (value)
-                    g_sdk->log_console("[Danny.Prediction] Spell data dump enabled - will log next prediction");
+                {
+                    auto& stored = PredictionSettings::get().last_spell_data;
+                    if (!stored.valid)
+                    {
+                        g_sdk->log_console("[Danny.Prediction] No spell data yet - cast a spell first");
+                        return;
+                    }
+
+                    // Get hitchance string
+                    const char* hc_str = "unknown";
+                    switch (stored.hitchance)
+                    {
+                        case 0: hc_str = "any"; break;
+                        case 1: hc_str = "low"; break;
+                        case 2: hc_str = "medium"; break;
+                        case 3: hc_str = "high"; break;
+                        case 4: hc_str = "very_high"; break;
+                        default: hc_str = "unknown"; break;
+                    }
+
+                    // Get spell type string
+                    const char* type_str = "unknown";
+                    switch (stored.spell_type)
+                    {
+                        case 0: type_str = "linear"; break;
+                        case 1: type_str = "circular"; break;
+                        case 2: type_str = "targetted"; break;
+                        case 3: type_str = "vector"; break;
+                        default: type_str = "unknown"; break;
+                    }
+
+                    g_sdk->log_console("========== SPELL DATA DUMP ==========");
+                    char dump_msg[256];
+                    snprintf(dump_msg, sizeof(dump_msg), "Type: %s", type_str);
+                    g_sdk->log_console(dump_msg);
+                    snprintf(dump_msg, sizeof(dump_msg), "Range: %.0f", stored.range);
+                    g_sdk->log_console(dump_msg);
+                    snprintf(dump_msg, sizeof(dump_msg), "Radius: %.0f", stored.radius);
+                    g_sdk->log_console(dump_msg);
+                    snprintf(dump_msg, sizeof(dump_msg), "Delay: %.3f sec", stored.delay);
+                    g_sdk->log_console(dump_msg);
+                    snprintf(dump_msg, sizeof(dump_msg), "Speed: %.0f", stored.speed);
+                    g_sdk->log_console(dump_msg);
+                    snprintf(dump_msg, sizeof(dump_msg), "Expected Hitchance: %s", hc_str);
+                    g_sdk->log_console(dump_msg);
+                    snprintf(dump_msg, sizeof(dump_msg), "Collision: minion=%d, hero=%d, wall=%d",
+                        stored.collision_minion, stored.collision_hero, stored.collision_wall);
+                    g_sdk->log_console(dump_msg);
+                    g_sdk->log_console("======================================");
+                }
                 });
 
             g_menu->add_label("Prediction Features");
