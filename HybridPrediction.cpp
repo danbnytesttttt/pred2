@@ -1912,12 +1912,21 @@ namespace HybridPred
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
 
-        // Use path-predicted position as center, with reduced dodge time
+        // Use path-predicted position as center, with speed-scaled dodge time
         // Path prediction handles movement along waypoints
+        // Fast targets can react and execute dodges faster, so give them more dodge window
+        float dodge_window_factor = 0.3f;
+        if (move_speed > 400.f)
+        {
+            // Scale up dodge window for fast targets: 400 speed = 0.3, 500 = 0.35, 600 = 0.4
+            dodge_window_factor = 0.3f + (move_speed - 400.f) * 0.0005f;
+            dodge_window_factor = std::min(dodge_window_factor, 0.5f);  // Cap at 0.5
+        }
+
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * 0.3f,     // Reduced time - only dodge window
+            arrival_time * dodge_window_factor,
             move_speed
         );
 
@@ -2429,11 +2438,19 @@ namespace HybridPred
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
 
+        // Speed-scaled dodge window - fast targets can react and dodge faster
+        float dodge_window_factor = 0.3f;
+        if (move_speed > 400.f)
+        {
+            dodge_window_factor = 0.3f + (move_speed - 400.f) * 0.0005f;
+            dodge_window_factor = std::min(dodge_window_factor, 0.5f);
+        }
+
         // Use path-predicted position as center
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * 0.3f,     // Reduced time - only dodge window
+            arrival_time * dodge_window_factor,
             move_speed
         );
 
