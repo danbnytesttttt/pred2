@@ -841,14 +841,16 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     else
     {
         // For truly global spells (Ezreal R, Jinx R, Ashe R), allow full map search
-        // Otherwise cap to reasonable range
+        // For semi-globals (Xerath R ~5000, TF R ~5500, Pantheon R ~5500), use spell range + buffer
+        // Don't hard cap at 3000 which would break semi-globals
         if (spell_data.range > 10000.f)
         {
             search_range = 25000.f;  // Full map diagonal
         }
         else
         {
-            search_range = std::min(spell_data.range, 3000.f);
+            // Use spell range + 500 buffer, cap at map limits for sanity
+            search_range = std::min(spell_data.range + 500.f, 25000.f);
         }
     }
 

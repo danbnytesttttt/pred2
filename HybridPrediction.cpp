@@ -190,9 +190,34 @@ namespace HybridPred
                     snapshot.velocity = (snapshot.velocity / vel_magnitude) * MAX_SANE_VELOCITY;
                 }
 
-                // VELOCITY SMOOTHING: Exponential smoothing to reduce jitter
-                constexpr float SMOOTH_ALPHA = 0.3f;
-                smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
+                // SMART VELOCITY SMOOTHING: Snap on sharp turns, smooth otherwise
+                // Standard smoothing causes "drift" on sharp jukes - takes ~200ms to catch up
+                // If angle change > 60 degrees, snap instantly to catch the juke
+                float raw_speed = snapshot.velocity.magnitude();
+                float smooth_speed = smoothed_velocity_.magnitude();
+
+                if (raw_speed > 100.f && smooth_speed > 100.f)
+                {
+                    // Check angle between new raw velocity and old smoothed velocity
+                    float dot = snapshot.velocity.normalized().dot(smoothed_velocity_.normalized());
+
+                    if (dot < 0.5f)  // Angle > 60 degrees
+                    {
+                        // Sharp turn detected! Snap instantly to new direction
+                        smoothed_velocity_ = snapshot.velocity;
+                    }
+                    else
+                    {
+                        // Smooth movement: Apply exponential smoothing
+                        constexpr float SMOOTH_ALPHA = 0.3f;
+                        smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
+                    }
+                }
+                else
+                {
+                    smoothed_velocity_ = snapshot.velocity;
+                }
+                snapshot.velocity = smoothed_velocity_;  // Commit to snapshot
             }
         }
         else
