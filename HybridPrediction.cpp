@@ -1969,9 +1969,10 @@ namespace HybridPred
         // The behavior PDF captures movement PATTERNS (juke directions, timing, hesitation)
         // but its origin is based on velocity extrapolation which can diverge from path prediction.
         // Path prediction follows actual waypoints and is more accurate for position.
-        // By translating the PDF, we keep the full probability distribution (patterns)
-        // while correcting the origin to match where the target will actually be.
-        math::vector3 pdf_offset = path_predicted_pos - behavior_pdf.origin;
+        // By changing the origin, we translate the entire probability distribution:
+        // - Grid data stays the same (patterns preserved)
+        // - Origin change shifts what world positions the grid cells map to
+        // - Peak probability that was at old origin is now at new origin (path prediction)
         behavior_pdf.origin = path_predicted_pos;  // Rebase PDF origin to path prediction
 
         result.behavior_pdf = behavior_pdf;
@@ -2003,9 +2004,8 @@ namespace HybridPred
                     test.x += i * step;
                     test.z += j * step;
 
-                    // Query with offset since PDF grid data hasn't moved, only origin
-                    math::vector3 original_test = test - pdf_offset;
-                    float prob = behavior_pdf.get_probability_at(original_test);
+                    // Query directly - origin change already translates the distribution
+                    float prob = behavior_pdf.get_probability_at(test);
 
                     if (prob > best_prob)
                     {
@@ -2451,7 +2451,6 @@ namespace HybridPred
 
         // INTELLIGENT FIX: Translate behavior PDF to align with path prediction
         // Same fix as circular - behavior PDF captures patterns but origin diverges from path
-        math::vector3 pdf_offset = path_predicted_pos - behavior_pdf.origin;
         behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
