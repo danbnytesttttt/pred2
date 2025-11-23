@@ -190,10 +190,35 @@ namespace HybridPred
                     snapshot.velocity = (snapshot.velocity / vel_magnitude) * MAX_SANE_VELOCITY;
                 }
 
-                // VELOCITY SMOOTHING: Exponential smoothing to reduce jitter from spam clicking
-                // Alpha 0.3 = 70% old velocity, 30% new velocity
-                constexpr float SMOOTH_ALPHA = 0.3f;
-                smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
+                // SMART VELOCITY SMOOTHING: Adaptive smoothing that resets on sharp turns
+                // This prevents lag when target makes sudden dodges (>60° direction change)
+                float raw_speed = snapshot.velocity.magnitude();
+                float smooth_speed = smoothed_velocity_.magnitude();
+
+                if (raw_speed > 100.f && smooth_speed > 100.f)
+                {
+                    // Both velocities significant - check for sharp turn
+                    math::vector3 raw_dir = snapshot.velocity / raw_speed;
+                    math::vector3 smooth_dir = smoothed_velocity_ / smooth_speed;
+                    float dot = raw_dir.x * smooth_dir.x + raw_dir.y * smooth_dir.y + raw_dir.z * smooth_dir.z;
+
+                    if (dot < 0.5f)  // Angle > 60° (cos(60°) = 0.5)
+                    {
+                        // Sharp turn detected - reset to capture dodge instantly
+                        smoothed_velocity_ = snapshot.velocity;
+                    }
+                    else
+                    {
+                        // Normal smoothing to reduce jitter
+                        constexpr float SMOOTH_ALPHA = 0.3f;
+                        smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
+                    }
+                }
+                else
+                {
+                    // Low speed - use raw velocity directly
+                    smoothed_velocity_ = snapshot.velocity;
+                }
             }
         }
         else

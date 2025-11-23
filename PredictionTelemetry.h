@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <deque>
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
@@ -127,7 +128,7 @@ namespace PredictionTelemetry
     {
     private:
         static SessionStats stats_;
-        static std::vector<PredictionEvent> events_;
+        static std::deque<PredictionEvent> events_;  // deque for O(1) front removal
         static bool enabled_;
 
         static auto get_timestamp()
@@ -232,10 +233,11 @@ namespace PredictionTelemetry
             }
 
             // Store event for detailed log
-            // FIX: Cap history size to prevent memory bloat over long sessions
+            // Cap history size to prevent memory bloat over long sessions
+            // Using deque for O(1) front removal instead of O(N) vector erase
             if (events_.size() >= 1000)
             {
-                events_.erase(events_.begin());  // Remove oldest
+                events_.pop_front();  // O(1) removal
             }
             events_.push_back(event);
         }
@@ -575,7 +577,7 @@ namespace PredictionTelemetry
 
     // Static member initialization
     inline SessionStats TelemetryLogger::stats_;
-    inline std::vector<PredictionEvent> TelemetryLogger::events_;
+    inline std::deque<PredictionEvent> TelemetryLogger::events_;
     inline bool TelemetryLogger::enabled_ = false;
 
 } // namespace PredictionTelemetry
