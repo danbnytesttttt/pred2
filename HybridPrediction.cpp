@@ -2045,14 +2045,20 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Step 5: Find optimal cast position
-        // Intelligent decomposition of path prediction vs behavior PDF:
-        // - Forward/backward: Trust path prediction (velocity extrapolation lags behind)
-        // - Lateral: Trust PDF peak (captures actual juke patterns)
+        // Intelligent fusion of path prediction and behavior PDF
+        //
+        // Key insight: these systems capture different things well:
+        // - Path prediction: forward distance (follows actual waypoints)
+        // - Behavior PDF: lateral deviation (jukes, patterns from velocity history)
+        //
+        // Strategy:
+        // - If they agree (close together): use PDF peak (more nuanced, captures behavior)
+        // - If they disagree: decompose - path for forward, PDF for lateral
         math::vector3 optimal_cast_pos = path_predicted_pos;
 
         if (behavior_pdf.total_probability > EPSILON)
         {
-            // Find PDF peak (behavior-based prediction center)
+            // Find PDF peak (highest probability position)
             math::vector3 pdf_peak = behavior_pdf.origin;
             float best_prob = 0.f;
 
@@ -2077,7 +2083,7 @@ namespace HybridPred
                 }
             }
 
-            // Decompose offset into forward/lateral components
+            // Compute movement direction
             math::vector3 path_dir = (path_predicted_pos - current_pos);
             float path_dist = path_dir.magnitude();
 
@@ -2086,24 +2092,30 @@ namespace HybridPred
                 path_dir = path_dir / path_dist;
                 math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
 
-                // Get offset from path prediction to PDF peak
+                // Measure disagreement between path prediction and PDF
                 math::vector3 offset = pdf_peak - path_predicted_pos;
+                float separation = offset.magnitude();
 
-                // Decompose offset
-                float forward_offset = offset.dot(path_dir);   // + = ahead, - = behind
-                float lateral_offset = offset.dot(path_perp);  // juke direction
+                // Agreement threshold: proportional to travel distance
+                // Close predictions = high confidence, use PDF nuance
+                // Far predictions = disagreement, decompose into components
+                float agreement_threshold = std::min(path_dist * 0.15f, 50.f);
 
-                // Forward/backward: Path prediction is authoritative (fixes undershooting)
-                // Only apply forward offset if PDF is AHEAD (target decelerating)
-                // Ignore if PDF is BEHIND (that's the velocity lag we're fixing)
-                float applied_forward = (forward_offset > 0) ? forward_offset * 0.3f : 0.f;
-
-                // Lateral: PDF captures juke patterns - apply fully
-                float applied_lateral = lateral_offset;
-
-                optimal_cast_pos = path_predicted_pos
-                    + path_dir * applied_forward
-                    + path_perp * applied_lateral;
+                if (separation <= agreement_threshold)
+                {
+                    // Agreement: path and PDF predict similar positions
+                    // Trust PDF peak - it captures behavioral nuances (slight jukes, hesitation)
+                    optimal_cast_pos = pdf_peak;
+                }
+                else
+                {
+                    // Disagreement: significant difference between predictions
+                    // This usually means velocity extrapolation is lagging (undershooting)
+                    //
+                    // Decompose: forward from path (accurate), lateral from PDF (jukes)
+                    float lateral_offset = offset.dot(path_perp);
+                    optimal_cast_pos = path_predicted_pos + path_perp * lateral_offset;
+                }
             }
         }
 
