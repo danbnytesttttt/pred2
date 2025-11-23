@@ -2519,65 +2519,9 @@ namespace HybridPred
         float time_since_update = current_time - tracker.get_last_update_time();
         size_t sample_count = tracker.get_history().size();
 
-        // Step 4.5: Fuse path prediction with behavior PDF to find optimal center
-        // Same approach as circular: path for forward distance, PDF for lateral deviation
-        math::vector3 optimal_center = path_predicted_pos;
-        math::vector3 current_pos = target->get_position();
-
-        if (behavior_pdf.total_probability > EPSILON)
-        {
-            // Find PDF peak
-            math::vector3 pdf_peak = behavior_pdf.origin;
-            float best_prob = 0.f;
-
-            constexpr int SEARCH_RADIUS = 6;
-            float step = behavior_pdf.cell_size;
-
-            for (int i = -SEARCH_RADIUS; i <= SEARCH_RADIUS; ++i)
-            {
-                for (int j = -SEARCH_RADIUS; j <= SEARCH_RADIUS; ++j)
-                {
-                    math::vector3 test = behavior_pdf.origin;
-                    test.x += i * step;
-                    test.z += j * step;
-
-                    float prob = behavior_pdf.sample(test);
-                    if (prob > best_prob)
-                    {
-                        best_prob = prob;
-                        pdf_peak = test;
-                    }
-                }
-            }
-
-            // Compute movement direction
-            math::vector3 path_dir = (path_predicted_pos - current_pos);
-            float path_dist = path_dir.magnitude();
-
-            if (path_dist > 10.f)
-            {
-                path_dir = path_dir / path_dist;
-                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-
-                // Measure disagreement
-                math::vector3 offset = pdf_peak - path_predicted_pos;
-                float separation = offset.magnitude();
-                float agreement_threshold = std::min(path_dist * 0.15f, 50.f);
-
-                if (separation <= agreement_threshold)
-                {
-                    optimal_center = pdf_peak;
-                }
-                else
-                {
-                    float lateral_offset = offset.dot(path_perp);
-                    optimal_center = path_predicted_pos + path_perp * lateral_offset;
-                }
-            }
-        }
-
-        // Update reachable region center to use fused position
-        reachable_region.center = optimal_center;
+        // Note: Linear spells use angular optimization (±10°) which already handles
+        // lateral variance through the PDF evaluation. No fusion needed here -
+        // it would double-compensate and overshoot jukes.
 
         // Step 5: Compute capsule parameters
         // Linear spell = capsule from source toward target
@@ -2920,64 +2864,8 @@ namespace HybridPred
         float confidence = compute_confidence_score(source, target, spell, tracker, edge_cases);
         result.confidence_score = confidence;
 
-        // Step 4.5: Fuse path prediction with behavior PDF to find optimal center
-        math::vector3 optimal_center = path_predicted_pos;
-        math::vector3 current_pos = target->get_position();
-
-        if (behavior_pdf.total_probability > EPSILON)
-        {
-            // Find PDF peak
-            math::vector3 pdf_peak = behavior_pdf.origin;
-            float best_prob = 0.f;
-
-            constexpr int SEARCH_RADIUS = 6;
-            float step = behavior_pdf.cell_size;
-
-            for (int i = -SEARCH_RADIUS; i <= SEARCH_RADIUS; ++i)
-            {
-                for (int j = -SEARCH_RADIUS; j <= SEARCH_RADIUS; ++j)
-                {
-                    math::vector3 test = behavior_pdf.origin;
-                    test.x += i * step;
-                    test.z += j * step;
-
-                    float prob = behavior_pdf.sample(test);
-                    if (prob > best_prob)
-                    {
-                        best_prob = prob;
-                        pdf_peak = test;
-                    }
-                }
-            }
-
-            // Compute movement direction
-            math::vector3 path_dir = (path_predicted_pos - current_pos);
-            float path_dist = path_dir.magnitude();
-
-            if (path_dist > 10.f)
-            {
-                path_dir = path_dir / path_dist;
-                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-
-                // Measure disagreement
-                math::vector3 offset = pdf_peak - path_predicted_pos;
-                float separation = offset.magnitude();
-                float agreement_threshold = std::min(path_dist * 0.15f, 50.f);
-
-                if (separation <= agreement_threshold)
-                {
-                    optimal_center = pdf_peak;
-                }
-                else
-                {
-                    float lateral_offset = offset.dot(path_perp);
-                    optimal_center = path_predicted_pos + path_perp * lateral_offset;
-                }
-            }
-        }
-
-        // Update reachable region center to use fused position
-        reachable_region.center = optimal_center;
+        // Note: Vector spells use orientation optimization which handles lateral
+        // variance through PDF evaluation. No fusion needed - would double-compensate.
 
         // Step 5: Optimize vector orientation
         // Test multiple orientations to find best two-position configuration
