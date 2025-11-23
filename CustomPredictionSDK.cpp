@@ -272,9 +272,6 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         stored.speed = spell_data.projectile_speed;
         stored.spell_type = static_cast<int>(spell_data.spell_type);
         stored.hitchance = static_cast<int>(spell_data.expected_hitchance);
-        stored.collision_minion = spell_data.collision_minion;
-        stored.collision_hero = spell_data.collision_hero;
-        stored.collision_wall = spell_data.collision_wall;
         stored.valid = true;
 
         // CRITICAL: Check range BEFORE prediction to avoid wasting computation

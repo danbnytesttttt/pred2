@@ -122,9 +122,6 @@ namespace Prediction
                     g_sdk->log_console(dump_msg);
                     snprintf(dump_msg, sizeof(dump_msg), "Expected Hitchance: %s", hc_str);
                     g_sdk->log_console(dump_msg);
-                    snprintf(dump_msg, sizeof(dump_msg), "Collision: minion=%d, hero=%d, wall=%d",
-                        stored.collision_minion, stored.collision_hero, stored.collision_wall);
-                    g_sdk->log_console(dump_msg);
                     g_sdk->log_console("======================================");
                 }
                 });

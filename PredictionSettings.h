@@ -31,9 +31,6 @@ namespace PredictionSettings
             float speed = 0;
             int spell_type = 0;
             int hitchance = 0;
-            bool collision_minion = false;
-            bool collision_hero = false;
-            bool collision_wall = false;
             bool valid = false;
         };
         StoredSpellData last_spell_data;
