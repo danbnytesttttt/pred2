@@ -95,7 +95,7 @@ namespace PredictionVisuals
                 return;
 
             // FIX: Only draw for enemies within 1500 range
-            if (g_sdk->object_manager)
+            if (g_sdk && g_sdk->object_manager)
             {
                 auto* local_player = g_sdk->object_manager->get_local_player();
                 if (local_player && local_player->is_valid())
@@ -199,8 +199,8 @@ namespace PredictionVisuals
         {
             try
             {
-                // CRITICAL: Validate object_manager before accessing
-                if (!g_sdk->object_manager)
+                // CRITICAL: Validate SDK and object_manager before accessing
+                if (!g_sdk || !g_sdk->object_manager)
                     return;
 
                 auto* local_player = g_sdk->object_manager->get_local_player();
