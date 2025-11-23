@@ -85,18 +85,6 @@ namespace Prediction
                         return;
                     }
 
-                    // Get hitchance string
-                    const char* hc_str = "unknown";
-                    switch (stored.hitchance)
-                    {
-                        case 0: hc_str = "any"; break;
-                        case 1: hc_str = "low"; break;
-                        case 2: hc_str = "medium"; break;
-                        case 3: hc_str = "high"; break;
-                        case 4: hc_str = "very_high"; break;
-                        default: hc_str = "unknown"; break;
-                    }
-
                     // Get spell type string
                     const char* type_str = "unknown";
                     switch (stored.spell_type)
@@ -120,7 +108,7 @@ namespace Prediction
                     g_sdk->log_console(dump_msg);
                     snprintf(dump_msg, sizeof(dump_msg), "Speed: %.0f", stored.speed);
                     g_sdk->log_console(dump_msg);
-                    snprintf(dump_msg, sizeof(dump_msg), "Expected Hitchance: %s", hc_str);
+                    snprintf(dump_msg, sizeof(dump_msg), "Expected Hitchance: %d", stored.hitchance);
                     g_sdk->log_console(dump_msg);
                     g_sdk->log_console("======================================");
                 }
