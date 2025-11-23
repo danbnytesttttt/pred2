@@ -643,7 +643,12 @@ namespace HybridPred
             // Fallback to simple linear prediction
             predicted_center = latest.position + latest.velocity * prediction_time;
         }
-        pdf.origin = predicted_center;
+
+        // FIX: Grid snapping to stabilize PDF across frames
+        // Snap origin to cell_size multiples to prevent jitter from micro-position changes
+        float snap_x = std::round(predicted_center.x / pdf.cell_size) * pdf.cell_size;
+        float snap_z = std::round(predicted_center.z / pdf.cell_size) * pdf.cell_size;
+        pdf.origin = math::vector3(snap_x, predicted_center.y, snap_z);
 
         // Second pass: Add samples to PDF (now properly centered)
         total_weight = 0.f;
@@ -1190,7 +1195,9 @@ namespace HybridPred
         );
 
         // Weight area probability by Gaussian
-        float area_probability = intersection_area / reachable_region.area;
+        // FIX: Use safer divisor to prevent INF/NaN from tiny areas
+        float safe_area = std::max(reachable_region.area, 1.0f);
+        float area_probability = intersection_area / safe_area;
         float weighted_probability = gaussian_weight * area_probability;
 
         // Bonus if predicted center is inside projectile
@@ -2421,6 +2428,21 @@ namespace HybridPred
                 arrival_time,             // Time until spell arrives
                 HUMAN_REACTION_TIME       // 250ms reaction time
             );
+
+            // FIX: Boost physics for stationary targets
+            // Physics assumes targets WILL dodge if they CAN, penalizing stationary targets at range
+            // If target is barely moving, boost physics to prevent long-range drop-off
+            float current_speed = target_velocity.magnitude();
+            if (current_speed < 50.f)
+            {
+                // Stationary: guarantee at least 70% physics probability
+                test_physics_prob = std::max(test_physics_prob, 0.7f);
+            }
+            else if (current_speed < 150.f)
+            {
+                // Slow movement: boost floor to 40%
+                test_physics_prob = std::max(test_physics_prob, 0.4f);
+            }
 
             float test_behavior_prob = compute_capsule_behavior_probability(
                 capsule_start,

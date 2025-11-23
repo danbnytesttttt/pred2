@@ -232,6 +232,11 @@ namespace PredictionTelemetry
             }
 
             // Store event for detailed log
+            // FIX: Cap history size to prevent memory bloat over long sessions
+            if (events_.size() >= 1000)
+            {
+                events_.erase(events_.begin());  // Remove oldest
+            }
             events_.push_back(event);
         }
 
