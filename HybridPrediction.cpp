@@ -774,8 +774,9 @@ namespace HybridPred
                 pdf.add_weighted_sample(right_pos, right_weight * 0.5f * juke_cadence_weight);
             }
 
-            // PATTERN-BASED PREDICTION BOOST
-            // If we detected a repeating pattern, heavily weight the predicted next juke
+            // PATTERN-BASED PREDICTION
+            // If we detected a repeating pattern, weight the predicted juke position
+            // But also account for the chance they DON'T juke (break pattern)
             if (dodge_pattern_.has_pattern && dodge_pattern_.pattern_confidence > 0.6f)
             {
                 // Predict position based on detected pattern
@@ -784,10 +785,16 @@ namespace HybridPred
                     forward +  // Already scaled by forward_component
                     dodge_pattern_.predicted_next_direction * (total_distance * lateral_factor);
 
-                // Heavy weight: pattern confidence dictates how much we trust this
-                // Use 2x-3x normal weight to make pattern predictions dominant
-                float pattern_weight = dodge_pattern_.pattern_confidence * 2.5f;
+                // Reduced weight: pattern helps but doesn't dominate
+                // Players can break patterns, so don't bet everything on juke
+                float pattern_weight = dodge_pattern_.pattern_confidence * 1.2f;
                 pdf.add_weighted_sample(pattern_predicted_pos, pattern_weight);
+
+                // Also add "no juke" position - they might break the pattern
+                // Weight based on inverse of pattern confidence
+                math::vector3 no_juke_pos = latest.position + velocity_dir * total_distance;
+                float no_juke_weight = (1.0f - dodge_pattern_.pattern_confidence) * 0.8f;
+                pdf.add_weighted_sample(no_juke_pos, no_juke_weight);
             }
         }
 
