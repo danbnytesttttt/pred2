@@ -1961,9 +1961,18 @@ namespace HybridPred
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF
+        // Step 3: Build behavior PDF and align with path prediction
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // INTELLIGENT FIX: Translate behavior PDF to align with path prediction
+        // The behavior PDF captures movement PATTERNS (juke directions, timing, hesitation)
+        // but its origin is based on velocity extrapolation which can diverge from path prediction.
+        // Path prediction follows actual waypoints and is more accurate for position.
+        // By translating the PDF, we keep the full probability distribution (patterns)
+        // while correcting the origin to match where the target will actually be.
+        math::vector3 pdf_offset = path_predicted_pos - behavior_pdf.origin;
+        behavior_pdf.origin = path_predicted_pos;  // Rebase PDF origin to path prediction
 
         result.behavior_pdf = behavior_pdf;
 
@@ -1971,14 +1980,43 @@ namespace HybridPred
         float confidence = compute_confidence_score(source, target, spell, tracker, edge_cases);
         result.confidence_score = confidence;
 
-        // Step 5: Find optimal cast position
-        math::vector3 optimal_cast_pos = find_optimal_cast_position(
-            reachable_region,
-            behavior_pdf,
-            source->get_position(),
-            spell.radius,
-            confidence
-        );
+        // Step 5: Find optimal cast position using the aligned PDF
+        // Now that PDF is centered on path prediction, find the peak within it
+        math::vector3 optimal_cast_pos = path_predicted_pos;  // Default to path prediction
+
+        if (behavior_pdf.total_probability > EPSILON)
+        {
+            // Search for the highest probability point in the translated PDF
+            // This finds where within the behavior pattern the target is most likely to be
+            math::vector3 best_pos = behavior_pdf.origin;
+            float best_prob = 0.f;
+
+            // Grid search centered on the new origin (path prediction)
+            constexpr int SEARCH_RADIUS = 6;
+            float step = behavior_pdf.cell_size;
+
+            for (int i = -SEARCH_RADIUS; i <= SEARCH_RADIUS; ++i)
+            {
+                for (int j = -SEARCH_RADIUS; j <= SEARCH_RADIUS; ++j)
+                {
+                    math::vector3 test = behavior_pdf.origin;
+                    test.x += i * step;
+                    test.z += j * step;
+
+                    // Query with offset since PDF grid data hasn't moved, only origin
+                    math::vector3 original_test = test - pdf_offset;
+                    float prob = behavior_pdf.get_probability_at(original_test);
+
+                    if (prob > best_prob)
+                    {
+                        best_prob = prob;
+                        best_pos = test;
+                    }
+                }
+            }
+
+            optimal_cast_pos = best_pos;
+        }
 
         // NAVMESH CLAMPING: Ensure cast position is on pathable terrain
         // If predicted position is in a wall, find nearest pathable point
