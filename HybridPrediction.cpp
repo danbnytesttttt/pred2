@@ -282,8 +282,10 @@ namespace HybridPred
             // Dot product to determine forward/backward
             float dot = prev_dir.dot(curr_dir);
 
-            if (cross_y > 0.1f) left_count++;
-            else if (cross_y < -0.1f) right_count++;
+            // Use same threshold as juke sequence detection for consistency
+            constexpr float DIRECTION_THRESHOLD = 0.25f;
+            if (cross_y > DIRECTION_THRESHOLD) left_count++;
+            else if (cross_y < -DIRECTION_THRESHOLD) right_count++;
 
             if (dot > 0.5f) forward_count++;
             else if (dot < -0.5f) backward_count++;
@@ -398,7 +400,10 @@ namespace HybridPred
                 if (prev_juke == -curr_juke)
                     alternation_count++;
                 else
+                {
                     is_alternating = false;
+                    break;  // No point continuing - pattern is broken
+                }
             }
 
             if (is_alternating && alternation_count >= 2)
