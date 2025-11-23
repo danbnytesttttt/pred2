@@ -307,10 +307,11 @@ namespace HybridPred
             // Dot product to determine forward/backward
             float dot = prev_dir.dot(curr_dir);
 
-            // Use same threshold as juke sequence detection for consistency
-            constexpr float DIRECTION_THRESHOLD = 0.25f;
-            if (cross_y > DIRECTION_THRESHOLD) left_count++;
-            else if (cross_y < -DIRECTION_THRESHOLD) right_count++;
+            // Use lower threshold for frequency stats (captures smaller direction changes)
+            // Pattern detection uses 0.25f to filter micro-corrections
+            constexpr float FREQUENCY_THRESHOLD = 0.15f;
+            if (cross_y > FREQUENCY_THRESHOLD) left_count++;
+            else if (cross_y < -FREQUENCY_THRESHOLD) right_count++;
 
             if (dot > 0.5f) forward_count++;
             else if (dot < -0.5f) backward_count++;
