@@ -211,14 +211,13 @@ namespace HybridPred
         // Track post-AA movement delay
         if (!movement_history_.empty() && last_aa_time_ > 0.f && snapshot.velocity.magnitude() > 10.f &&
             movement_history_.back().velocity.magnitude() < 10.f)
+        {
+            float delay = current_time - last_aa_time_;
+            if (delay < 1.0f) // Only track reasonable delays
             {
-                float delay = current_time - last_aa_time_;
-                if (delay < 1.0f) // Only track reasonable delays
-                {
-                    post_aa_movement_delays_.push_back(delay);
-                    if (post_aa_movement_delays_.size() > 20)
-                        post_aa_movement_delays_.erase(post_aa_movement_delays_.begin());
-                }
+                post_aa_movement_delays_.push_back(delay);
+                if (post_aa_movement_delays_.size() > 20)
+                    post_aa_movement_delays_.erase(post_aa_movement_delays_.begin());
             }
         }
 
