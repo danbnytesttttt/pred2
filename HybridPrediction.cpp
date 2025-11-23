@@ -1990,53 +1990,8 @@ namespace HybridPred
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
 
-        // INTELLIGENT FIX: Correct juke directions when path diverges from velocity
-        // Problem: Behavior PDF computes jukes relative to velocity direction
-        // But when path curves (e.g., approaching waypoint turn), velocity points one way
-        // while path prediction points another. "Left juke from velocity" != "left juke from path"
-        //
-        // Solution: Add corrective juke samples in path-relative direction
-        // This preserves existing PDF data while adding probability mass in the correct direction
+        // Get current position for fusion calculations
         math::vector3 current_pos = target->get_position();
-        math::vector3 to_path = path_predicted_pos - current_pos;
-        float dist_to_path = to_path.magnitude();
-
-        if (dist_to_path > 50.f && target_velocity.magnitude() > 50.f)
-        {
-            math::vector3 path_dir = to_path / dist_to_path;
-            math::vector3 vel_dir = target_velocity.normalized();
-
-            // Check if directions differ significantly
-            float dot = path_dir.dot(vel_dir);
-            if (dot < 0.866f)  // Angle > 30 degrees
-            {
-                // Compute path-relative perpendicular for correct juke direction
-                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-
-                // Get the tracker's dodge pattern info
-                const auto& dodge_pattern = tracker.get_dodge_pattern();
-                float left_freq = dodge_pattern.left_dodge_frequency;
-                float right_freq = dodge_pattern.right_dodge_frequency;
-
-                // Add corrective samples in path-relative direction
-                // Weight by how much directions differ (more correction when more different)
-                float correction_weight = (1.f - dot) * 0.5f;  // 0 at 30°, 0.25 at 90°
-
-                if (left_freq > 0.2f)
-                {
-                    math::vector3 left_pos = path_predicted_pos + path_perp * (move_speed * arrival_time * 0.3f);
-                    behavior_pdf.add_weighted_sample(left_pos, left_freq * correction_weight);
-                }
-                if (right_freq > 0.2f)
-                {
-                    math::vector3 right_pos = path_predicted_pos - path_perp * (move_speed * arrival_time * 0.3f);
-                    behavior_pdf.add_weighted_sample(right_pos, right_freq * correction_weight);
-                }
-
-                // Re-normalize after adding samples
-                behavior_pdf.normalize();
-            }
-        }
 
         result.behavior_pdf = behavior_pdf;
 
@@ -2546,42 +2501,9 @@ namespace HybridPred
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF and align with path prediction
+        // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
-
-        // INTELLIGENT FIX: Correct juke directions when path diverges from velocity
-        math::vector3 current_pos = target->get_position();
-        math::vector3 to_path = path_predicted_pos - current_pos;
-        float dist_to_path = to_path.magnitude();
-
-        if (dist_to_path > 50.f && target_velocity.magnitude() > 50.f)
-        {
-            math::vector3 path_dir = to_path / dist_to_path;
-            math::vector3 vel_dir = target_velocity.normalized();
-
-            float dot = path_dir.dot(vel_dir);
-            if (dot < 0.866f)  // Angle > 30 degrees
-            {
-                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-                const auto& dodge_pattern = tracker.get_dodge_pattern();
-                float left_freq = dodge_pattern.left_dodge_frequency;
-                float right_freq = dodge_pattern.right_dodge_frequency;
-                float correction_weight = (1.f - dot) * 0.5f;
-
-                if (left_freq > 0.2f)
-                {
-                    math::vector3 left_pos = path_predicted_pos + path_perp * (move_speed * arrival_time * 0.3f);
-                    behavior_pdf.add_weighted_sample(left_pos, left_freq * correction_weight);
-                }
-                if (right_freq > 0.2f)
-                {
-                    math::vector3 right_pos = path_predicted_pos - path_perp * (move_speed * arrival_time * 0.3f);
-                    behavior_pdf.add_weighted_sample(right_pos, right_freq * correction_weight);
-                }
-                behavior_pdf.normalize();
-            }
-        }
         behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
@@ -2927,42 +2849,9 @@ namespace HybridPred
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF and align with path prediction
+        // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
-
-        // INTELLIGENT FIX: Correct juke directions when path diverges from velocity
-        math::vector3 current_pos = target->get_position();
-        math::vector3 to_path = path_predicted_pos - current_pos;
-        float dist_to_path = to_path.magnitude();
-
-        if (dist_to_path > 50.f && target_velocity.magnitude() > 50.f)
-        {
-            math::vector3 path_dir = to_path / dist_to_path;
-            math::vector3 vel_dir = target_velocity.normalized();
-
-            float dot = path_dir.dot(vel_dir);
-            if (dot < 0.866f)  // Angle > 30 degrees
-            {
-                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-                const auto& dodge_pattern = tracker.get_dodge_pattern();
-                float left_freq = dodge_pattern.left_dodge_frequency;
-                float right_freq = dodge_pattern.right_dodge_frequency;
-                float correction_weight = (1.f - dot) * 0.5f;
-
-                if (left_freq > 0.2f)
-                {
-                    math::vector3 left_pos = path_predicted_pos + path_perp * (move_speed * arrival_time * 0.3f);
-                    behavior_pdf.add_weighted_sample(left_pos, left_freq * correction_weight);
-                }
-                if (right_freq > 0.2f)
-                {
-                    math::vector3 right_pos = path_predicted_pos - path_perp * (move_speed * arrival_time * 0.3f);
-                    behavior_pdf.add_weighted_sample(right_pos, right_freq * correction_weight);
-                }
-                behavior_pdf.normalize();
-            }
-        }
         behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
