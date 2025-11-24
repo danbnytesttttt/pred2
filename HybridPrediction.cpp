@@ -2132,12 +2132,19 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time: how long it takes to cover observed juke distance
-        // Add 20% margin for variance in juke execution
-        float dodge_time = (observed_magnitude * 1.2f) / move_speed;
+        // Calculate dodge time accounting for human reaction
+        // Enemy reacts when they SEE cast animation, not when projectile launches
+        // Actual dodge time = arrival_time - reaction_time
+        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
 
-        // Clamp to reasonable bounds: at least 0.15s (reaction time), at most arrival_time
-        dodge_time = std::clamp(dodge_time, 0.15f, arrival_time);
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f)
+        {
+            // Use observed juke magnitude, capped by available time
+            float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+        }
+        // else: spell arrives before they can react - minimal reachable region
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
@@ -2649,9 +2656,14 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time from observed magnitude + margin
-        float dodge_time = (observed_magnitude * 1.2f) / move_speed;
-        dodge_time = std::clamp(dodge_time, 0.15f, arrival_time);
+        // Calculate dodge time accounting for human reaction
+        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f)
+        {
+            float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+        }
 
         // Use path-predicted position as center
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
@@ -3003,9 +3015,14 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time from observed magnitude + margin
-        float dodge_time = (observed_magnitude * 1.2f) / move_speed;
-        dodge_time = std::clamp(dodge_time, 0.15f, arrival_time);
+        // Calculate dodge time accounting for human reaction
+        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f)
+        {
+            float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+        }
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
