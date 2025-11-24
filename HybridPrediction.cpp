@@ -855,8 +855,15 @@ namespace HybridPred
                 float time_until_next_juke = dodge_pattern_.juke_interval_mean - time_since_last_juke;
 
                 // If negative, they're "overdue" for a juke - wrap to next cycle
-                while (time_until_next_juke < 0.f)
+                // Guard against infinite loop if juke_interval_mean is invalid
+                int wrap_count = 0;
+                while (time_until_next_juke < 0.f && wrap_count < 100)
+                {
+                    if (dodge_pattern_.juke_interval_mean <= EPSILON)
+                        break;
                     time_until_next_juke += dodge_pattern_.juke_interval_mean;
+                    wrap_count++;
+                }
 
                 // Gaussian weight: high when spell arrives near expected juke time
                 float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
@@ -2145,7 +2152,7 @@ namespace HybridPred
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
 
         float dodge_time = 0.f;
-        if (max_dodge_time > 0.f)
+        if (max_dodge_time > 0.f && move_speed > EPSILON)
         {
             // Use observed juke magnitude, capped by available time
             float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
@@ -2666,7 +2673,7 @@ namespace HybridPred
         // Calculate dodge time accounting for human reaction
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
         float dodge_time = 0.f;
-        if (max_dodge_time > 0.f)
+        if (max_dodge_time > 0.f && move_speed > EPSILON)
         {
             float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
@@ -3025,7 +3032,7 @@ namespace HybridPred
         // Calculate dodge time accounting for human reaction
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
         float dodge_time = 0.f;
-        if (max_dodge_time > 0.f)
+        if (max_dodge_time > 0.f && move_speed > EPSILON)
         {
             float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
