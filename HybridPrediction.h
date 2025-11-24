@@ -150,11 +150,11 @@ namespace HybridPred
         // MOBILITY FACTOR: Fast targets are more reactive and unpredictable
         // Trust physics more for fast targets, behavior more for slow targets
         // Fast targets can execute dodges quickly, making behavior patterns less reliable
-        if (move_speed > 450.f)
+        if (move_speed > 380.f)
         {
             // Fast target: increase physics weight
-            // 450 → +0.05, 500 → +0.15, 550+ → +0.25
-            float speed_factor = std::min((move_speed - 450.f) / 100.f, 1.0f);
+            // 380 → +0.0, 430 → +0.125, 480+ → +0.25
+            float speed_factor = std::min((move_speed - 380.f) / 100.f, 1.0f);
             physics_weight = std::min(physics_weight + speed_factor * 0.25f, 0.75f);
         }
         else if (move_speed < 330.f)
