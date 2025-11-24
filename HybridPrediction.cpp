@@ -2194,15 +2194,15 @@ namespace HybridPred
         if (g_sdk && g_sdk->clock_facade)
             current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
-        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
+        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed);
 
         // Debug logging for 0 hit chance
         if (result.hit_chance < 0.01f && g_sdk)
         {
             char debug_msg[512];
             snprintf(debug_msg, sizeof(debug_msg),
-                "[Danny.Prediction] CIRCULAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu reachable_r=%.1f",
-                arrival_time, physics_prob, behavior_prob, confidence, sample_count, reachable_region.max_radius);
+                "[Danny.Prediction] CIRCULAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu reachable_r=%.1f speed=%.1f",
+                arrival_time, physics_prob, behavior_prob, confidence, sample_count, reachable_region.max_radius, move_speed);
             g_sdk->log_console(debug_msg);
         }
 
@@ -2727,7 +2727,8 @@ namespace HybridPred
                 test_behavior_prob,
                 confidence,
                 sample_count,
-                time_since_update
+                time_since_update,
+                move_speed
             );
 
             // Track best configuration
@@ -3084,7 +3085,7 @@ namespace HybridPred
         if (g_sdk && g_sdk->clock_facade)
             current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
-        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
+        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed);
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
 
 #if HYBRID_PRED_ENABLE_REASONING
@@ -3503,7 +3504,8 @@ namespace HybridPred
                 behavior_pdf
             );
 
-            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
+            float target_speed = target ? target->get_move_speed() : 350.f;
+            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, target_speed);
 
             // Use direct line as best configuration
             best_config.first_cast_position = first_cast;

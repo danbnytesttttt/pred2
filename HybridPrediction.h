@@ -112,7 +112,7 @@ namespace HybridPred
      * SPECIAL CASE: When physics = 1.0 (physically impossible to dodge),
      * return guaranteed hit regardless of behavior (flash/dash handled by edge cases)
      */
-    inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f)
+    inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f, float move_speed = 350.f)
     {
         // CRITICAL: Guaranteed hit override
         // If physics says escape is physically impossible (>= 99%), guarantee the hit
@@ -147,14 +147,22 @@ namespace HybridPred
             physics_weight = 0.4f;
         }
 
-        // FIX: Dynamic weight shift based on behavior confidence
-        // If behavior says "stationary" (high prob) but physics says "easy dodge" (low prob),
-        // trust behavior more - don't penalize just because dodge is theoretically possible
-        if (behavior_prob > 0.85f)
+        // MOBILITY FACTOR: Fast targets are more reactive and unpredictable
+        // Trust physics more for fast targets, behavior more for slow targets
+        // Fast targets can execute dodges quickly, making behavior patterns less reliable
+        if (move_speed > 450.f)
         {
-            // Behavior is very confident (e.g. stationary target)
-            // Reduce physics weight so "theoretical dodge possibility" doesn't tank the score
-            physics_weight *= 0.3f;
+            // Fast target: increase physics weight
+            // 450 → +0.05, 500 → +0.15, 550+ → +0.25
+            float speed_factor = std::min((move_speed - 450.f) / 100.f, 1.0f);
+            physics_weight = std::min(physics_weight + speed_factor * 0.25f, 0.75f);
+        }
+        else if (move_speed < 330.f)
+        {
+            // Slow target: can trust behavior more
+            // 330 → -0.0, 280 → -0.05, 230 → -0.1
+            float slow_factor = std::min((330.f - move_speed) / 100.f, 1.0f);
+            physics_weight = std::max(physics_weight - slow_factor * 0.1f, 0.3f);
         }
 
         // Staleness detection: If velocity data hasn't updated recently, increase physics weight
@@ -167,9 +175,20 @@ namespace HybridPred
             physics_weight = std::min(physics_weight + staleness_penalty, 0.8f);
         }
 
-        // Use weighted LINEAR interpolation instead of geometric mean
-        // This prevents behavior from dragging down high physics too much
+        // Use weighted LINEAR interpolation
+        // Physics is the foundation, behavior adjusts within those constraints
         float fused = physics_weight * physics_prob + (1.0f - physics_weight) * behavior_prob;
+
+        // AGREEMENT BONUS: When physics and behavior BOTH agree, boost confidence
+        // This replaces the old "behavior overrides physics" logic
+        // If both say hit is likely (>0.6), they're agreeing - boost result
+        // If they disagree, the weighted average naturally handles it
+        if (physics_prob > 0.6f && behavior_prob > 0.6f)
+        {
+            // Both agree hit is likely - small boost for agreement
+            float agreement_bonus = std::min(physics_prob, behavior_prob) * 0.1f;
+            fused = std::min(fused + agreement_bonus, 1.0f);
+        }
 
         // Apply confidence as a multiplier, but with a floor based on physics
         // If physics is high, don't let low confidence kill it completely
