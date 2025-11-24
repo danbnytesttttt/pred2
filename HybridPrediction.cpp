@@ -363,6 +363,7 @@ namespace HybridPred
         }
 
         // Build juke sequence from recent direction changes
+        std::vector<int> old_sequence = dodge_pattern_.juke_sequence;  // Save for comparison
         dodge_pattern_.juke_sequence.clear();
         constexpr size_t MAX_SEQUENCE_LENGTH = 8;
 
@@ -404,6 +405,30 @@ namespace HybridPred
             dodge_pattern_.juke_sequence.push_back(current_move);
         }
 
+        // BAYESIAN TRUST UPDATE: Check if our pattern prediction was correct
+        // Compare old sequence to new - if new juke appeared, check if it matches prediction
+        if (dodge_pattern_.awaiting_juke_result &&
+            dodge_pattern_.juke_sequence.size() > old_sequence.size() &&
+            !dodge_pattern_.juke_sequence.empty())
+        {
+            int actual_juke = dodge_pattern_.juke_sequence.back();
+
+            // Only update if they actually juked (not straight)
+            if (actual_juke != 0)
+            {
+                if (actual_juke == dodge_pattern_.last_predicted_juke)
+                {
+                    dodge_pattern_.pattern_trust.observe_correct();
+                }
+                else
+                {
+                    dodge_pattern_.pattern_trust.observe_incorrect();
+                }
+            }
+
+            dodge_pattern_.awaiting_juke_result = false;
+        }
+
         // Detect alternating pattern (L-R-L-R or R-L-R-L)
         // EARNED CONFIDENCE: Require more evidence before trusting patterns
         // Don't give high confidence after just L-R-L-R - need sustained pattern
@@ -437,8 +462,9 @@ namespace HybridPred
             {
                 // Alternating pattern detected with sufficient evidence
                 dodge_pattern_.has_pattern = true;
-                dodge_pattern_.pattern_confidence = std::min(0.75f, 0.4f + alternation_count * 0.075f);
-                // Pattern update time tracking disabled for standalone
+                float base_confidence = std::min(0.75f, 0.4f + alternation_count * 0.075f);
+                // Scale by Bayesian trust - if our predictions have been wrong, reduce confidence
+                dodge_pattern_.pattern_confidence = base_confidence * dodge_pattern_.pattern_trust.get_trust();
 
                 // Predict next juke: opposite of last
                 int last_juke = dodge_pattern_.juke_sequence.back();
@@ -453,6 +479,10 @@ namespace HybridPred
                         // Perpendicular: 90° rotation in XZ plane
                         math::vector3 perpendicular(-vel_dir.z, 0.f, vel_dir.x);
                         dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(-last_juke);
+
+                        // Track prediction for Bayesian trust update
+                        dodge_pattern_.last_predicted_juke = -last_juke;  // Opposite of last
+                        dodge_pattern_.awaiting_juke_result = true;
                     }
                 }
             }
@@ -478,7 +508,9 @@ namespace HybridPred
                     // Repeating sequence detected with sufficient evidence
                     dodge_pattern_.has_pattern = true;
                     // Scale by sequence length: 8 = 0.6, 10 = 0.65, 12+ = 0.7 max
-                    dodge_pattern_.pattern_confidence = std::min(0.7f, 0.5f + dodge_pattern_.juke_sequence.size() * 0.0125f);
+                    float base_confidence = std::min(0.7f, 0.5f + dodge_pattern_.juke_sequence.size() * 0.0125f);
+                    // Scale by Bayesian trust
+                    dodge_pattern_.pattern_confidence = base_confidence * dodge_pattern_.pattern_trust.get_trust();
                     if (g_sdk && g_sdk->clock_facade)
                         dodge_pattern_.last_pattern_update_time = g_sdk->clock_facade->get_game_time();
 
@@ -497,6 +529,10 @@ namespace HybridPred
                                 math::vector3 vel_dir = latest.velocity / vel_mag;
                                 math::vector3 perpendicular(-vel_dir.z, 0.f, vel_dir.x);
                                 dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(next_in_sequence);
+
+                                // Track prediction for Bayesian trust update
+                                dodge_pattern_.last_predicted_juke = next_in_sequence;
+                                dodge_pattern_.awaiting_juke_result = true;
                             }
                         }
                     }

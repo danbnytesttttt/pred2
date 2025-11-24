@@ -206,6 +206,31 @@ namespace HybridPred
     /**
      * Dodge pattern statistics
      */
+    /**
+     * Bayesian pattern trust tracking
+     * Tracks how often our pattern predictions are correct using Beta-Binomial model
+     */
+    struct PatternTrust
+    {
+        float alpha = 5.0f;   // Prior + hits (start with 50% trust)
+        float beta = 5.0f;    // Prior + misses
+
+        float get_trust() const {
+            return alpha / (alpha + beta);
+        }
+
+        void observe_correct() { alpha += 1.0f; }
+        void observe_incorrect() { beta += 1.0f; }
+
+        void decay() {
+            // Decay toward prior (0.5 trust) each game
+            constexpr float prior_a = 5.0f, prior_b = 5.0f;
+            constexpr float decay_factor = 0.95f;
+            alpha = prior_a + (alpha - prior_a) * decay_factor;
+            beta = prior_b + (beta - prior_b) * decay_factor;
+        }
+    };
+
     struct DodgePattern
     {
         float left_dodge_frequency;      // [0,1] How often target dodges left
@@ -217,12 +242,17 @@ namespace HybridPred
         float linear_continuation_prob;  // Probability of continuing straight
         float reaction_delay;            // Average reaction time (ms)
 
-        // Pattern repetition detection (NEW)
+        // Pattern repetition detection
         std::vector<int> juke_sequence;          // Last 8 direction changes: -1=left, 0=straight, 1=right
         float pattern_confidence;                // [0,1] Confidence in detected pattern
         math::vector3 predicted_next_direction;  // Unit vector of predicted next move
         bool has_pattern;                        // True if repeating pattern detected
         float last_pattern_update_time;          // Timestamp of last pattern update (for expiration)
+
+        // Bayesian pattern trust (NEW)
+        PatternTrust pattern_trust;              // Tracks how reliable our pattern predictions are
+        int last_predicted_juke;                 // -1=left, 0=none, 1=right - what we predicted
+        bool awaiting_juke_result;               // True if we made a prediction and are waiting to see result
 
         // N-Gram (Markov) pattern recognition
         // Tracks transitions: given previous move, what's the probability of each next move?
@@ -258,7 +288,8 @@ namespace HybridPred
             juke_interval_mean(0.5f), juke_interval_variance(0.1f),
             linear_continuation_prob(0.6f), reaction_delay(200.f),
             pattern_confidence(0.f), predicted_next_direction{}, has_pattern(false),
-            last_pattern_update_time(0.f) {
+            last_pattern_update_time(0.f), pattern_trust{}, last_predicted_juke(0),
+            awaiting_juke_result(false) {
         }
     };
 
