@@ -2112,6 +2112,13 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
+        if (!source || !target || !source->is_valid() || !target->is_valid())
+        {
+            result.is_valid = false;
+            result.reasoning = "Invalid source or target";
+            return result;
+        }
+
         // Step 1: Compute arrival time
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source->get_position(),
