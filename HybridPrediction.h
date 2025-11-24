@@ -302,13 +302,27 @@ namespace HybridPred
             return static_cast<float>(target_count) / static_cast<float>(total);
         }
 
+        // Juke magnitude tracking - actual lateral displacement in units
+        // This tells us HOW FAR they juke, not just which direction
+        std::deque<float> juke_magnitudes;       // Last N juke distances in units
+        float average_juke_magnitude;            // Running average for predictions
+
+        // Get observed juke magnitude, or default based on speed
+        float get_juke_magnitude(float move_speed) const
+        {
+            if (juke_magnitudes.size() >= 3)
+                return average_juke_magnitude;
+            // Default: assume ~0.3s of lateral movement at current speed
+            return move_speed * 0.3f;
+        }
+
         DodgePattern() : left_dodge_frequency(0.5f), right_dodge_frequency(0.5f),
             forward_frequency(0.5f), backward_frequency(0.5f),
             juke_interval_mean(0.5f), juke_interval_variance(0.1f),
             linear_continuation_prob(0.6f), reaction_delay(200.f),
             pattern_confidence(0.f), predicted_next_direction{}, has_pattern(false),
             last_pattern_update_time(0.f), pattern_trust{}, last_predicted_juke(0),
-            awaiting_juke_result(false) {
+            awaiting_juke_result(false), average_juke_magnitude(0.f) {
         }
     };
 

@@ -395,6 +395,32 @@ namespace HybridPred
                 current_move = 1;   // Right
             // else current_move = 0 (Straight)
 
+            // JUKE MAGNITUDE TRACKING: Calculate actual lateral displacement in units
+            // This tells us HOW FAR they juke, not just which direction
+            if (current_move != 0)
+            {
+                // Calculate perpendicular to previous velocity direction
+                math::vector3 perp(-prev_dir.z, 0.f, prev_dir.x);
+
+                // Calculate displacement between snapshots
+                math::vector3 displacement = curr.position - prev.position;
+
+                // Project displacement onto perpendicular to get lateral distance
+                float lateral_magnitude = std::abs(displacement.x * perp.x + displacement.z * perp.z);
+
+                // Store magnitude (cap history at 16 entries)
+                constexpr size_t MAX_MAGNITUDE_HISTORY = 16;
+                if (dodge_pattern_.juke_magnitudes.size() >= MAX_MAGNITUDE_HISTORY)
+                    dodge_pattern_.juke_magnitudes.pop_front();
+                dodge_pattern_.juke_magnitudes.push_back(lateral_magnitude);
+
+                // Update running average
+                float sum = 0.f;
+                for (float mag : dodge_pattern_.juke_magnitudes)
+                    sum += mag;
+                dodge_pattern_.average_juke_magnitude = sum / dodge_pattern_.juke_magnitudes.size();
+            }
+
             // UPDATE N-GRAM TRANSITIONS: Record transition from previous move to current
             if (!dodge_pattern_.juke_sequence.empty())
             {
@@ -780,30 +806,19 @@ namespace HybridPred
             // FIX: Use current move_speed for dodge calculations
             // Direction from velocity, magnitude from move_speed stat
 
-            // LEARNED lateral dodge factor from actual movement patterns
-            // Compute average lateral component from direction changes
-            float lateral_factor = 0.5f;  // Default fallback
-            if (direction_change_angles_.size() >= 3)
-            {
-                // Average absolute lateral component (sin of angle)
-                float total_lateral = 0.f;
-                for (float angle : direction_change_angles_)
-                {
-                    total_lateral += std::abs(std::sin(angle));
-                }
-                lateral_factor = total_lateral / direction_change_angles_.size();
-                lateral_factor = std::clamp(lateral_factor, 0.2f, 0.9f);  // Reasonable bounds
-            }
-
-            // FIX: When juking, they CHANGE direction, not add lateral to forward
-            // Total travel distance is still speed * time, but direction changes
-            // Use normalized combination of forward and lateral components
+            // USE OBSERVED JUKE MAGNITUDE instead of inferring from angles
+            // This tells us exactly how far they travel laterally during jukes
             float total_distance = move_speed * prediction_time;
+            float observed_lateral = dodge_pattern_.get_juke_magnitude(move_speed);
 
-            // Forward component reduces as lateral increases (they redirect, not teleport)
-            float forward_component = std::sqrt(1.0f - lateral_factor * lateral_factor);
-            math::vector3 forward = velocity_dir * total_distance * forward_component;
-            math::vector3 side = perpendicular * total_distance * lateral_factor;
+            // Cap lateral at 90% of total distance to maintain forward momentum
+            // (They can't juke further than they can travel)
+            observed_lateral = std::min(observed_lateral, total_distance * 0.9f);
+
+            // Pythagorean: forward² + lateral² = total² (distance conservation)
+            float forward_distance = std::sqrt(total_distance * total_distance - observed_lateral * observed_lateral);
+            math::vector3 forward = velocity_dir * forward_distance;
+            math::vector3 side = perpendicular * observed_lateral;
 
             // Juke cadence weighting: Weight based on WHERE we are in their juke cycle
             // Key insight: We need time since LAST juke to predict NEXT juke
@@ -872,8 +887,8 @@ namespace HybridPred
                 // Predict position based on detected pattern
                 // Use same distance conservation as above
                 math::vector3 pattern_predicted_pos = latest.position +
-                    forward +  // Already scaled by forward_component
-                    dodge_pattern_.predicted_next_direction * (total_distance * lateral_factor);
+                    forward +  // Already scaled by forward_distance
+                    dodge_pattern_.predicted_next_direction * observed_lateral;
 
                 // Pattern weight: commit to predicted juke but scale by timing
                 // If prediction_time matches their juke rhythm, we're more confident
@@ -2012,21 +2027,22 @@ namespace HybridPred
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
 
-        // Use path-predicted position as center, with speed-scaled dodge time
-        // Path prediction handles movement along waypoints
-        // Fast targets can react and execute dodges faster, so give them more dodge window
-        float dodge_window_factor = 0.3f;
-        if (move_speed > 400.f)
-        {
-            // Scale up dodge window for fast targets: 400 speed = 0.3, 500 = 0.35, 600 = 0.4
-            dodge_window_factor = 0.3f + (move_speed - 400.f) * 0.0005f;
-            dodge_window_factor = std::min(dodge_window_factor, 0.5f);  // Cap at 0.5
-        }
+        // USE OBSERVED JUKE MAGNITUDE for reachable region
+        // This gives us actual observed dodge capability, not arbitrary factors
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time: how long it takes to cover observed juke distance
+        // Add 20% margin for variance in juke execution
+        float dodge_time = (observed_magnitude * 1.2f) / move_speed;
+
+        // Clamp to reasonable bounds: at least 0.15s (reaction time), at most arrival_time
+        dodge_time = std::clamp(dodge_time, 0.15f, arrival_time);
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * dodge_window_factor,
+            dodge_time,
             move_speed
         );
 
@@ -2529,19 +2545,19 @@ namespace HybridPred
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
 
-        // Speed-scaled dodge window - fast targets can react and dodge faster
-        float dodge_window_factor = 0.3f;
-        if (move_speed > 400.f)
-        {
-            dodge_window_factor = 0.3f + (move_speed - 400.f) * 0.0005f;
-            dodge_window_factor = std::min(dodge_window_factor, 0.5f);
-        }
+        // USE OBSERVED JUKE MAGNITUDE for reachable region
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time from observed magnitude + margin
+        float dodge_time = (observed_magnitude * 1.2f) / move_speed;
+        dodge_time = std::clamp(dodge_time, 0.15f, arrival_time);
 
         // Use path-predicted position as center
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * dodge_window_factor,
+            dodge_time,
             move_speed
         );
 
@@ -2883,18 +2899,18 @@ namespace HybridPred
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
 
-        // Speed-scaled dodge window
-        float dodge_window_factor = 0.3f;
-        if (move_speed > 400.f)
-        {
-            dodge_window_factor = 0.3f + (move_speed - 400.f) * 0.0005f;
-            dodge_window_factor = std::min(dodge_window_factor, 0.5f);
-        }
+        // USE OBSERVED JUKE MAGNITUDE for reachable region
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time from observed magnitude + margin
+        float dodge_time = (observed_magnitude * 1.2f) / move_speed;
+        dodge_time = std::clamp(dodge_time, 0.15f, arrival_time);
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * dodge_window_factor,
+            dodge_time,
             move_speed
         );
 
