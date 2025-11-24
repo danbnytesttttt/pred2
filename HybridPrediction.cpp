@@ -1923,65 +1923,99 @@ namespace HybridPred
             if (g_sdk && g_sdk->clock_facade)
                 current_time = g_sdk->clock_facade->get_game_time();
 
-            // KEY INSIGHT: What matters is TIME AFTER DASH, not dash length
-            // This determines how much they can move after landing
+            // Calculate time relationship between spell arrival and dash end
             float time_after_dash = spell_travel_time - edge_cases.dash.dash_arrival_time;
+            float move_speed = target->get_move_speed();
+
+            math::vector3 cast_position;
+            float confidence;
+            std::string reasoning;
 
             if (time_after_dash < 0.f)
             {
-                // Spell arrives BEFORE dash ends - DON'T CAST
-                // This was causing Vayne tumble misses - casting mid-dash is bad
-                result.is_valid = false;
-                result.reasoning = "Wait for dash to complete - spell would arrive mid-dash";
-                return result;
+                // Spell arrives MID-DASH - this is actually a GREAT opportunity!
+                // They're locked in forced movement, can't dodge or change direction
+                // Calculate exact position along dash path at spell arrival time
+
+                math::vector3 dash_start = target->get_position();
+                math::vector3 dash_end = edge_cases.dash.dash_end_position;
+                math::vector3 dash_vector = dash_end - dash_start;
+                float dash_length = dash_vector.magnitude();
+
+                if (dash_length < 1.f)
+                {
+                    // Dash too short, use current position
+                    cast_position = dash_start;
+                    confidence = 0.85f;
+                    reasoning = "MID-DASH - Very short dash, high confidence";
+                }
+                else
+                {
+                    // Interpolate position along dash path
+                    // progress = how far through dash when spell arrives
+                    float progress = spell_travel_time / edge_cases.dash.dash_arrival_time;
+                    progress = std::clamp(progress, 0.f, 1.f);
+
+                    cast_position = dash_start + dash_vector * progress;
+
+                    // HIGH confidence - forced movement is very predictable
+                    // They literally cannot dodge while dashing
+                    confidence = 0.9f * edge_cases.dash.confidence_multiplier;
+
+                    int progress_pct = static_cast<int>(progress * 100);
+                    reasoning = "MID-DASH INTERCEPT - Hitting at " + std::to_string(progress_pct) +
+                        "% through dash (locked in forced movement)";
+                }
             }
-
-            // Check if dash endpoint is in range
-            math::vector3 to_dash_end = edge_cases.dash.dash_end_position - source->get_position();
-            if (to_dash_end.magnitude() > spell.range)
-            {
-                result.is_valid = false;
-                result.reasoning = "Dash endpoint out of range";
-                return result;
-            }
-
-            // Calculate confidence based on TIME AFTER DASH
-            // They can move: distance = speed * time_after_dash
-            float move_speed = target->get_move_speed();
-            float potential_dodge_distance = move_speed * time_after_dash;
-
-            // Confidence decreases as potential dodge distance increases
-            // 0 units = 1.0 confidence, spell.radius*2 units = 0.5 confidence
-            float dodge_threshold = spell.radius * 2.0f;
-            float time_confidence = 1.0f;
-            if (potential_dodge_distance > 0.f && dodge_threshold > 0.f)
-            {
-                time_confidence = 1.0f - std::min(potential_dodge_distance / dodge_threshold, 1.0f) * 0.5f;
-            }
-
-            // If they have significant time to move (>250ms), this is a mediocre opportunity
-            // Still cast but with appropriate confidence penalty
-            if (time_after_dash > 0.25f)
-            {
-                time_confidence *= 0.8f;  // Additional penalty for long delay
-            }
-
-            float final_confidence = time_confidence * edge_cases.dash.confidence_multiplier;
-
-            result.cast_position = edge_cases.dash.dash_end_position;
-            result.hit_chance = final_confidence;
-            result.physics_contribution = 1.0f;
-            result.behavior_contribution = time_confidence;  // Reflects post-dash uncertainty
-            result.confidence_score = final_confidence;
-            result.is_valid = true;
-
-            int ms_after = static_cast<int>(time_after_dash * 1000);
-            if (time_after_dash < 0.1f)
-                result.reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (excellent timing)";
-            else if (time_after_dash < 0.25f)
-                result.reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (good timing)";
             else
-                result.reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (they may dodge)";
+            {
+                // Spell arrives AFTER dash ends - aim at endpoint
+                // Confidence based on how much time they have to move after landing
+                cast_position = edge_cases.dash.dash_end_position;
+
+                float potential_dodge_distance = move_speed * time_after_dash;
+
+                // Confidence decreases as potential dodge distance increases
+                float dodge_threshold = spell.radius * 2.0f;
+                float time_confidence = 1.0f;
+                if (potential_dodge_distance > 0.f && dodge_threshold > 0.f)
+                {
+                    time_confidence = 1.0f - std::min(potential_dodge_distance / dodge_threshold, 1.0f) * 0.5f;
+                }
+
+                // Additional penalty for long delay (>250ms to react)
+                if (time_after_dash > 0.25f)
+                {
+                    time_confidence *= 0.8f;
+                }
+
+                confidence = time_confidence * edge_cases.dash.confidence_multiplier;
+
+                int ms_after = static_cast<int>(time_after_dash * 1000);
+                if (time_after_dash < 0.1f)
+                    reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (excellent)";
+                else if (time_after_dash < 0.25f)
+                    reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (good)";
+                else
+                    reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (they may dodge)";
+            }
+
+            // Check if cast position is in range
+            math::vector3 to_cast = cast_position - source->get_position();
+            if (to_cast.magnitude() > spell.range)
+            {
+                result.is_valid = false;
+                result.reasoning = "Dash target position out of range";
+                return result;
+            }
+
+            result.cast_position = cast_position;
+            result.hit_chance = confidence;
+            result.physics_contribution = 1.0f;
+            result.behavior_contribution = confidence;
+            result.confidence_score = confidence;
+            result.is_valid = true;
+            result.reasoning = reasoning;
 
             update_opportunity_signals(result, source, spell, tracker);
 
