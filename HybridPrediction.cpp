@@ -927,13 +927,13 @@ namespace HybridPred
         if (elapsed_time < patience_window)
             return false;
 
-        if (history.size() < 5)  // Need at least 5 samples to detect trend
+        if (history.size() < 6)  // Need at least 6 samples to detect trend
             return false;
 
         // SAFEGUARD 2: Minimum Quality
-        // Peak must be within 10% of adaptive_threshold to be worth taking
-        // Prevents casting on 40% "peak" when threshold is 80%
-        if (hit_chance < adaptive_threshold * 0.90f)
+        // Peak must meet the full adaptive_threshold to be worth taking
+        // No compromise - if threshold is 65%, need at least 65%
+        if (hit_chance < adaptive_threshold)
             return false;
 
         // Check if this is a local maximum
@@ -956,19 +956,21 @@ namespace HybridPred
             return false;
 
         // SAFEGUARD 3: Sustained Decline
-        // Check if declining for 3+ consecutive samples (not just 1-2)
+        // Check if declining for 4+ consecutive samples (not just 2-3)
         // This prevents casting on random noise/blips
-        if (history.size() >= 4)
+        if (history.size() >= 5)
         {
+            float sample_5_ago = history[history.size() - 5].second;
             float sample_4_ago = history[history.size() - 4].second;
             float sample_3_ago = history[history.size() - 3].second;
             float sample_2_ago = history[history.size() - 2].second;
             float sample_1_ago = history[history.size() - 1].second;
 
-            // SUSTAINED declining trend: 3+ consecutive drops
+            // SUSTAINED declining trend: 4+ consecutive drops
             bool is_sustained_decline = (sample_1_ago < sample_2_ago) &&
                 (sample_2_ago < sample_3_ago) &&
-                (sample_3_ago < sample_4_ago);
+                (sample_3_ago < sample_4_ago) &&
+                (sample_4_ago < sample_5_ago);
 
             if (is_sustained_decline)
                 return true;  // Safe to cast - sustained decline confirmed!
@@ -979,23 +981,23 @@ namespace HybridPred
 
     float OpportunityWindow::get_adaptive_threshold(float base_threshold, float elapsed_time) const
     {
-        // Adaptive threshold decay: lower standards over time
-        // 0-3s: Full threshold (no decay)
-        // 3-8s: Linear decay to 70% of threshold
-        // 8s+: Minimum 70% of original threshold
+        // Adaptive threshold decay: lower standards over time (CONSERVATIVE)
+        // 0-5s: Full threshold (no decay) - be patient
+        // 5-12s: Linear decay to 85% of threshold
+        // 12s+: Minimum 85% of original threshold
 
-        if (elapsed_time < 3.0f)
-            return base_threshold;  // No decay yet
+        if (elapsed_time < 5.0f)
+            return base_threshold;  // No decay yet - be patient
 
-        if (elapsed_time < 8.0f)
+        if (elapsed_time < 12.0f)
         {
-            // Linear interpolation: 100% → 70% over 5 seconds
-            float decay_factor = 1.0f - ((elapsed_time - 3.0f) / 5.0f) * 0.3f;
+            // Linear interpolation: 100% → 85% over 7 seconds
+            float decay_factor = 1.0f - ((elapsed_time - 5.0f) / 7.0f) * 0.15f;
             return base_threshold * decay_factor;
         }
 
-        // Minimum: 70% of original
-        return base_threshold * 0.7f;
+        // Minimum: 85% of original (don't go too low)
+        return base_threshold * 0.85f;
     }
 
     void HybridFusionEngine::update_opportunity_signals(
@@ -1027,7 +1029,7 @@ namespace HybridPred
                 spell_cooldown = spell_entry_ptr->get_cooldown();
             }
         }
-        float patience_window = std::clamp(spell_cooldown * 0.3f, 1.5f, 3.0f);
+        float patience_window = std::clamp(spell_cooldown * 0.3f, 2.0f, 4.0f);
 
         // Safety: Validate spell slot (should be 0-3 for Q/W/E/R, or special slots)
         if (spell_slot < -1 || spell_slot > 10)
