@@ -405,7 +405,9 @@ namespace HybridPred
         }
 
         // Detect alternating pattern (L-R-L-R or R-L-R-L)
-        if (dodge_pattern_.juke_sequence.size() >= 4)
+        // EARNED CONFIDENCE: Require more evidence before trusting patterns
+        // Don't give high confidence after just L-R-L-R - need sustained pattern
+        if (dodge_pattern_.juke_sequence.size() >= 6)  // Need 6+ jukes, not 4
         {
             bool is_alternating = true;
             int alternation_count = 0;
@@ -429,11 +431,13 @@ namespace HybridPred
                 }
             }
 
-            if (is_alternating && alternation_count >= 2)
+            // Require 4+ alternations for pattern (was 2)
+            // Confidence scales: 4 alt = 0.5, 5 = 0.6, 6 = 0.7, 7+ = 0.75 max
+            if (is_alternating && alternation_count >= 4)
             {
-                // Alternating pattern detected!
+                // Alternating pattern detected with sufficient evidence
                 dodge_pattern_.has_pattern = true;
-                dodge_pattern_.pattern_confidence = std::min(0.9f, 0.6f + alternation_count * 0.1f);
+                dodge_pattern_.pattern_confidence = std::min(0.75f, 0.4f + alternation_count * 0.075f);
                 // Pattern update time tracking disabled for standalone
 
                 // Predict next juke: opposite of last
@@ -453,7 +457,8 @@ namespace HybridPred
                 }
             }
             // Detect repeating sequence (e.g., L-L-R-L-L-R)
-            else if (dodge_pattern_.juke_sequence.size() >= 6)
+            // Require 8+ jukes for repeating pattern (was 6)
+            else if (dodge_pattern_.juke_sequence.size() >= 8)
             {
                 // Check if first half matches second half
                 size_t half = dodge_pattern_.juke_sequence.size() / 2;
@@ -470,9 +475,10 @@ namespace HybridPred
 
                 if (is_repeating)
                 {
-                    // Repeating sequence detected!
+                    // Repeating sequence detected with sufficient evidence
                     dodge_pattern_.has_pattern = true;
-                    dodge_pattern_.pattern_confidence = 0.85f;
+                    // Scale by sequence length: 8 = 0.6, 10 = 0.65, 12+ = 0.7 max
+                    dodge_pattern_.pattern_confidence = std::min(0.7f, 0.5f + dodge_pattern_.juke_sequence.size() * 0.0125f);
                     if (g_sdk && g_sdk->clock_facade)
                         dodge_pattern_.last_pattern_update_time = g_sdk->clock_facade->get_game_time();
 
@@ -805,9 +811,10 @@ namespace HybridPred
             float ngram_left = dodge_pattern_.get_ngram_probability(-1);
             float ngram_right = dodge_pattern_.get_ngram_probability(1);
 
-            // Blend: 60% N-Gram + 40% overall frequency (N-Gram is more specific to current state)
-            float left_weight = 0.6f * ngram_left + 0.4f * dodge_pattern_.left_dodge_frequency;
-            float right_weight = 0.6f * ngram_right + 0.4f * dodge_pattern_.right_dodge_frequency;
+            // Blend: 40% N-Gram + 60% overall frequency
+            // Don't overfit to last few transitions - overall frequency is more stable
+            float left_weight = 0.4f * ngram_left + 0.6f * dodge_pattern_.left_dodge_frequency;
+            float right_weight = 0.4f * ngram_right + 0.6f * dodge_pattern_.right_dodge_frequency;
 
             if (left_weight > 0.2f)
             {
@@ -838,9 +845,10 @@ namespace HybridPred
                 pdf.add_weighted_sample(pattern_predicted_pos, pattern_weight);
 
                 // Also add "no juke" position - they might break the pattern
+                // Always significant weight - even established patterns get broken
                 // Weight higher when timing is off-rhythm (low juke_cadence_weight)
                 math::vector3 no_juke_pos = latest.position + velocity_dir * total_distance;
-                float no_juke_weight = std::max(0.3f, (1.0f - dodge_pattern_.pattern_confidence) + (1.0f - juke_cadence_weight) * 0.5f);
+                float no_juke_weight = std::max(0.5f, (1.0f - dodge_pattern_.pattern_confidence) + (1.0f - juke_cadence_weight) * 0.5f);
                 pdf.add_weighted_sample(no_juke_pos, no_juke_weight);
             }
         }
