@@ -190,9 +190,9 @@ namespace HybridPred
             fused = std::min(fused + agreement_bonus, 1.0f);
         }
 
-        // Apply confidence as a multiplier, but with a floor based on physics
-        // If physics is high, don't let low confidence kill it completely
-        float min_confidence = 0.3f + 0.4f * physics_prob;  // 30-70% floor based on physics
+        // Apply confidence as a multiplier
+        // Small safety floor to prevent complete zero-out, but respect edge case penalties
+        float min_confidence = 0.1f + 0.1f * physics_prob;  // 10-20% floor (safety net only)
         float effective_confidence = std::max(confidence, min_confidence);
 
         return fused * effective_confidence;

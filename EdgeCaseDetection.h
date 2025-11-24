@@ -774,8 +774,10 @@ namespace EdgeCases
         if (analysis.dash.is_dashing)
             analysis.confidence_multiplier *= analysis.dash.confidence_multiplier;
 
+        // Spell shields: Don't penalize confidence - we want to break shields
+        // Instead, reduce priority so we prefer unshielded targets when multiple options
         if (analysis.has_shield)
-            analysis.confidence_multiplier *= 0.5f;  // Spell will be blocked
+            analysis.priority_multiplier *= 0.7f;  // Prefer unshielded targets
 
         if (analysis.blocked_by_windwall)
             analysis.confidence_multiplier *= 0.2f;  // Will be blocked by windwall
