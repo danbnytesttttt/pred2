@@ -367,6 +367,12 @@ namespace HybridPred
         dodge_pattern_.juke_sequence.clear();
         constexpr size_t MAX_SEQUENCE_LENGTH = 8;
 
+        // Track juke events for magnitude measurement
+        // We measure RETROSPECTIVELY: when a new juke starts, we calculate the previous juke's total magnitude
+        size_t juke_start_idx = 0;
+        math::vector3 juke_ref_dir{};  // Direction before juke started
+        bool tracking_juke = false;
+
         for (size_t i = movement_history_.size() > MAX_SEQUENCE_LENGTH + 1 ?
             movement_history_.size() - MAX_SEQUENCE_LENGTH : 1;
             i < movement_history_.size(); ++i)
@@ -395,30 +401,41 @@ namespace HybridPred
                 current_move = 1;   // Right
             // else current_move = 0 (Straight)
 
-            // JUKE MAGNITUDE TRACKING: Calculate actual lateral displacement in units
-            // This tells us HOW FAR they juke, not just which direction
-            if (current_move != 0)
+            // JUKE MAGNITUDE TRACKING: Measure full juke distance retrospectively
+            // When direction changes again (or straightens), the previous juke just ended
+            int last_move = dodge_pattern_.juke_sequence.empty() ? 0 : dodge_pattern_.juke_sequence.back();
+            if (tracking_juke && current_move != last_move)
             {
-                // Calculate perpendicular to previous velocity direction
-                math::vector3 perp(-prev_dir.z, 0.f, prev_dir.x);
-
-                // Calculate displacement between snapshots
-                math::vector3 displacement = curr.position - prev.position;
-
-                // Project displacement onto perpendicular to get lateral distance
-                float lateral_magnitude = std::abs(displacement.x * perp.x + displacement.z * perp.z);
+                // Previous juke ended - calculate its TOTAL lateral displacement
+                math::vector3 juke_perp(-juke_ref_dir.z, 0.f, juke_ref_dir.x);
+                math::vector3 total_displacement = curr.position - movement_history_[juke_start_idx].position;
+                float total_lateral = std::abs(total_displacement.x * juke_perp.x + total_displacement.z * juke_perp.z);
 
                 // Store magnitude (cap history at 16 entries)
                 constexpr size_t MAX_MAGNITUDE_HISTORY = 16;
                 if (dodge_pattern_.juke_magnitudes.size() >= MAX_MAGNITUDE_HISTORY)
                     dodge_pattern_.juke_magnitudes.pop_front();
-                dodge_pattern_.juke_magnitudes.push_back(lateral_magnitude);
+                dodge_pattern_.juke_magnitudes.push_back(total_lateral);
 
                 // Update running average
                 float sum = 0.f;
                 for (float mag : dodge_pattern_.juke_magnitudes)
                     sum += mag;
                 dodge_pattern_.average_juke_magnitude = sum / dodge_pattern_.juke_magnitudes.size();
+
+                tracking_juke = false;
+            }
+
+            // Start tracking new juke
+            if (current_move != 0 && !tracking_juke)
+            {
+                juke_start_idx = i - 1;  // Position before the direction change
+                juke_ref_dir = prev_dir;  // Direction before juke
+                tracking_juke = true;
+            }
+            else if (current_move == 0)
+            {
+                tracking_juke = false;
             }
 
             // UPDATE N-GRAM TRANSITIONS: Record transition from previous move to current
