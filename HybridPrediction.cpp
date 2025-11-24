@@ -1931,11 +1931,17 @@ namespace HybridPred
             float confidence;
             std::string reasoning;
 
-            if (time_after_dash < 0.f)
+            // BLINK DETECTION: Very fast "dashes" are actually blinks (Ezreal E, Kassadin R, Flash)
+            // Blinks have no travel path to intercept - they teleport instantly
+            // Detect by: dash_arrival_time <= 0.1s (default for speed=0) or very high speed
+            bool is_blink = edge_cases.dash.dash_arrival_time <= 0.1f ||
+                           edge_cases.dash.dash_speed > 3000.f;
+
+            if (time_after_dash < 0.f && !is_blink)
             {
-                // Spell arrives MID-DASH - this is actually a GREAT opportunity!
+                // Spell arrives MID-DASH - this is a GREAT opportunity!
                 // They're locked in forced movement, can't dodge or change direction
-                // Calculate exact position along dash path at spell arrival time
+                // Calculate intercept position along dash path
 
                 math::vector3 dash_start = target->get_position();
                 math::vector3 dash_end = edge_cases.dash.dash_end_position;
@@ -1951,21 +1957,41 @@ namespace HybridPred
                 }
                 else
                 {
-                    // Interpolate position along dash path
-                    // progress = how far through dash when spell arrives
+                    // ITERATIVE INTERCEPT: Refine estimate for accurate mid-dash hit
+                    // Problem: spell_travel_time is to dash_end, not mid-dash point
+                    // Solution: Iterate once to get better intercept estimate
+
+                    // Initial estimate using endpoint ratio
                     float progress = spell_travel_time / edge_cases.dash.dash_arrival_time;
-                    progress = std::clamp(progress, 0.f, 1.f);
+                    math::vector3 intercept_pos = dash_start + dash_vector * progress;
+
+                    // Refine: calculate actual travel time to estimated intercept
+                    float dist_to_intercept = (intercept_pos - source->get_position()).magnitude();
+                    float refined_travel_time = spell.delay;
+                    if (spell.projectile_speed > 0.f)
+                        refined_travel_time += dist_to_intercept / spell.projectile_speed;
+
+                    // Recalculate progress with refined time
+                    progress = refined_travel_time / edge_cases.dash.dash_arrival_time;
+                    progress = std::clamp(progress, 0.1f, 0.95f);  // Stay within dash
 
                     cast_position = dash_start + dash_vector * progress;
 
                     // HIGH confidence - forced movement is very predictable
-                    // They literally cannot dodge while dashing
                     confidence = 0.9f * edge_cases.dash.confidence_multiplier;
 
                     int progress_pct = static_cast<int>(progress * 100);
                     reasoning = "MID-DASH INTERCEPT - Hitting at " + std::to_string(progress_pct) +
                         "% through dash (locked in forced movement)";
                 }
+            }
+            else if (time_after_dash < 0.f && is_blink)
+            {
+                // BLINK: No mid-point exists, aim at endpoint
+                // They teleport instantly - aim where they'll appear
+                cast_position = edge_cases.dash.dash_end_position;
+                confidence = 0.85f * edge_cases.dash.confidence_multiplier;
+                reasoning = "BLINK ENDPOINT - Instant teleport, aiming at destination";
             }
             else
             {
