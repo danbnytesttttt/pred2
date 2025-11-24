@@ -3721,6 +3721,39 @@ namespace HybridPred
 
             float current_time = g_sdk->clock_facade->get_game_time();
 
+            // PROACTIVE TRACKING: Create trackers for ALL visible enemies
+            // This ensures we have behavioral data BEFORE they enter spell range
+            // Cost: ~0.25ms/frame for 5 enemies (negligible)
+            // Benefit: No "cold start" - patterns already learned when we need them
+            auto all_heroes = g_sdk->object_manager->get_heroes();
+            game_object* local_player = g_sdk->object_manager->get_local_player();
+
+            if (local_player && local_player->is_valid())
+            {
+                int my_team = local_player->get_team_id();
+
+                for (auto* hero : all_heroes)
+                {
+                    if (!hero || !hero->is_valid())
+                        continue;
+
+                    // Only track enemies
+                    if (hero->get_team_id() == my_team)
+                        continue;
+
+                    // Only track visible enemies (no point tracking fog)
+                    if (!hero->is_visible())
+                        continue;
+
+                    // Create tracker if doesn't exist
+                    uint32_t network_id = hero->get_network_id();
+                    if (trackers_.find(network_id) == trackers_.end())
+                    {
+                        trackers_[network_id] = std::make_unique<TargetBehaviorTracker>(hero);
+                    }
+                }
+            }
+
             // Update and clean up trackers in single pass
             // CRITICAL: Get fresh pointer from object_manager each frame to prevent dangling pointer
             for (auto it = trackers_.begin(); it != trackers_.end(); )
