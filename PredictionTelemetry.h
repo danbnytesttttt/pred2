@@ -403,6 +403,19 @@ namespace PredictionTelemetry
 
             g_sdk->log_console("[Telemetry] write_report() called - generating summary...");
 
+            // Calculate stats before reporting (in case finalize wasn't called)
+            if (g_sdk->clock_facade)
+            {
+                float current_time = g_sdk->clock_facade->get_game_time();
+                stats_.session_duration_seconds = current_time;  // Game time = session duration
+            }
+
+            if (stats_.valid_predictions > 0)
+            {
+                stats_.avg_target_velocity = stats_.total_target_velocity / stats_.valid_predictions;
+                stats_.avg_prediction_offset = stats_.total_prediction_offset / stats_.valid_predictions;
+            }
+
             // Output to console instead of file
             g_sdk->log_console("=============================================================================");
             g_sdk->log_console("TELEMETRY SESSION SUMMARY");
@@ -511,7 +524,7 @@ namespace PredictionTelemetry
                 g_sdk->log_console("--- PER SPELL TYPE ---");
                 for (const auto& pair : stats_.spell_type_counts)
                 {
-                    float avg_hc = stats_.spell_type_avg_hitchance[pair.first];
+                    float avg_hc = stats_.spell_type_avg_hitchance[pair.first] / pair.second;  // FIX: Divide by count
                     snprintf(buf, sizeof(buf), "%s: %d predictions (avg HC: %.0f%%)",
                         pair.first.c_str(), pair.second, avg_hc * 100.f);
                     g_sdk->log_console(buf);
@@ -640,7 +653,7 @@ namespace PredictionTelemetry
                 for (const auto& pair : sorted_targets)
                 {
                     if (count++ >= 10) break;
-                    float avg_hc = stats_.target_avg_hitchance[pair.first];
+                    float avg_hc = stats_.target_avg_hitchance[pair.first] / pair.second;  // FIX: Divide by count
                     snprintf(buf, sizeof(buf), "%s: %d predictions (avg HC: %.0f%%)",
                         pair.first.c_str(), pair.second, avg_hc * 100.f);
                     g_sdk->log_console(buf);
