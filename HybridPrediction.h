@@ -59,7 +59,7 @@ namespace HybridPred
     constexpr int MOVEMENT_HISTORY_SIZE = 100;      // Track last N positions
     constexpr float MOVEMENT_SAMPLE_RATE = 0.05f;   // Sample every 50ms
     constexpr float BEHAVIOR_DECAY_RATE = 0.95f;    // Exponential decay factor
-    constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 10;    // Minimum data for behavior model
+    constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 20;    // Minimum data for behavior model (increased to prevent farming pattern pollution)
 
     // Tracker cleanup parameters
     constexpr float TRACKER_TIMEOUT = 30.0f;        // Remove trackers after 30s when target doesn't exist
@@ -213,20 +213,9 @@ namespace HybridPred
         // Physics is the foundation, behavior adjusts within those constraints
         float fused = physics_weight * physics_prob + (1.0f - physics_weight) * behavior_prob;
 
-        // AGREEMENT BONUS: When physics and behavior BOTH agree, boost confidence
-        // This replaces the old "behavior overrides physics" logic
-        // If both say hit is likely (>0.6), they're agreeing - boost result
-        // If they disagree, the weighted average naturally handles it
-        if (physics_prob > 0.6f && behavior_prob > 0.6f)
-        {
-            // Both agree hit is likely - small boost for agreement
-            float agreement_bonus = std::min(physics_prob, behavior_prob) * 0.1f;
-            fused = std::min(fused + agreement_bonus, 1.0f);
-        }
-
         // Apply confidence as a multiplier
-        // Small safety floor to prevent complete zero-out, but respect edge case penalties
-        float min_confidence = 0.1f + 0.1f * physics_prob;  // 10-20% floor (safety net only)
+        // Lower safety floor to allow proper penalization from edge cases
+        float min_confidence = 0.05f;  // Minimal floor, let edge cases reduce confidence properly
         float effective_confidence = std::max(confidence, min_confidence);
 
         return fused * effective_confidence;
