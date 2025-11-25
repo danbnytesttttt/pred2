@@ -114,6 +114,14 @@ namespace HybridPred
             return 0.f;  // Immobilized - can't dodge
         }
 
+        // PHYSICS: Animation lock is a GAME MECHANIC, not a behavior pattern
+        // During AA windup or spell cast, target CANNOT move (hard constraint)
+        // This should reduce reachable region (physics), not boost behavior
+        if (is_auto_attacking(target) || is_casting_spell(target))
+        {
+            return 0.f;  // Animation locked - physically cannot dodge
+        }
+
         return target->get_move_speed();
     }
 
@@ -160,30 +168,30 @@ namespace HybridPred
         }
 
         // Determine fusion weight based on behavior sample quality
-        // PHILOSOPHY: Physics is the reliable foundation, behavior is supplementary
-        // Physics always has majority weight, but behavior can contribute meaningfully
-        float physics_weight = 0.63f;  // Default: physics-dominant
+        // PHILOSOPHY: Physics is MATH (always correct). Behavior is GUESS (could be wrong).
+        // Physics always has strong majority weight - behavior supplements but never dominates.
+        float physics_weight = 0.70f;  // Default: physics-dominant
 
         // If we have very few behavior samples, trust physics heavily
         if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            // Ramp from 0.85 (no samples) down to 0.63 (minimum samples)
+            // Ramp from 0.85 (no samples) down to 0.70 (minimum samples)
             // 0 samples = pure physics, 35 samples = start incorporating behavior
             float factor = static_cast<float>(sample_count) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.85f - 0.22f * factor;  // 0.85 → 0.63
+            physics_weight = 0.85f - 0.15f * factor;  // 0.85 → 0.70
         }
         else if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR * 2)
         {
-            // Ramp from 0.63 down to 0.56 (still physics-dominant)
-            // 35-70 samples: gradually trust behavior more, but physics stays majority
+            // Ramp from 0.70 down to 0.65 (still physics-dominant)
+            // 35-70 samples: gradually trust behavior more, but physics maintains strong majority
             float factor = static_cast<float>(sample_count - MIN_SAMPLES_FOR_BEHAVIOR) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.63f - 0.07f * factor;  // 0.63 → 0.56
+            physics_weight = 0.70f - 0.05f * factor;  // 0.70 → 0.65
         }
         else
         {
-            // Abundant data (70+ samples = 3.5+ seconds): physics still leads
-            // 56% physics, 44% behavior - behavior has meaningful contribution
-            physics_weight = 0.56f;
+            // Abundant data (70+ samples = 3.5+ seconds): physics still strongly leads
+            // 65% physics, 35% behavior - behavior can supplement but not override
+            physics_weight = 0.65f;
         }
 
         // MOBILITY FACTOR: Fast targets are more reactive and unpredictable
@@ -212,6 +220,18 @@ namespace HybridPred
             // 0.5s → +0.1, 1.0s → +0.2, 1.5s+ → +0.3 (capped at 0.8 total)
             float staleness_penalty = std::min(time_since_update - 0.5f, 1.0f) * 0.3f;
             physics_weight = std::min(physics_weight + staleness_penalty, 0.8f);
+        }
+
+        // HIGH-PHYSICS BOOST: When physics is very confident, trust it even more
+        // Physics is MATH-based (always correct about geometric constraints)
+        // Behavior is PATTERN-based (could be wrong: noise, wrong context, etc.)
+        // If physics says "geometrically hard to dodge" (>85%), don't let potentially
+        // noisy behavior reduce it significantly
+        if (physics_prob > 0.85f)
+        {
+            // Scale boost: 85% → +0.0, 90% → +0.10, 95%+ → +0.20
+            float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.20f;
+            physics_weight = std::min(physics_weight + high_physics_boost, 0.95f);
         }
 
         // Use weighted LINEAR interpolation
