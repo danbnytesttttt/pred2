@@ -695,7 +695,8 @@ namespace HybridPred
             float juke_cadence_weight = 1.0f;  // Default
             if (dodge_pattern_.juke_interval_variance > EPSILON)
             {
-                float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
+                // Defensive: ensure non-negative before sqrt (float precision edge case)
+                float sigma = std::sqrt(std::max(0.f, dodge_pattern_.juke_interval_variance));
                 float time_diff = prediction_time - dodge_pattern_.juke_interval_mean;
                 // Gaussian: k = exp(-0.5 * ((t - μ) / σ)²)
                 juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
@@ -945,7 +946,8 @@ namespace HybridPred
         // Calculate opportunity score: how good is this moment relative to recent peak?
         if (window.peak_hit_chance > EPSILON)
         {
-            result.opportunity_score = result.hit_chance / window.peak_hit_chance;
+            // Clamp to [0, 1] - score > 1.0 means current > historical peak, cap at 1.0
+            result.opportunity_score = std::min(result.hit_chance / window.peak_hit_chance, 1.0f);
         }
         else
         {
