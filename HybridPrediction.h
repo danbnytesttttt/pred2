@@ -130,6 +130,27 @@ namespace HybridPred
     }
 
     /**
+     * Get effective move speed accounting for CC status (0 if immobilized)
+     * CC'd targets cannot dodge, so their reachable region should be minimal
+     */
+    inline float get_effective_move_speed(game_object* target)
+    {
+        if (!target || !target->is_valid()) return 0.f;
+        if (target->has_buff_of_type(buff_type::stun) ||
+            target->has_buff_of_type(buff_type::snare) ||
+            target->has_buff_of_type(buff_type::charm) ||
+            target->has_buff_of_type(buff_type::fear) ||
+            target->has_buff_of_type(buff_type::taunt) ||
+            target->has_buff_of_type(buff_type::suppression) ||
+            target->has_buff_of_type(buff_type::knockup) ||
+            target->has_buff_of_type(buff_type::knockback))
+        {
+            return 0.f;
+        }
+        return target->get_move_speed();
+    }
+
+    /**
      * Fuse physics and behavior probabilities using weighted geometric mean
      * When behavior data is sparse, trust physics more. When abundant, blend equally.
      *

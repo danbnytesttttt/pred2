@@ -1097,6 +1097,20 @@ namespace HybridPred
             return math::vector3{};
 
         math::vector3 position = target->get_position();
+
+        // CC CHECK: If truly immobilized (not knockback), return current position
+        // Knockbacks have a forced path - we follow it to predict landing spot
+        if (target->has_buff_of_type(buff_type::stun) ||
+            target->has_buff_of_type(buff_type::snare) ||
+            target->has_buff_of_type(buff_type::charm) ||
+            target->has_buff_of_type(buff_type::fear) ||
+            target->has_buff_of_type(buff_type::taunt) ||
+            target->has_buff_of_type(buff_type::suppression))
+            // NOTE: knockback/knockup NOT included - they have forced paths
+        {
+            return position;
+        }
+
         auto path = target->get_path();
 
         // No path or stationary - return current position
@@ -1807,6 +1821,8 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
+        // EFFECTIVE SPEED: 0 if CC'd (stunned, snared, etc.) - can't dodge
+        float effective_speed = get_effective_move_speed(target);
 
         // Use path-predicted position as center, with reduced dodge time
         // Path prediction handles movement along waypoints
@@ -1814,7 +1830,7 @@ namespace HybridPred
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             arrival_time * 0.3f,     // Reduced time - only dodge window
-            move_speed
+            effective_speed
         );
 
         result.reachable_region = reachable_region;
@@ -2292,13 +2308,15 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
+        // EFFECTIVE SPEED: 0 if CC'd (stunned, snared, etc.) - can't dodge
+        float effective_speed = get_effective_move_speed(target);
 
         // Use path-predicted position as center
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             arrival_time * 0.3f,     // Reduced time - only dodge window
-            move_speed
+            effective_speed
         );
 
         result.reachable_region = reachable_region;
@@ -2522,12 +2540,14 @@ namespace HybridPred
         // Step 2: Build reachable region (physics)
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
+        // EFFECTIVE SPEED: 0 if CC'd (stunned, snared, etc.) - can't dodge
+        float effective_speed = get_effective_move_speed(target);
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             target->get_position(),
             target_velocity,
             arrival_time,
-            move_speed
+            effective_speed
         );
 
         result.reachable_region = reachable_region;
@@ -2628,12 +2648,14 @@ namespace HybridPred
         // Step 2: Build reachable region (physics)
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();
+        // EFFECTIVE SPEED: 0 if CC'd (stunned, snared, etc.) - can't dodge
+        float effective_speed = get_effective_move_speed(target);
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             target->get_position(),
             target_velocity,
             arrival_time,
-            move_speed
+            effective_speed
         );
 
         result.reachable_region = reachable_region;
