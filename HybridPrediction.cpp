@@ -3169,6 +3169,7 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         math::vector3 target_velocity = tracker.get_current_velocity();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
