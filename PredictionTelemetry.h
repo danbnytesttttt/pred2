@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <deque>
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
@@ -26,8 +27,11 @@ namespace PredictionTelemetry
         float timestamp = 0.f;
         std::string target_name = "";
         std::string spell_type = "";
+        int spell_slot = -1;  // 0=Q, 1=W, 2=E, 3=R
         float hit_chance = 0.f;
         float confidence = 0.f;
+        float physics_contribution = 0.f;
+        float behavior_contribution = 0.f;
         float distance = 0.f;
         bool was_dash = false;
         bool was_stationary = false;
@@ -81,6 +85,21 @@ namespace PredictionTelemetry
         std::unordered_map<std::string, int> spell_type_counts;
         std::unordered_map<std::string, float> spell_type_avg_hitchance;
 
+        // Per-spell-slot stats (Q/W/E/R)
+        struct SpellSlotStats {
+            int count = 0;
+            float total_hc = 0.f;
+            float total_confidence = 0.f;
+            float total_physics = 0.f;
+            float total_behavior = 0.f;
+            int edge_case_dash = 0;
+            int edge_case_stasis = 0;
+            int edge_case_channel = 0;
+            int while_moving = 0;
+            int while_stationary = 0;
+        };
+        std::unordered_map<int, SpellSlotStats> spell_slot_stats;  // key = spell_slot (0-3)
+
         // Per-target stats
         std::unordered_map<std::string, int> target_prediction_counts;
         std::unordered_map<std::string, float> target_avg_hitchance;
@@ -127,8 +146,9 @@ namespace PredictionTelemetry
     {
     private:
         static SessionStats stats_;
-        static std::vector<PredictionEvent> events_;
+        static std::deque<PredictionEvent> events_;  // deque for O(1) front removal
         static bool enabled_;
+        static bool averages_computed_;  // Track if per-type/target averages have been computed
 
         static auto get_timestamp()
         {
@@ -146,6 +166,7 @@ namespace PredictionTelemetry
         static void initialize(const std::string& champion_name, bool enable = true)
         {
             enabled_ = enable;
+            averages_computed_ = false;  // Reset for new session
             if (!enabled_) return;
 
             stats_ = SessionStats();
@@ -198,6 +219,24 @@ namespace PredictionTelemetry
             stats_.spell_type_counts[event.spell_type]++;
             stats_.spell_type_avg_hitchance[event.spell_type] += event.hit_chance;
 
+            // Per-spell-slot stats (Q/W/E/R)
+            if (event.spell_slot >= 0 && event.spell_slot <= 3)
+            {
+                auto& slot_stats = stats_.spell_slot_stats[event.spell_slot];
+                slot_stats.count++;
+                slot_stats.total_hc += event.hit_chance;
+                slot_stats.total_confidence += event.confidence;
+                slot_stats.total_physics += event.physics_contribution;
+                slot_stats.total_behavior += event.behavior_contribution;
+
+                if (event.edge_case == "dash") slot_stats.edge_case_dash++;
+                else if (event.edge_case == "stasis") slot_stats.edge_case_stasis++;
+                else if (event.edge_case == "channeling") slot_stats.edge_case_channel++;
+
+                if (event.target_is_moving) slot_stats.while_moving++;
+                else slot_stats.while_stationary++;
+            }
+
             // Per-target stats
             stats_.target_prediction_counts[event.target_name]++;
             stats_.target_avg_hitchance[event.target_name] += event.hit_chance;
@@ -232,6 +271,12 @@ namespace PredictionTelemetry
             }
 
             // Store event for detailed log
+            // Cap history size to prevent memory bloat over long sessions
+            // Using deque for O(1) front removal instead of O(N) vector erase
+            if (events_.size() >= 1000)
+            {
+                events_.pop_front();  // O(1) removal
+            }
             events_.push_back(event);
         }
 
@@ -318,23 +363,10 @@ namespace PredictionTelemetry
 
             stats_.session_duration_seconds = session_duration_seconds;
 
-            // Calculate averages for per-spell-type
-            for (auto& pair : stats_.spell_type_avg_hitchance)
-            {
-                int count = stats_.spell_type_counts[pair.first];
-                if (count > 0)
-                    pair.second /= count;
-            }
+            // Note: Per-spell-type and per-target averages are computed in write_report()
+            // to avoid double-division if report is called multiple times
 
-            // Calculate averages for per-target
-            for (auto& pair : stats_.target_avg_hitchance)
-            {
-                int count = stats_.target_prediction_counts[pair.first];
-                if (count > 0)
-                    pair.second /= count;
-            }
-
-            // Calculate new averages
+            // Calculate global averages
             if (stats_.valid_predictions > 0)
             {
                 stats_.avg_target_velocity = stats_.total_target_velocity / stats_.valid_predictions;
@@ -359,6 +391,38 @@ namespace PredictionTelemetry
             }
 
             g_sdk->log_console("[Telemetry] write_report() called - generating summary...");
+
+            // Calculate stats before reporting (in case finalize wasn't called)
+            if (g_sdk->clock_facade)
+            {
+                float current_time = g_sdk->clock_facade->get_game_time();
+                stats_.session_duration_seconds = current_time;  // Game time = session duration
+            }
+
+            if (stats_.valid_predictions > 0)
+            {
+                stats_.avg_target_velocity = stats_.total_target_velocity / stats_.valid_predictions;
+                stats_.avg_prediction_offset = stats_.total_prediction_offset / stats_.valid_predictions;
+            }
+
+            // Compute per-spell-type and per-target averages (only once per session)
+            // These are accumulated sums that need to be divided by count to get averages
+            if (!averages_computed_)
+            {
+                for (auto& pair : stats_.spell_type_avg_hitchance)
+                {
+                    int count = stats_.spell_type_counts[pair.first];
+                    if (count > 0)
+                        pair.second /= count;
+                }
+                for (auto& pair : stats_.target_avg_hitchance)
+                {
+                    int count = stats_.target_prediction_counts[pair.first];
+                    if (count > 0)
+                        pair.second /= count;
+                }
+                averages_computed_ = true;
+            }
 
             // Output to console instead of file
             g_sdk->log_console("=============================================================================");
@@ -413,12 +477,63 @@ namespace PredictionTelemetry
                 g_sdk->log_console(buf);
             }
 
+            // PER-SPELL BREAKDOWN (Q/W/E/R) - DETAILED
+            if (!stats_.spell_slot_stats.empty())
+            {
+                g_sdk->log_console("=============================================================================");
+                g_sdk->log_console("DETAILED PER-SPELL BREAKDOWN (Q/W/E/R)");
+                g_sdk->log_console("=============================================================================");
+
+                const char* spell_names[] = { "Q", "W", "E", "R" };
+                for (int slot = 0; slot <= 3; slot++)
+                {
+                    auto it = stats_.spell_slot_stats.find(slot);
+                    if (it == stats_.spell_slot_stats.end() || it->second.count == 0)
+                        continue;
+
+                    const auto& s = it->second;
+                    float avg_hc = s.total_hc / s.count;
+                    float avg_conf = s.total_confidence / s.count;
+                    float avg_phys = s.total_physics / s.count;
+                    float avg_behav = s.total_behavior / s.count;
+
+                    g_sdk->log_console("-----------------------------------------------------------------------------");
+                    snprintf(buf, sizeof(buf), "SPELL [%s] - %d predictions", spell_names[slot], s.count);
+                    g_sdk->log_console(buf);
+                    g_sdk->log_console("-----------------------------------------------------------------------------");
+
+                    snprintf(buf, sizeof(buf), "Average Hit Chance: %.1f%%", avg_hc * 100.f);
+                    g_sdk->log_console(buf);
+                    snprintf(buf, sizeof(buf), "Average Confidence: %.1f%%", avg_conf * 100.f);
+                    g_sdk->log_console(buf);
+
+                    snprintf(buf, sizeof(buf), "Physics Contribution: %.1f%% | Behavior Contribution: %.1f%%",
+                        avg_phys * 100.f, avg_behav * 100.f);
+                    g_sdk->log_console(buf);
+
+                    snprintf(buf, sizeof(buf), "Movement Context: Moving=%d (%.1f%%) | Stationary=%d (%.1f%%)",
+                        s.while_moving, s.while_moving * 100.f / s.count,
+                        s.while_stationary, s.while_stationary * 100.f / s.count);
+                    g_sdk->log_console(buf);
+
+                    if (s.edge_case_dash > 0 || s.edge_case_stasis > 0 || s.edge_case_channel > 0)
+                    {
+                        snprintf(buf, sizeof(buf), "Edge Cases: Dash=%d | Stasis=%d | Channel=%d",
+                            s.edge_case_dash, s.edge_case_stasis, s.edge_case_channel);
+                        g_sdk->log_console(buf);
+                    }
+                }
+                g_sdk->log_console("=============================================================================");
+            }
+
             // Per-spell-type stats
             if (!stats_.spell_type_counts.empty())
             {
                 g_sdk->log_console("--- PER SPELL TYPE ---");
                 for (const auto& pair : stats_.spell_type_counts)
                 {
+                    // Note: spell_type_avg_hitchance is already averaged in finalize()
+                    // Just use the value directly (don't divide again!)
                     float avg_hc = stats_.spell_type_avg_hitchance[pair.first];
                     snprintf(buf, sizeof(buf), "%s: %d predictions (avg HC: %.0f%%)",
                         pair.first.c_str(), pair.second, avg_hc * 100.f);
@@ -510,21 +625,21 @@ namespace PredictionTelemetry
                 if (stats_.close_range_predictions > 0)
                 {
                     float avg_hc = stats_.close_range_total_hc / stats_.close_range_predictions;
-                    snprintf(buf, sizeof(buf), "Close (0-400u): %d casts @ %.0f%% avg HC",
+                    snprintf(buf, sizeof(buf), "Close (0-400u): %d casts @ %.0f avg HC",
                         stats_.close_range_predictions, avg_hc * 100.f);
                     g_sdk->log_console(buf);
                 }
                 if (stats_.mid_range_predictions > 0)
                 {
                     float avg_hc = stats_.mid_range_total_hc / stats_.mid_range_predictions;
-                    snprintf(buf, sizeof(buf), "Mid (400-700u): %d casts @ %.0f%% avg HC",
+                    snprintf(buf, sizeof(buf), "Mid (400-700u): %d casts @ %.0f avg HC",
                         stats_.mid_range_predictions, avg_hc * 100.f);
                     g_sdk->log_console(buf);
                 }
                 if (stats_.long_range_predictions > 0)
                 {
                     float avg_hc = stats_.long_range_total_hc / stats_.long_range_predictions;
-                    snprintf(buf, sizeof(buf), "Long (700+u): %d casts @ %.0f%% avg HC",
+                    snprintf(buf, sizeof(buf), "Long (700+u): %d casts @ %.0f avg HC",
                         stats_.long_range_predictions, avg_hc * 100.f);
                     g_sdk->log_console(buf);
                 }
@@ -548,7 +663,7 @@ namespace PredictionTelemetry
                 for (const auto& pair : sorted_targets)
                 {
                     if (count++ >= 10) break;
-                    float avg_hc = stats_.target_avg_hitchance[pair.first];
+                    float avg_hc = stats_.target_avg_hitchance[pair.first] / pair.second;  // FIX: Divide by count
                     snprintf(buf, sizeof(buf), "%s: %d predictions (avg HC: %.0f%%)",
                         pair.first.c_str(), pair.second, avg_hc * 100.f);
                     g_sdk->log_console(buf);
@@ -570,7 +685,8 @@ namespace PredictionTelemetry
 
     // Static member initialization
     inline SessionStats TelemetryLogger::stats_;
-    inline std::vector<PredictionEvent> TelemetryLogger::events_;
+    inline std::deque<PredictionEvent> TelemetryLogger::events_;
     inline bool TelemetryLogger::enabled_ = false;
+    inline bool TelemetryLogger::averages_computed_ = false;
 
 } // namespace PredictionTelemetry

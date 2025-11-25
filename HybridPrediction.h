@@ -59,7 +59,7 @@ namespace HybridPred
     constexpr int MOVEMENT_HISTORY_SIZE = 100;      // Track last N positions
     constexpr float MOVEMENT_SAMPLE_RATE = 0.05f;   // Sample every 50ms
     constexpr float BEHAVIOR_DECAY_RATE = 0.95f;    // Exponential decay factor
-    constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 10;    // Minimum data for behavior model
+    constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 35;    // Minimum 1.75 seconds of observation before trusting behavior patterns
 
     // Tracker cleanup parameters
     constexpr float TRACKER_TIMEOUT = 30.0f;        // Remove trackers after 30s when target doesn't exist
@@ -82,6 +82,48 @@ namespace HybridPred
     // =========================================================================
     // HELPER FUNCTIONS
     // =========================================================================
+
+    /**
+     * Get effective move speed accounting for CC status
+     *
+     * Problem: target->get_move_speed() returns the stat value (e.g., 450),
+     * but CC'd targets can't actually move. Using the stat for reachable
+     * region computation creates incorrectly large circles.
+     *
+     * This helper returns 0 for immobilizing CC, allowing normal logic
+     * to correctly identify "no dodge possible" scenarios.
+     *
+     * @param target The target to check
+     * @return Effective move speed (0 if immobilized, stat value otherwise)
+     */
+    inline float get_effective_move_speed(game_object* target)
+    {
+        if (!target || !target->is_valid())
+            return 0.f;
+
+        // Check for immobilizing CC (can't move at all)
+        if (target->has_buff_of_type(buff_type::stun) ||
+            target->has_buff_of_type(buff_type::snare) ||
+            target->has_buff_of_type(buff_type::charm) ||
+            target->has_buff_of_type(buff_type::fear) ||
+            target->has_buff_of_type(buff_type::taunt) ||
+            target->has_buff_of_type(buff_type::suppression) ||
+            target->has_buff_of_type(buff_type::knockup) ||
+            target->has_buff_of_type(buff_type::knockback))
+        {
+            return 0.f;  // Immobilized - can't dodge
+        }
+
+        // PHYSICS: Animation lock is a GAME MECHANIC, not a behavior pattern
+        // During AA windup or spell cast, target CANNOT move (hard constraint)
+        // This should reduce reachable region (physics), not boost behavior
+        if (is_auto_attacking(target) || is_casting_spell(target))
+        {
+            return 0.f;  // Animation locked - physically cannot dodge
+        }
+
+        return target->get_move_speed();
+    }
 
     /**
      * Compute adaptive decay rate based on target mobility
@@ -112,7 +154,7 @@ namespace HybridPred
      * SPECIAL CASE: When physics = 1.0 (physically impossible to dodge),
      * return guaranteed hit regardless of behavior (flash/dash handled by edge cases)
      */
-    inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f)
+    inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f, float move_speed = 350.f)
     {
         // CRITICAL: Guaranteed hit override
         // If physics says escape is physically impossible (>= 99%), guarantee the hit
@@ -126,25 +168,48 @@ namespace HybridPred
         }
 
         // Determine fusion weight based on behavior sample quality
-        float physics_weight = 0.5f;  // Default: equal weight
+        // PHILOSOPHY: Physics is MATH (always correct). Behavior is GUESS (could be wrong).
+        // Physics always has strong majority weight - behavior supplements but never dominates.
+        float physics_weight = 0.70f;  // Default: physics-dominant
 
-        // If we have very few behavior samples, trust physics more
+        // If we have very few behavior samples, trust physics heavily
         if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            // Ramp from 0.7 (no samples) down to 0.5 (minimum samples)
+            // Ramp from 0.85 (no samples) down to 0.70 (minimum samples)
+            // 0 samples = pure physics, 35 samples = start incorporating behavior
             float factor = static_cast<float>(sample_count) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.7f - 0.2f * factor;  // 0.7 → 0.5
+            physics_weight = 0.85f - 0.15f * factor;  // 0.85 → 0.70
         }
         else if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR * 2)
         {
-            // Ramp from 0.5 (minimum) down to 0.3 (abundant)
+            // Ramp from 0.70 down to 0.65 (still physics-dominant)
+            // 35-70 samples: gradually trust behavior more, but physics maintains strong majority
             float factor = static_cast<float>(sample_count - MIN_SAMPLES_FOR_BEHAVIOR) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.5f - 0.2f * factor;  // 0.5 → 0.3
+            physics_weight = 0.70f - 0.05f * factor;  // 0.70 → 0.65
         }
         else
         {
-            // Abundant data: trust behavior more (physics weight = 0.3)
-            physics_weight = 0.3f;
+            // Abundant data (70+ samples = 3.5+ seconds): physics still strongly leads
+            // 65% physics, 35% behavior - behavior can supplement but not override
+            physics_weight = 0.65f;
+        }
+
+        // MOBILITY FACTOR: Fast targets are more reactive and unpredictable
+        // Trust physics more for fast targets, behavior more for slow targets
+        // Fast targets can execute dodges quickly, making behavior patterns less reliable
+        if (move_speed > 380.f)
+        {
+            // Fast target: increase physics weight
+            // 380 → +0.0, 430 → +0.125, 480+ → +0.25
+            float speed_factor = std::min((move_speed - 380.f) / 100.f, 1.0f);
+            physics_weight = std::min(physics_weight + speed_factor * 0.25f, 0.75f);
+        }
+        else if (move_speed < 330.f)
+        {
+            // Slow target: can trust behavior more
+            // 330 → -0.0, 280 → -0.05, 230 → -0.1
+            float slow_factor = std::min((330.f - move_speed) / 100.f, 1.0f);
+            physics_weight = std::max(physics_weight - slow_factor * 0.1f, 0.3f);
         }
 
         // Staleness detection: If velocity data hasn't updated recently, increase physics weight
@@ -157,9 +222,28 @@ namespace HybridPred
             physics_weight = std::min(physics_weight + staleness_penalty, 0.8f);
         }
 
-        // Weighted geometric mean
-        float fused = std::pow(physics_prob, physics_weight) * std::pow(behavior_prob, 1.0f - physics_weight);
-        return fused * confidence;
+        // HIGH-PHYSICS BOOST: When physics is very confident, trust it even more
+        // Physics is MATH-based (always correct about geometric constraints)
+        // Behavior is PATTERN-based (could be wrong: noise, wrong context, etc.)
+        // If physics says "geometrically hard to dodge" (>85%), don't let potentially
+        // noisy behavior reduce it significantly
+        if (physics_prob > 0.85f)
+        {
+            // Scale boost: 85% → +0.0, 90% → +0.10, 95%+ → +0.20
+            float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.20f;
+            physics_weight = std::min(physics_weight + high_physics_boost, 0.95f);
+        }
+
+        // Use weighted LINEAR interpolation
+        // Physics is the foundation, behavior adjusts within those constraints
+        float fused = physics_weight * physics_prob + (1.0f - physics_weight) * behavior_prob;
+
+        // Apply confidence as a multiplier
+        // Lower safety floor to allow proper penalization from edge cases
+        float min_confidence = 0.05f;  // Minimal floor, let edge cases reduce confidence properly
+        float effective_confidence = std::max(confidence, min_confidence);
+
+        return fused * effective_confidence;
     }
 
     // =========================================================================
@@ -189,6 +273,31 @@ namespace HybridPred
     /**
      * Dodge pattern statistics
      */
+    /**
+     * Bayesian pattern trust tracking
+     * Tracks how often our pattern predictions are correct using Beta-Binomial model
+     */
+    struct PatternTrust
+    {
+        float alpha = 5.0f;   // Prior + hits (start with 50% trust)
+        float beta = 5.0f;    // Prior + misses
+
+        float get_trust() const {
+            return alpha / (alpha + beta);
+        }
+
+        void observe_correct() { alpha += 1.0f; }
+        void observe_incorrect() { beta += 1.0f; }
+
+        void decay() {
+            // Decay toward prior (0.5 trust) each game
+            constexpr float prior_a = 5.0f, prior_b = 5.0f;
+            constexpr float decay_factor = 0.95f;
+            alpha = prior_a + (alpha - prior_a) * decay_factor;
+            beta = prior_b + (beta - prior_b) * decay_factor;
+        }
+    };
+
     struct DodgePattern
     {
         float left_dodge_frequency;      // [0,1] How often target dodges left
@@ -200,12 +309,17 @@ namespace HybridPred
         float linear_continuation_prob;  // Probability of continuing straight
         float reaction_delay;            // Average reaction time (ms)
 
-        // Pattern repetition detection (NEW)
+        // Pattern repetition detection
         std::vector<int> juke_sequence;          // Last 8 direction changes: -1=left, 0=straight, 1=right
         float pattern_confidence;                // [0,1] Confidence in detected pattern
         math::vector3 predicted_next_direction;  // Unit vector of predicted next move
         bool has_pattern;                        // True if repeating pattern detected
         float last_pattern_update_time;          // Timestamp of last pattern update (for expiration)
+
+        // Bayesian pattern trust (NEW)
+        PatternTrust pattern_trust;              // Tracks how reliable our pattern predictions are
+        int last_predicted_juke;                 // -1=left, 0=none, 1=right - what we predicted
+        bool awaiting_juke_result;               // True if we made a prediction and are waiting to see result
 
         // N-Gram (Markov) pattern recognition
         // Tracks transitions: given previous move, what's the probability of each next move?
@@ -236,12 +350,27 @@ namespace HybridPred
             return static_cast<float>(target_count) / static_cast<float>(total);
         }
 
+        // Juke magnitude tracking - actual lateral displacement in units
+        // This tells us HOW FAR they juke, not just which direction
+        std::deque<float> juke_magnitudes;       // Last N juke distances in units
+        float average_juke_magnitude;            // Running average for predictions
+
+        // Get observed juke magnitude, or default based on speed
+        float get_juke_magnitude(float move_speed) const
+        {
+            if (juke_magnitudes.size() >= 3)
+                return average_juke_magnitude;
+            // Default: assume ~0.3s of lateral movement at current speed
+            return move_speed * 0.3f;
+        }
+
         DodgePattern() : left_dodge_frequency(0.5f), right_dodge_frequency(0.5f),
             forward_frequency(0.5f), backward_frequency(0.5f),
             juke_interval_mean(0.5f), juke_interval_variance(0.1f),
             linear_continuation_prob(0.6f), reaction_delay(200.f),
             pattern_confidence(0.f), predicted_next_direction{}, has_pattern(false),
-            last_pattern_update_time(0.f) {
+            last_pattern_update_time(0.f), pattern_trust{}, last_predicted_juke(0),
+            awaiting_juke_result(false), average_juke_magnitude(0.f) {
         }
     };
 
@@ -261,8 +390,9 @@ namespace HybridPred
         float max_radius;                // Maximum reachable distance
         std::vector<math::vector3> boundary_points; // Discretized boundary
         float area;                      // Total reachable area
+        math::vector3 velocity;          // Target velocity (for momentum weighting)
 
-        ReachableRegion() : center{}, max_radius(0.f), area(0.f) {}
+        ReachableRegion() : center{}, max_radius(0.f), area(0.f), velocity{} {}
     };
 
     /**
@@ -383,6 +513,9 @@ namespace HybridPred
 
         // Opportunistic casting tracking (per spell slot)
         mutable std::unordered_map<int, OpportunityWindow> opportunity_windows_;
+
+        // Smoothed velocity to reduce jitter from spam clicking
+        math::vector3 smoothed_velocity_;
 
     public:
         TargetBehaviorTracker(game_object* target);
@@ -664,7 +797,8 @@ namespace HybridPred
             game_object* target,
             const pred_sdk::spell_data& spell,
             TargetBehaviorTracker& tracker,
-            const EdgeCases::EdgeCaseAnalysis& edge_cases
+            const EdgeCases::EdgeCaseAnalysis& edge_cases,
+            float cone_angle_override = 0.f  // If > 0, use this angle instead of calculating from radius
         );
 
         // Geometry helpers for spell shapes
@@ -736,6 +870,7 @@ namespace HybridPred
 
         static VectorConfiguration optimize_vector_orientation(
             game_object* source,
+            game_object* target,
             const math::vector3& predicted_target_pos,
             const ReachableRegion& reachable_region,
             const BehaviorPDF& behavior_pdf,
@@ -831,7 +966,10 @@ namespace HybridPred
         {
             samples_.clear();
             opportunities_.clear();
-            game_start_time_ = g_sdk->clock_facade->get_game_time();
+            if (g_sdk && g_sdk->clock_facade)
+                game_start_time_ = g_sdk->clock_facade->get_game_time();
+            else
+                game_start_time_ = 0.f;
             enabled_ = true;
         }
 

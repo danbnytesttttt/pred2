@@ -1,4 +1,4 @@
-﻿#include "CustomPredictionSDK.h"
+#include "CustomPredictionSDK.h"
 #include "EdgeCaseDetection.h"
 #include "PredictionSettings.h"
 #include "PredictionTelemetry.h"
@@ -22,28 +22,82 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
     {
         PRED_DEBUG_LOG("[Danny.Prediction] targetted() called (point-and-click spell)");
 
-        // Targeted spells don't need prediction - just return target position
+        // Early SDK validation - required for all operations
+        if (!g_sdk || !g_sdk->object_manager)
+        {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: SDK not initialized");
+            result.hitchance = pred_sdk::hitchance::any;
+            return result;
+        }
+
+        // If source is null/invalid, use local player as default
         if (!spell_data.source || !spell_data.source->is_valid())
         {
-            result.hitchance = pred_sdk::hitchance::any;
-            return result;
+            spell_data.source = g_sdk->object_manager->get_local_player();
+            if (!spell_data.source || !spell_data.source->is_valid())
+            {
+                PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: local player invalid");
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
         }
 
-        // Use target selector to find best target
-        // CRITICAL: Check target_selector is available before calling
-        if (!sdk::target_selector)
+        math::vector3 source_pos = spell_data.source->get_position();
+        game_object* best_target = nullptr;
+
+        // Get sorted heroes from target selector for priority, then filter by range
+        std::vector<game_object*> candidates;
+        if (sdk::target_selector)
         {
-            result.hitchance = pred_sdk::hitchance::any;
-            return result;
+            auto sorted = sdk::target_selector->get_sorted_heroes();
+            for (auto* hero : sorted)
+            {
+                if (hero && hero->is_valid() && !hero->is_dead() &&
+                    hero->get_team_id() != spell_data.source->get_team_id() &&
+                    hero->is_visible())
+                {
+                    candidates.push_back(hero);
+                }
+            }
         }
 
-        auto* target = sdk::target_selector->get_hero_target();
-
-        if (!target || !target->is_valid())
+        // Fallback to all heroes if target selector unavailable
+        if (candidates.empty())
         {
+            auto heroes = g_sdk->object_manager->get_heroes();
+            for (auto* hero : heroes)
+            {
+                if (hero && hero->is_valid() && !hero->is_dead() &&
+                    hero->get_team_id() != spell_data.source->get_team_id() &&
+                    hero->is_visible())
+                {
+                    candidates.push_back(hero);
+                }
+            }
+        }
+
+        // Find best target within spell range (use target_selector priority order)
+        for (auto* hero : candidates)
+        {
+            float distance = hero->get_position().distance(source_pos);
+            float effective_range = spell_data.range + hero->get_bounding_radius();
+
+            if (distance <= effective_range)
+            {
+                // First valid target in priority order wins
+                best_target = hero;
+                break;
+            }
+        }
+
+        if (!best_target)
+        {
+            PRED_DEBUG_LOG("[Danny.Prediction] targetted() FAIL: no target in range");
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
+
+        game_object* target = best_target;
 
         // For targeted spells, prediction is trivial
         result.cast_position = target->get_position();
@@ -51,6 +105,13 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
         result.hitchance = pred_sdk::hitchance::very_high;
         result.target = target;
         result.is_valid = true;
+
+        if (PredictionSettings::get().enable_debug_logging && g_sdk)
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[Danny.Prediction] targetted() SUCCESS: %s", target->get_char_name().c_str());
+            g_sdk->log_console(msg);
+        }
     }
     catch (...)
     {
@@ -203,6 +264,16 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             g_sdk->log_console(debug_msg);
         }
 
+        // Store spell data for dump feature
+        auto& stored = PredictionSettings::get().last_spell_data;
+        stored.range = spell_data.range;
+        stored.radius = spell_data.radius;
+        stored.delay = spell_data.delay;
+        stored.speed = spell_data.projectile_speed;
+        stored.spell_type = static_cast<int>(spell_data.spell_type);
+        stored.hitchance = static_cast<int>(spell_data.expected_hitchance);
+        stored.valid = true;
+
         // CRITICAL: Check range BEFORE prediction to avoid wasting computation
         // Cache positions to prevent inconsistency from flash/dash
         math::vector3 source_pos = spell_data.source->get_position();
@@ -212,6 +283,14 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         // FIX: Use target bounding radius dynamically (Cho'Gath = 100+, Malphite = 80, etc.)
         float target_radius = obj->get_bounding_radius();
         float effective_max_range = spell_data.range + target_radius + 25.f;  // 25 for buffer
+
+        // For vector spells, max hit range = cast_range + range (e.g., Viktor E = 525 + 1100 = 1625)
+        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+        {
+            float first_cast_range = spell_data.cast_range;
+            if (first_cast_range < 1.f) first_cast_range = spell_data.range; // Fallback if not set
+            effective_max_range = first_cast_range + spell_data.range + target_radius + 25.f;
+        }
 
         if (distance_to_target > effective_max_range)
         {
@@ -230,6 +309,12 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         }
 
         // CRITICAL: Check fog of war status
+        if (!g_sdk || !g_sdk->clock_facade)
+        {
+            result.hitchance = pred_sdk::hitchance::any;
+            result.is_valid = false;
+            return result;
+        }
         float current_time = g_sdk->clock_facade->get_game_time();
         FogOfWarTracker::update_visibility(obj, current_time);
 
@@ -342,7 +427,19 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
 
         // CRITICAL: Validate predicted position is within spell range
         // This prevents casting at targets that will walk out of range
-        float predicted_distance = result.cast_position.distance(source_pos);
+        float predicted_distance;
+
+        // For vector spells (Viktor E, Rumble R), check vector length, not distance from player
+        // spell_data.range is the vector length (first_cast to cast_position), not player to end
+        // Note: first_cast_position range is already validated in optimize_vector_orientation
+        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+        {
+            predicted_distance = result.cast_position.distance(result.first_cast_position);
+        }
+        else
+        {
+            predicted_distance = result.cast_position.distance(source_pos);
+        }
 
         // For linear skillshots, the hitbox extends beyond the center point by the radius
         float range_buffer = (spell_data.spell_type == pred_sdk::spell_type::linear) ? spell_data.radius : 0.f;
@@ -362,7 +459,18 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             if (tracker)
             {
                 math::vector3 target_velocity = tracker->get_current_velocity();
-                math::vector3 to_predicted = result.cast_position - source_pos;
+
+                // For vector spells, use direction along the vector, not from player
+                math::vector3 to_predicted;
+                if (spell_data.spell_type == pred_sdk::spell_type::vector)
+                {
+                    to_predicted = result.cast_position - result.first_cast_position;
+                }
+                else
+                {
+                    to_predicted = result.cast_position - source_pos;
+                }
+
                 float to_pred_mag = to_predicted.magnitude();
 
                 if (to_pred_mag > 0.001f)
@@ -422,7 +530,7 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             try
             {
                 PredictionTelemetry::PredictionEvent event;
-                event.timestamp = g_sdk->clock_facade->get_game_time();
+                event.timestamp = (g_sdk && g_sdk->clock_facade) ? g_sdk->clock_facade->get_game_time() : 0.f;
                 event.target_name = obj->get_char_name();
 
                 // Map spell type enum to string
@@ -435,8 +543,11 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 default: event.spell_type = "unknown"; break;
                 }
 
+                event.spell_slot = spell_data.spell_slot;
                 event.hit_chance = hybrid_result.hit_chance;
                 event.confidence = hybrid_result.confidence_score;
+                event.physics_contribution = hybrid_result.physics_contribution;
+                event.behavior_contribution = hybrid_result.behavior_contribution;
                 event.distance = spell_data.source->get_position().distance(obj->get_position());
                 event.computation_time_ms = computation_time_ms;
 
@@ -719,12 +830,41 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     static float last_target_score = 0.f;
     constexpr float STICKINESS_THRESHOLD = 0.15f;  // Need 15% better score to switch
 
-    // Calculate search range: Tactical vs Global spells
+    // CRITICAL: Validate spell range - don't target across the map
+    if (spell_data.range < 100.f || spell_data.range > 25000.f)
+    {
+        if (PredictionSettings::get().enable_debug_logging && g_sdk)
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[Danny.Prediction] get_best_target: Invalid range %.0f", spell_data.range);
+            g_sdk->log_console(msg);
+        }
+        return nullptr;
+    }
+
+    // Calculate search range: Only slightly beyond spell range
+    // Tight buffer prevents targeting far enemies that cause prediction issues
     float search_range = spell_data.range;
     if (spell_data.range < 2500.f)
     {
-        float buffer = std::min(spell_data.range * 0.5f, 300.f);
+        // Small buffer for targets walking into range (100 units max)
+        float buffer = std::min(spell_data.range * 0.1f, 100.f);
         search_range = spell_data.range + buffer;
+    }
+    else
+    {
+        // For truly global spells (Ezreal R, Jinx R, Ashe R), allow full map search
+        // For semi-globals (Xerath R ~5000, TF R ~5500, Pantheon R ~5500), use spell range + buffer
+        // Don't hard cap at 3000 which would break semi-globals
+        if (spell_data.range > 10000.f)
+        {
+            search_range = 25000.f;  // Full map diagonal
+        }
+        else
+        {
+            // Use spell range + 500 buffer, cap at map limits for sanity
+            search_range = std::min(spell_data.range + 500.f, 25000.f);
+        }
     }
 
     // IMPROVED: Iterate ALL enemies and compare scores
@@ -740,6 +880,9 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
     {
         sdk_preferred = sdk::target_selector->get_hero_target();
     }
+
+    if (!g_sdk || !g_sdk->object_manager)
+        return nullptr;
 
     auto all_heroes = g_sdk->object_manager->get_heroes();
 
@@ -1078,7 +1221,7 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_aoe_cluster(
             }
 
             result.min_hit_chance = min_hc;
-            result.avg_hit_chance = sum_hc / best_hit_chances.size();
+            result.avg_hit_chance = best_hit_chances.size() > 0 ? sum_hc / best_hit_chances.size() : 0.f;
             result.is_valid = true;
         }
     }
@@ -1273,7 +1416,233 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_linear_aoe(
             }
 
             result.min_hit_chance = min_hc;
-            result.avg_hit_chance = sum_hc / best_hit_chances.size();
+            result.avg_hit_chance = best_hit_chances.size() > 0 ? sum_hc / best_hit_chances.size() : 0.f;
+            result.is_valid = true;
+        }
+    }
+    catch (...)
+    {
+        result.is_valid = false;
+    }
+
+    return result;
+}
+
+// =============================================================================
+// CONE AOE PREDICTION (MULTI-TARGET WEDGE)
+// =============================================================================
+
+CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_cone_aoe(
+    pred_sdk::spell_data spell_data,
+    int min_hits,
+    float min_single_hc,
+    bool priority_weighted)
+{
+    CustomPredictionSDK::aoe_pred_result result;
+
+    try
+    {
+        if (!g_sdk || !g_sdk->object_manager)
+            return result;
+
+        // Ensure source is valid
+        if (!spell_data.source || !spell_data.source->is_valid())
+        {
+            spell_data.source = g_sdk->object_manager->get_local_player();
+            if (!spell_data.source)
+                return result;
+        }
+
+        math::vector3 source_pos = spell_data.source->get_position();
+
+        // Get cone parameters
+        float cone_range = spell_data.range;
+        float cone_half_angle = std::atan2(spell_data.radius, spell_data.range); // Fallback
+
+        // Try to get actual cone angle from spell data
+        if (spell_data.spell_slot >= 0)
+        {
+            spell_entry* spell_entry_ptr = spell_data.source->get_spell(spell_data.spell_slot);
+            if (spell_entry_ptr)
+            {
+                auto spell_info = spell_entry_ptr->get_data();
+                if (spell_info)
+                {
+                    auto static_data = spell_info->get_static_data();
+                    if (static_data)
+                    {
+                        float angle = static_data->get_cast_cone_angle();
+                        if (angle > 0.f)
+                        {
+                            cone_half_angle = (angle * 0.5f) * (3.14159265f / 180.f);
+                        }
+                        float dist = static_data->get_cast_cone_distance();
+                        if (dist > 0.f)
+                        {
+                            cone_range = dist;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 1: Get targets with predictions
+        struct TargetPrediction
+        {
+            game_object* target;
+            math::vector3 predicted_pos;
+            float hit_chance;
+            float priority;
+        };
+        std::vector<TargetPrediction> candidates;
+
+        // Get enemy list
+        std::vector<game_object*> enemy_list;
+        if (sdk::target_selector)
+        {
+            auto sorted = sdk::target_selector->get_sorted_heroes();
+            for (auto* hero : sorted)
+            {
+                if (hero && hero->is_valid() && !hero->is_dead() &&
+                    hero->get_team_id() != spell_data.source->get_team_id())
+                {
+                    enemy_list.push_back(hero);
+                }
+            }
+        }
+
+        if (enemy_list.empty())
+        {
+            auto heroes = g_sdk->object_manager->get_heroes();
+            for (auto* hero : heroes)
+            {
+                if (hero && hero->is_valid() && !hero->is_dead() &&
+                    hero->get_team_id() != spell_data.source->get_team_id())
+                {
+                    enemy_list.push_back(hero);
+                }
+            }
+        }
+
+        // Process each enemy
+        for (size_t i = 0; i < enemy_list.size(); ++i)
+        {
+            game_object* hero = enemy_list[i];
+
+            if (!hero->is_visible())
+                continue;
+
+            float dist = hero->get_position().distance(source_pos);
+            if (dist > cone_range + 200.f)
+                continue;
+
+            // Get individual prediction
+            pred_sdk::pred_data pred = predict(hero, spell_data);
+            if (!pred.is_valid)
+                continue;
+
+            // Convert hitchance enum to float
+            float hc = 0.f;
+            switch (pred.hitchance)
+            {
+            case pred_sdk::hitchance::very_high: hc = 0.9f; break;
+            case pred_sdk::hitchance::high: hc = 0.7f; break;
+            case pred_sdk::hitchance::medium: hc = 0.5f; break;
+            case pred_sdk::hitchance::low: hc = 0.3f; break;
+            default: hc = 0.1f; break;
+            }
+
+            if (hc < min_single_hc)
+                continue;
+
+            float priority = 1.0f;
+            if (priority_weighted)
+            {
+                priority = 1.0f + std::max(0.f, 0.5f - (i * 0.1f));
+            }
+
+            candidates.push_back({ hero, pred.cast_position, hc, priority });
+        }
+
+        result.targets_in_range = static_cast<int>(candidates.size());
+
+        if (candidates.size() < static_cast<size_t>(min_hits))
+            return result;
+
+        // Step 2: Test multiple directions to find optimal cone orientation
+        constexpr int NUM_DIRECTIONS = 36; // Test every 10 degrees
+        math::vector3 best_dir;
+        float best_score = -1.f;
+        std::vector<game_object*> best_hit_targets;
+        std::vector<float> best_hit_chances;
+
+        for (int i = 0; i < NUM_DIRECTIONS; ++i)
+        {
+            float angle = (2.f * 3.14159265f * i) / NUM_DIRECTIONS;
+            math::vector3 direction(std::cos(angle), 0.f, std::sin(angle));
+
+            // Check which targets fall within this cone
+            float score = 0.f;
+            std::vector<game_object*> hits;
+            std::vector<float> hcs;
+
+            for (const auto& c : candidates)
+            {
+                math::vector3 to_target = c.predicted_pos - source_pos;
+                float dist_to_target = to_target.magnitude();
+
+                // Check range
+                if (dist_to_target > cone_range)
+                    continue;
+
+                // Check angle
+                if (dist_to_target > 0.001f)
+                {
+                    math::vector3 target_dir = to_target / dist_to_target;
+                    float dot = direction.x * target_dir.x + direction.z * target_dir.z;
+                    float angle_to_target = std::acos(std::clamp(dot, -1.f, 1.f));
+
+                    if (angle_to_target <= cone_half_angle)
+                    {
+                        // Target is within cone
+                        float contrib = c.hit_chance * c.priority;
+                        score += contrib;
+                        hits.push_back(c.target);
+                        hcs.push_back(c.hit_chance);
+                    }
+                }
+            }
+
+            if (score > best_score && hits.size() >= static_cast<size_t>(min_hits))
+            {
+                best_score = score;
+                best_dir = direction;
+                best_hit_targets = hits;
+                best_hit_chances = hcs;
+            }
+        }
+
+        // Step 3: Populate result
+        if (best_hit_targets.size() >= static_cast<size_t>(min_hits))
+        {
+            // Cast position is at max range in best direction
+            result.cast_position = source_pos + best_dir * cone_range;
+            result.hit_targets = best_hit_targets;
+            result.hit_chances = best_hit_chances;
+            result.expected_hits = 0.f;
+
+            float min_hc = 1.f;
+            float sum_hc = 0.f;
+
+            for (size_t i = 0; i < best_hit_chances.size(); ++i)
+            {
+                result.expected_hits += best_hit_chances[i];
+                min_hc = std::min(min_hc, best_hit_chances[i]);
+                sum_hc += best_hit_chances[i];
+            }
+
+            result.min_hit_chance = min_hc;
+            result.avg_hit_chance = best_hit_chances.size() > 0 ? sum_hc / best_hit_chances.size() : 0.f;
             result.is_valid = true;
         }
     }
@@ -1295,6 +1664,24 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_aoe(
     float min_single_hc,
     bool priority_weighted)
 {
+    // Check for cone spell first (auto-detection)
+    if (spell_data.spell_slot >= 0 && spell_data.source)
+    {
+        spell_entry* spell_entry_ptr = spell_data.source->get_spell(spell_data.spell_slot);
+        if (spell_entry_ptr)
+        {
+            auto spell_info = spell_entry_ptr->get_data();
+            if (spell_info)
+            {
+                auto static_data = spell_info->get_static_data();
+                if (static_data && static_data->get_cast_cone_angle() > 0.f)
+                {
+                    return predict_cone_aoe(spell_data, min_hits, min_single_hc, priority_weighted);
+                }
+            }
+        }
+    }
+
     // Route to appropriate solver based on spell type
     switch (spell_data.spell_type)
     {
@@ -1354,11 +1741,89 @@ bool CustomPredictionSDK::check_collision_simple(
                 if (line_length < 0.001f)
                     continue;  // Start and end are same point
                 math::vector3 line_dir = line_diff / line_length;
+
+                // FIX: Predict minion position when spell arrives
+                // Calculate time for spell to reach minion's current position
+                math::vector3 to_minion_current = minion_pos - start;
+                float distance_to_minion = to_minion_current.dot(line_dir);
+
+                // Calculate perpendicular distance to spell line (for safety margin calculations)
+                float perp_distance_sq = to_minion_current.magnitude() * to_minion_current.magnitude()
+                                        - distance_to_minion * distance_to_minion;
+                float perp_distance = (perp_distance_sq > 0.f) ? std::sqrt(perp_distance_sq) : 0.f;
+
+                // Extra safety margin for stationary minions that might start moving
+                float safety_margin = 0.f;
+
+                if (distance_to_minion > 0 && spell_data.projectile_speed > 0)
+                {
+                    float travel_time = spell_data.delay + (distance_to_minion / spell_data.projectile_speed);
+
+                    // Predict minion movement (minions move at ~325 MS along path)
+                    if (minion->is_moving())
+                    {
+                        auto path = minion->get_path();
+                        if (!path.empty())
+                        {
+                            // Last waypoint is the path end
+                            math::vector3 minion_path_end = path.back();
+                            math::vector3 move_dir = minion_path_end - minion_pos;
+                            float move_dist = move_dir.magnitude();
+
+                            if (move_dist > 1.0f)
+                            {
+                                move_dir = move_dir / move_dist;
+                                float minion_speed = minion->get_move_speed();
+                                float predicted_move = minion_speed * travel_time;
+
+                                // Don't predict beyond path end
+                                predicted_move = std::min(predicted_move, move_dist);
+                                minion_pos = minion_pos + move_dir * predicted_move;
+                            }
+                        }
+
+                        // Add uncertainty margin for moving minions (they might change direction)
+                        // Scale with travel time - longer travel = more uncertainty
+                        safety_margin = std::min(travel_time * 30.f, 50.f);  // Max 50 units
+                    }
+                    else
+                    {
+                        // CRITICAL FIX: Stationary minions near the spell path are DANGEROUS
+                        // They can start moving at any time (after attack animation, aggro change, etc.)
+                        //
+                        // For long travel times (like Thresh Q: 0.5s delay + flight time),
+                        // a stationary minion can easily walk 100+ units into the path
+                        //
+                        // Safety margin scales with:
+                        // 1. Travel time (longer = more time for minion to start moving)
+                        // 2. Proximity to spell line (closer = more likely to block)
+
+                        float minion_speed = minion->get_move_speed();  // Usually ~325 for caster, ~345 for melee
+
+                        // How far could minion move if it starts walking NOW?
+                        // Use 60% of travel time (assumes ~0.3s reaction + attack finish)
+                        float potential_movement = minion_speed * travel_time * 0.6f;
+
+                        // If minion is close to the path and could reach it, add safety margin
+                        // Only apply if minion is within potential movement distance of the path
+                        if (perp_distance < potential_movement + spell_data.radius + 50.f)
+                        {
+                            // Scale margin: closer to path = bigger margin (more dangerous)
+                            // Max margin when minion is right on the edge of collision radius
+                            float proximity_factor = 1.0f - std::min(perp_distance / (potential_movement + 50.f), 1.0f);
+                            safety_margin = potential_movement * proximity_factor * 0.5f;
+
+                            // Cap at reasonable value
+                            safety_margin = std::min(safety_margin, 80.f);
+                        }
+                    }
+                }
+
                 math::vector3 to_minion = minion_pos - start;
 
                 float projection = to_minion.dot(line_dir);
                 float minion_radius = minion->get_bounding_radius();
-                float collision_radius = spell_data.radius + minion_radius;
+                float collision_radius = spell_data.radius + minion_radius + safety_margin;
 
                 // FIX: Account for bounding radius when checking projection bounds
                 // Minion can block if its hitbox overlaps the line, even if center is behind/beyond
@@ -1378,6 +1843,8 @@ bool CustomPredictionSDK::check_collision_simple(
         }
         else if (collision_type == pred_sdk::collision_type::hero)
         {
+            if (!g_sdk || !g_sdk->object_manager)
+                continue;
             auto heroes = g_sdk->object_manager->get_heroes();
 
             for (auto* hero : heroes)

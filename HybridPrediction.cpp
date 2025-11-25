@@ -189,25 +189,59 @@ namespace HybridPred
                     // Cap velocity magnitude while preserving direction
                     snapshot.velocity = (snapshot.velocity / vel_magnitude) * MAX_SANE_VELOCITY;
                 }
-            }
 
-            // Detect auto-attack for post-AA movement analysis
-            if (!movement_history_.empty() && snapshot.is_auto_attacking && !movement_history_.back().is_auto_attacking)
-            {
-                last_aa_time_ = current_time;
-            }
+                // SMART VELOCITY SMOOTHING: Snap on sharp turns, smooth otherwise
+                // Standard smoothing causes "drift" on sharp jukes - takes ~200ms to catch up
+                // If angle change > 60 degrees, snap instantly to catch the juke
+                float raw_speed = snapshot.velocity.magnitude();
+                float smooth_speed = smoothed_velocity_.magnitude();
 
-            // Track post-AA movement delay
-            if (!movement_history_.empty() && last_aa_time_ > 0.f && snapshot.velocity.magnitude() > 10.f &&
-                movement_history_.back().velocity.magnitude() < 10.f)
-            {
-                float delay = current_time - last_aa_time_;
-                if (delay < 1.0f) // Only track reasonable delays
+                if (raw_speed > 100.f && smooth_speed > 100.f)
                 {
-                    post_aa_movement_delays_.push_back(delay);
-                    if (post_aa_movement_delays_.size() > 20)
-                        post_aa_movement_delays_.erase(post_aa_movement_delays_.begin());
+                    // Check angle between new raw velocity and old smoothed velocity
+                    float dot = snapshot.velocity.normalized().dot(smoothed_velocity_.normalized());
+
+                    if (dot < 0.5f)  // Angle > 60 degrees
+                    {
+                        // Sharp turn detected! Snap instantly to new direction
+                        smoothed_velocity_ = snapshot.velocity;
+                    }
+                    else
+                    {
+                        // Smooth movement: Apply exponential smoothing
+                        constexpr float SMOOTH_ALPHA = 0.3f;
+                        smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
+                    }
                 }
+                else
+                {
+                    smoothed_velocity_ = snapshot.velocity;
+                }
+                snapshot.velocity = smoothed_velocity_;  // Commit to snapshot
+            }
+        }
+        else
+        {
+            snapshot.velocity = math::vector3(0, 0, 0);
+            smoothed_velocity_ = math::vector3(0, 0, 0);
+        }
+
+        // Detect auto-attack for post-AA movement analysis
+        if (!movement_history_.empty() && snapshot.is_auto_attacking && !movement_history_.back().is_auto_attacking)
+        {
+            last_aa_time_ = current_time;
+        }
+
+        // Track post-AA movement delay
+        if (!movement_history_.empty() && last_aa_time_ > 0.f && snapshot.velocity.magnitude() > 10.f &&
+            movement_history_.back().velocity.magnitude() < 10.f)
+        {
+            float delay = current_time - last_aa_time_;
+            if (delay < 1.0f) // Only track reasonable delays
+            {
+                post_aa_movement_delays_.push_back(delay);
+                if (post_aa_movement_delays_.size() > 20)
+                    post_aa_movement_delays_.erase(post_aa_movement_delays_.begin());
             }
         }
 
@@ -272,6 +306,7 @@ namespace HybridPred
             // Dot product to determine forward/backward
             float dot = prev_dir.dot(curr_dir);
 
+            // Original threshold for frequency stats
             if (cross_y > 0.1f) left_count++;
             else if (cross_y < -0.1f) right_count++;
 
@@ -328,8 +363,15 @@ namespace HybridPred
         }
 
         // Build juke sequence from recent direction changes
+        std::vector<int> old_sequence = dodge_pattern_.juke_sequence;  // Save for comparison
         dodge_pattern_.juke_sequence.clear();
         constexpr size_t MAX_SEQUENCE_LENGTH = 8;
+
+        // Track juke events for magnitude measurement
+        // We measure RETROSPECTIVELY: when a new juke starts, we calculate the previous juke's total magnitude
+        size_t juke_start_idx = 0;
+        math::vector3 juke_ref_dir{};  // Direction before juke started
+        bool tracking_juke = false;
 
         for (size_t i = movement_history_.size() > MAX_SEQUENCE_LENGTH + 1 ?
             movement_history_.size() - MAX_SEQUENCE_LENGTH : 1;
@@ -359,6 +401,43 @@ namespace HybridPred
                 current_move = 1;   // Right
             // else current_move = 0 (Straight)
 
+            // JUKE MAGNITUDE TRACKING: Measure full juke distance retrospectively
+            // When direction changes again (or straightens), the previous juke just ended
+            int last_move = dodge_pattern_.juke_sequence.empty() ? 0 : dodge_pattern_.juke_sequence.back();
+            if (tracking_juke && current_move != last_move)
+            {
+                // Previous juke ended - calculate its TOTAL lateral displacement
+                math::vector3 juke_perp(-juke_ref_dir.z, 0.f, juke_ref_dir.x);
+                math::vector3 total_displacement = curr.position - movement_history_[juke_start_idx].position;
+                float total_lateral = std::abs(total_displacement.x * juke_perp.x + total_displacement.z * juke_perp.z);
+
+                // Store magnitude (cap history at 16 entries)
+                constexpr size_t MAX_MAGNITUDE_HISTORY = 16;
+                if (dodge_pattern_.juke_magnitudes.size() >= MAX_MAGNITUDE_HISTORY)
+                    dodge_pattern_.juke_magnitudes.pop_front();
+                dodge_pattern_.juke_magnitudes.push_back(total_lateral);
+
+                // Update running average
+                float sum = 0.f;
+                for (float mag : dodge_pattern_.juke_magnitudes)
+                    sum += mag;
+                dodge_pattern_.average_juke_magnitude = sum / dodge_pattern_.juke_magnitudes.size();
+
+                tracking_juke = false;
+            }
+
+            // Start tracking new juke
+            if (current_move != 0 && !tracking_juke)
+            {
+                juke_start_idx = i - 1;  // Position before the direction change
+                juke_ref_dir = prev_dir;  // Direction before juke
+                tracking_juke = true;
+            }
+            else if (current_move == 0)
+            {
+                tracking_juke = false;
+            }
+
             // UPDATE N-GRAM TRANSITIONS: Record transition from previous move to current
             if (!dodge_pattern_.juke_sequence.empty())
             {
@@ -369,8 +448,35 @@ namespace HybridPred
             dodge_pattern_.juke_sequence.push_back(current_move);
         }
 
+        // BAYESIAN TRUST UPDATE: Check if our pattern prediction was correct
+        // Compare old sequence to new - if new juke appeared, check if it matches prediction
+        if (dodge_pattern_.awaiting_juke_result &&
+            dodge_pattern_.juke_sequence.size() > old_sequence.size() &&
+            !dodge_pattern_.juke_sequence.empty())
+        {
+            int actual_juke = dodge_pattern_.juke_sequence.back();
+
+            // Only update if they actually juked (not straight)
+            if (actual_juke != 0)
+            {
+                if (actual_juke == dodge_pattern_.last_predicted_juke)
+                {
+                    dodge_pattern_.pattern_trust.observe_correct();
+                }
+                else
+                {
+                    dodge_pattern_.pattern_trust.observe_incorrect();
+                }
+            }
+
+            dodge_pattern_.awaiting_juke_result = false;
+        }
+
         // Detect alternating pattern (L-R-L-R or R-L-R-L)
-        if (dodge_pattern_.juke_sequence.size() >= 4)
+        // EARNED CONFIDENCE: Require more evidence before trusting patterns
+        // Don't give high confidence after just L-R-L-R - need sustained pattern
+        // Increased thresholds to match more conservative overall approach (40 sample minimum)
+        if (dodge_pattern_.juke_sequence.size() >= 8)  // Need 8+ jukes for reliability
         {
             bool is_alternating = true;
             int alternation_count = 0;
@@ -388,15 +494,21 @@ namespace HybridPred
                 if (prev_juke == -curr_juke)
                     alternation_count++;
                 else
+                {
                     is_alternating = false;
+                    break;  // No point continuing - pattern is broken
+                }
             }
 
-            if (is_alternating && alternation_count >= 2)
+            // Require 5+ alternations for pattern (more conservative)
+            // Confidence scales: 5 alt = 0.55, 6 = 0.625, 7 = 0.70, 8+ = 0.75 max
+            if (is_alternating && alternation_count >= 5)
             {
-                // Alternating pattern detected!
+                // Alternating pattern detected with sufficient evidence
                 dodge_pattern_.has_pattern = true;
-                dodge_pattern_.pattern_confidence = std::min(0.9f, 0.6f + alternation_count * 0.1f);
-                // Pattern update time tracking disabled for standalone
+                float base_confidence = std::min(0.75f, 0.4f + alternation_count * 0.075f);
+                // Scale by Bayesian trust - if our predictions have been wrong, reduce confidence
+                dodge_pattern_.pattern_confidence = base_confidence * dodge_pattern_.pattern_trust.get_trust();
 
                 // Predict next juke: opposite of last
                 int last_juke = dodge_pattern_.juke_sequence.back();
@@ -411,11 +523,16 @@ namespace HybridPred
                         // Perpendicular: 90° rotation in XZ plane
                         math::vector3 perpendicular(-vel_dir.z, 0.f, vel_dir.x);
                         dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(-last_juke);
+
+                        // Track prediction for Bayesian trust update
+                        dodge_pattern_.last_predicted_juke = -last_juke;  // Opposite of last
+                        dodge_pattern_.awaiting_juke_result = true;
                     }
                 }
             }
             // Detect repeating sequence (e.g., L-L-R-L-L-R)
-            else if (dodge_pattern_.juke_sequence.size() >= 6)
+            // Require 10+ jukes for repeating pattern (more complex, needs more evidence)
+            else if (dodge_pattern_.juke_sequence.size() >= 10)
             {
                 // Check if first half matches second half
                 size_t half = dodge_pattern_.juke_sequence.size() / 2;
@@ -432,9 +549,12 @@ namespace HybridPred
 
                 if (is_repeating)
                 {
-                    // Repeating sequence detected!
+                    // Repeating sequence detected with sufficient evidence
                     dodge_pattern_.has_pattern = true;
-                    dodge_pattern_.pattern_confidence = 0.85f;
+                    // Scale by sequence length: 8 = 0.6, 10 = 0.65, 12+ = 0.7 max
+                    float base_confidence = std::min(0.7f, 0.5f + dodge_pattern_.juke_sequence.size() * 0.0125f);
+                    // Scale by Bayesian trust
+                    dodge_pattern_.pattern_confidence = base_confidence * dodge_pattern_.pattern_trust.get_trust();
                     if (g_sdk && g_sdk->clock_facade)
                         dodge_pattern_.last_pattern_update_time = g_sdk->clock_facade->get_game_time();
 
@@ -453,6 +573,10 @@ namespace HybridPred
                                 math::vector3 vel_dir = latest.velocity / vel_mag;
                                 math::vector3 perpendicular(-vel_dir.z, 0.f, vel_dir.x);
                                 dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(next_in_sequence);
+
+                                // Track prediction for Bayesian trust update
+                                dodge_pattern_.last_predicted_juke = next_in_sequence;
+                                dodge_pattern_.awaiting_juke_result = true;
                             }
                         }
                     }
@@ -538,7 +662,8 @@ namespace HybridPred
         if (movement_history_.empty())
             return math::vector3{};
 
-        return movement_history_.back().velocity;
+        // Return smoothed velocity to reduce jitter from spam clicking
+        return smoothed_velocity_;
     }
 
     BehaviorPDF TargetBehaviorTracker::build_behavior_pdf(float prediction_time, float move_speed) const
@@ -587,8 +712,8 @@ namespace HybridPred
         // ADAPTIVE DECAY RATE: Adjust based on target mobility
         float decay_rate = get_adaptive_decay_rate(latest.velocity.magnitude());
 
-        // If animation locked, predict stationary at current position
-        if (latest.is_cced || latest.is_casting)
+        // If animation locked (AA, casting, or CC'd), predict stationary at current position
+        if (latest.is_auto_attacking || latest.is_casting || latest.is_cced)
         {
             pdf.origin = latest.position;
             pdf.add_weighted_sample(latest.position, 1.0f);
@@ -601,6 +726,7 @@ namespace HybridPred
         math::vector3 predicted_center{};
         float total_weight = 0.f;
         int sample_count = 0;
+        float current_weight = 1.0f;  // decay_rate^0 = 1.0
 
         for (size_t i = 0; i < movement_history_.size() && sample_count < 30; ++i)
         {
@@ -608,11 +734,24 @@ namespace HybridPred
             const auto& snapshot = movement_history_[idx];
 
             // Exponential decay weighting (recent data more important)
-            // Use adaptive decay rate based on target mobility
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
+            float weight = current_weight;
+            current_weight *= decay_rate;  // Prepare next weight
 
-            // Predict position from this snapshot
-            math::vector3 predicted_pos = snapshot.position + snapshot.velocity * prediction_time;
+            // FIX: Scale historical velocity to current move_speed
+            // Direction from history, magnitude from current move_speed stat
+            // This handles both slows (scale down) and speed buffs (scale up)
+            math::vector3 adjusted_velocity = snapshot.velocity;
+            float snapshot_speed = snapshot.velocity.magnitude();
+            if (snapshot_speed > 10.f && move_speed > 1.f)
+            {
+                // Scale velocity magnitude to current move_speed
+                adjusted_velocity = snapshot.velocity.normalized() * move_speed;
+            }
+            // If snapshot_speed <= 10, target was stationary - keep as-is
+
+            // Predict position from this snapshot with adjusted velocity
+            math::vector3 predicted_pos = snapshot.position + adjusted_velocity * prediction_time;
 
             // Accumulate for weighted average
             predicted_center = predicted_center + predicted_pos * weight;
@@ -631,11 +770,17 @@ namespace HybridPred
             // Fallback to simple linear prediction
             predicted_center = latest.position + latest.velocity * prediction_time;
         }
-        pdf.origin = predicted_center;
+
+        // FIX: Grid snapping to stabilize PDF across frames
+        // Snap origin to cell_size multiples to prevent jitter from micro-position changes
+        float snap_x = std::round(predicted_center.x / pdf.cell_size) * pdf.cell_size;
+        float snap_z = std::round(predicted_center.z / pdf.cell_size) * pdf.cell_size;
+        pdf.origin = math::vector3(snap_x, predicted_center.y, snap_z);
 
         // Second pass: Add samples to PDF (now properly centered)
         total_weight = 0.f;
         sample_count = 0;
+        current_weight = 1.0f;  // Reset for second pass
 
         for (size_t i = 0; i < movement_history_.size() && sample_count < 30; ++i)
         {
@@ -643,11 +788,20 @@ namespace HybridPred
             const auto& snapshot = movement_history_[idx];
 
             // Exponential decay weighting (recent data more important)
-            // Use adaptive decay rate based on target mobility
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
+            float weight = current_weight;
+            current_weight *= decay_rate;  // Prepare next weight
 
-            // Predict position from this snapshot
-            math::vector3 predicted_pos = snapshot.position + snapshot.velocity * prediction_time;
+            // FIX: Scale historical velocity to current move_speed (same as first pass)
+            math::vector3 adjusted_velocity = snapshot.velocity;
+            float snapshot_speed = snapshot.velocity.magnitude();
+            if (snapshot_speed > 10.f && move_speed > 1.f)
+            {
+                adjusted_velocity = snapshot.velocity.normalized() * move_speed;
+            }
+
+            // Predict position from this snapshot with adjusted velocity
+            math::vector3 predicted_pos = snapshot.position + adjusted_velocity * prediction_time;
 
             // Add to PDF with weight
             pdf.add_weighted_sample(predicted_pos, weight);
@@ -667,37 +821,65 @@ namespace HybridPred
             // Perpendicular in XZ plane (2D movement) - 90° rotation
             math::vector3 perpendicular(-velocity_dir.z, 0.f, velocity_dir.x);
 
-            // Compute forward and lateral displacement separately
-            math::vector3 forward = latest.velocity * prediction_time;
+            // FIX: Use current move_speed for dodge calculations
+            // Direction from velocity, magnitude from move_speed stat
 
-            // LEARNED lateral dodge factor from actual movement patterns
-            // Compute average lateral component from direction changes
-            float lateral_factor = 0.5f;  // Default fallback
-            if (direction_change_angles_.size() >= 3)
-            {
-                // Average absolute lateral component (sin of angle)
-                float total_lateral = 0.f;
-                for (float angle : direction_change_angles_)
-                {
-                    total_lateral += std::abs(std::sin(angle));
-                }
-                lateral_factor = total_lateral / direction_change_angles_.size();
-                lateral_factor = std::clamp(lateral_factor, 0.2f, 0.9f);  // Reasonable bounds
-            }
-            float dodge_distance = latest.velocity.magnitude() * prediction_time * lateral_factor;
-            math::vector3 side = perpendicular * dodge_distance;
+            // USE OBSERVED JUKE MAGNITUDE instead of inferring from angles
+            // This tells us exactly how far they travel laterally during jukes
+            float total_distance = move_speed * prediction_time;
+            float observed_lateral = dodge_pattern_.get_juke_magnitude(move_speed);
 
-            // Juke cadence weighting: Weight lateral dodge samples based on timing
-            // If prediction_time is close to juke_interval_mean, the target is likely to juke
-            // Use Gaussian weighting: higher weight near typical juke time, lower weight far from it
+            // Cap lateral at 90% of total distance to maintain forward momentum
+            // (They can't juke further than they can travel)
+            observed_lateral = std::min(observed_lateral, total_distance * 0.9f);
+
+            // Pythagorean: forward² + lateral² = total² (distance conservation)
+            float forward_distance = std::sqrt(total_distance * total_distance - observed_lateral * observed_lateral);
+            math::vector3 forward = velocity_dir * forward_distance;
+            math::vector3 side = perpendicular * observed_lateral;
+
+            // Juke cadence weighting: Weight based on WHERE we are in their juke cycle
+            // Key insight: We need time since LAST juke to predict NEXT juke
             float juke_cadence_weight = 1.0f;  // Default
-            if (dodge_pattern_.juke_interval_variance > EPSILON)
+            if (dodge_pattern_.juke_interval_variance > EPSILON && !direction_change_times_.empty())
             {
-                float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
-                float time_diff = prediction_time - dodge_pattern_.juke_interval_mean;
-                // Gaussian: k = exp(-0.5 * ((t - μ) / σ)²)
+                // Get time since last direction change (juke)
+                float current_time = 0.f;
+                if (g_sdk && g_sdk->clock_facade)
+                    current_time = g_sdk->clock_facade->get_game_time();
+
+                float last_juke_time = direction_change_times_.back();
+                float time_since_last_juke = current_time - last_juke_time;
+
+                // Predict when next juke will happen based on their rhythm
+                // If they juke every 0.5s on average and last juked 0.2s ago, next is in 0.3s
+                float time_until_next_juke = dodge_pattern_.juke_interval_mean - time_since_last_juke;
+
+                // If negative, they're "overdue" for a juke - wrap to next cycle
+                // Guard against infinite loop if juke_interval_mean is invalid
+                int wrap_count = 0;
+                while (time_until_next_juke < 0.f && wrap_count < 100)
+                {
+                    if (dodge_pattern_.juke_interval_mean <= EPSILON)
+                        break;
+                    time_until_next_juke += dodge_pattern_.juke_interval_mean;
+                    wrap_count++;
+                }
+
+                // Gaussian weight: high when spell arrives near expected juke time
+                // Defensive: max(0, variance) handles floating point precision edge cases
+                float sigma = std::sqrt(std::max(0.f, dodge_pattern_.juke_interval_variance));
+                float time_diff = prediction_time - time_until_next_juke;
                 juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
-                // Clamp to reasonable range [0.3, 1.0] - still apply some dodge bias even off-rhythm
+                juke_cadence_weight = std::clamp(juke_cadence_weight, 0.3f, 1.0f);
+            }
+            else if (dodge_pattern_.juke_interval_variance > EPSILON)
+            {
+                // Fallback: no juke history yet, use old method
+                // Defensive: max(0, variance) handles floating point precision edge cases
+                float sigma = std::sqrt(std::max(0.f, dodge_pattern_.juke_interval_variance));
+                float time_diff = prediction_time - dodge_pattern_.juke_interval_mean;
+                juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
                 juke_cadence_weight = std::clamp(juke_cadence_weight, 0.3f, 1.0f);
             }
 
@@ -707,9 +889,10 @@ namespace HybridPred
             float ngram_left = dodge_pattern_.get_ngram_probability(-1);
             float ngram_right = dodge_pattern_.get_ngram_probability(1);
 
-            // Blend: 60% N-Gram + 40% overall frequency (N-Gram is more specific to current state)
-            float left_weight = 0.6f * ngram_left + 0.4f * dodge_pattern_.left_dodge_frequency;
-            float right_weight = 0.6f * ngram_right + 0.4f * dodge_pattern_.right_dodge_frequency;
+            // Blend: 40% N-Gram + 60% overall frequency
+            // Don't overfit to last few transitions - overall frequency is more stable
+            float left_weight = 0.4f * ngram_left + 0.6f * dodge_pattern_.left_dodge_frequency;
+            float right_weight = 0.4f * ngram_right + 0.6f * dodge_pattern_.right_dodge_frequency;
 
             if (left_weight > 0.2f)
             {
@@ -723,20 +906,28 @@ namespace HybridPred
                 pdf.add_weighted_sample(right_pos, right_weight * 0.5f * juke_cadence_weight);
             }
 
-            // PATTERN-BASED PREDICTION BOOST
-            // If we detected a repeating pattern, heavily weight the predicted next juke
+            // PATTERN-BASED PREDICTION
+            // If we detected a repeating pattern, weight the predicted juke position
+            // But also account for the chance they DON'T juke (break pattern)
             if (dodge_pattern_.has_pattern && dodge_pattern_.pattern_confidence > 0.6f)
             {
                 // Predict position based on detected pattern
-                float pattern_distance = latest.velocity.magnitude() * prediction_time;
+                // Use same distance conservation as above
                 math::vector3 pattern_predicted_pos = latest.position +
-                    latest.velocity * prediction_time +
-                    dodge_pattern_.predicted_next_direction * (pattern_distance * lateral_factor);
+                    forward +  // Already scaled by forward_distance
+                    dodge_pattern_.predicted_next_direction * observed_lateral;
 
-                // Heavy weight: pattern confidence dictates how much we trust this
-                // Use 2x-3x normal weight to make pattern predictions dominant
-                float pattern_weight = dodge_pattern_.pattern_confidence * 2.5f;
+                // Pattern weight: commit to predicted juke but scale by timing
+                // If prediction_time matches their juke rhythm, we're more confident
+                float pattern_weight = dodge_pattern_.pattern_confidence * 1.8f * juke_cadence_weight;
                 pdf.add_weighted_sample(pattern_predicted_pos, pattern_weight);
+
+                // Also add "no juke" position - they might break the pattern
+                // Always significant weight - even established patterns get broken
+                // Weight higher when timing is off-rhythm (low juke_cadence_weight)
+                math::vector3 no_juke_pos = latest.position + velocity_dir * total_distance;
+                float no_juke_weight = std::max(0.5f, (1.0f - dodge_pattern_.pattern_confidence) + (1.0f - juke_cadence_weight) * 0.5f);
+                pdf.add_weighted_sample(no_juke_pos, no_juke_weight);
             }
         }
 
@@ -822,13 +1013,13 @@ namespace HybridPred
         if (elapsed_time < patience_window)
             return false;
 
-        if (history.size() < 5)  // Need at least 5 samples to detect trend
+        if (history.size() < 6)  // Need at least 6 samples to detect trend
             return false;
 
         // SAFEGUARD 2: Minimum Quality
-        // Peak must be within 10% of adaptive_threshold to be worth taking
-        // Prevents casting on 40% "peak" when threshold is 80%
-        if (hit_chance < adaptive_threshold * 0.90f)
+        // Peak must meet the full adaptive_threshold to be worth taking
+        // No compromise - if threshold is 65%, need at least 65%
+        if (hit_chance < adaptive_threshold)
             return false;
 
         // Check if this is a local maximum
@@ -851,19 +1042,21 @@ namespace HybridPred
             return false;
 
         // SAFEGUARD 3: Sustained Decline
-        // Check if declining for 3+ consecutive samples (not just 1-2)
+        // Check if declining for 4+ consecutive samples (not just 2-3)
         // This prevents casting on random noise/blips
-        if (history.size() >= 4)
+        if (history.size() >= 5)
         {
+            float sample_5_ago = history[history.size() - 5].second;
             float sample_4_ago = history[history.size() - 4].second;
             float sample_3_ago = history[history.size() - 3].second;
             float sample_2_ago = history[history.size() - 2].second;
             float sample_1_ago = history[history.size() - 1].second;
 
-            // SUSTAINED declining trend: 3+ consecutive drops
+            // SUSTAINED declining trend: 4+ consecutive drops
             bool is_sustained_decline = (sample_1_ago < sample_2_ago) &&
                 (sample_2_ago < sample_3_ago) &&
-                (sample_3_ago < sample_4_ago);
+                (sample_3_ago < sample_4_ago) &&
+                (sample_4_ago < sample_5_ago);
 
             if (is_sustained_decline)
                 return true;  // Safe to cast - sustained decline confirmed!
@@ -874,23 +1067,23 @@ namespace HybridPred
 
     float OpportunityWindow::get_adaptive_threshold(float base_threshold, float elapsed_time) const
     {
-        // Adaptive threshold decay: lower standards over time
-        // 0-3s: Full threshold (no decay)
-        // 3-8s: Linear decay to 70% of threshold
-        // 8s+: Minimum 70% of original threshold
+        // Adaptive threshold decay: lower standards over time (CONSERVATIVE)
+        // 0-5s: Full threshold (no decay) - be patient
+        // 5-12s: Linear decay to 85% of threshold
+        // 12s+: Minimum 85% of original threshold
 
-        if (elapsed_time < 3.0f)
-            return base_threshold;  // No decay yet
+        if (elapsed_time < 5.0f)
+            return base_threshold;  // No decay yet - be patient
 
-        if (elapsed_time < 8.0f)
+        if (elapsed_time < 12.0f)
         {
-            // Linear interpolation: 100% → 70% over 5 seconds
-            float decay_factor = 1.0f - ((elapsed_time - 3.0f) / 5.0f) * 0.3f;
+            // Linear interpolation: 100% → 85% over 7 seconds
+            float decay_factor = 1.0f - ((elapsed_time - 5.0f) / 7.0f) * 0.15f;
             return base_threshold * decay_factor;
         }
 
-        // Minimum: 70% of original
-        return base_threshold * 0.7f;
+        // Minimum: 85% of original (don't go too low)
+        return base_threshold * 0.85f;
     }
 
     void HybridFusionEngine::update_opportunity_signals(
@@ -922,7 +1115,7 @@ namespace HybridPred
                 spell_cooldown = spell_entry_ptr->get_cooldown();
             }
         }
-        float patience_window = std::clamp(spell_cooldown * 0.3f, 1.5f, 3.0f);
+        float patience_window = std::clamp(spell_cooldown * 0.3f, 2.0f, 4.0f);
 
         // Safety: Validate spell slot (should be 0-3 for Q/W/E/R, or special slots)
         if (spell_slot < -1 || spell_slot > 10)
@@ -941,9 +1134,10 @@ namespace HybridPred
         float elapsed_time = current_time - window.window_start_time;
 
         // Calculate opportunity score: how good is this moment relative to recent peak?
+        // Clamped to [0, 1] range to ensure it's a valid probability
         if (window.peak_hit_chance > EPSILON)
         {
-            result.opportunity_score = result.hit_chance / window.peak_hit_chance;
+            result.opportunity_score = std::min(result.hit_chance / window.peak_hit_chance, 1.0f);
         }
         else
         {
@@ -1012,6 +1206,7 @@ namespace HybridPred
         float non_reactive_time = std::min(prediction_time, reaction_time);
         math::vector3 drift_offset = current_velocity * non_reactive_time;
         region.center = current_pos + drift_offset;
+        region.velocity = current_velocity;  // Store for momentum weighting
 
         // CRITICAL FIX: Subtract reaction time from prediction time
         // Humans cannot react instantly - they need 200-300ms to see and respond
@@ -1095,6 +1290,19 @@ namespace HybridPred
             return math::vector3{};
 
         math::vector3 position = target->get_position();
+
+        // CC CHECK: Immobilized targets can't follow their path
+        // Return current position for stuns, snares, etc. (but allow knockbacks to follow forced movement)
+        if (target->has_buff_of_type(buff_type::stun) ||
+            target->has_buff_of_type(buff_type::snare) ||
+            target->has_buff_of_type(buff_type::charm) ||
+            target->has_buff_of_type(buff_type::fear) ||
+            target->has_buff_of_type(buff_type::taunt) ||
+            target->has_buff_of_type(buff_type::suppression))
+        {
+            return position;  // CC'd - stay at current position
+        }
+
         auto path = target->get_path();
 
         // No path or stationary - return current position
@@ -1147,13 +1355,35 @@ namespace HybridPred
             return 1.0f;  // No dodge time = guaranteed hit
 
         // Distance from cast position to predicted target center
-        float distance = (cast_position - reachable_region.center).magnitude();
+        math::vector3 to_cast = cast_position - reachable_region.center;
+        float distance = to_cast.magnitude();
 
         // Gaussian kernel: target most likely at predicted center
         // σ = max_radius / 2.5 (so ~95% within max_radius)
         float sigma = reachable_region.max_radius / 2.5f;
         if (sigma < 1.0f)
             sigma = 1.0f;  // Minimum sigma to avoid numerical issues
+
+        // MOMENTUM WEIGHTING: Penalize aiming behind moving targets
+        // Players are more likely to continue their current direction than turn 180°
+        float vel_speed = reachable_region.velocity.magnitude();
+        if (vel_speed > 50.f && distance > 1.0f)
+        {
+            // Calculate alignment: 1.0 = forward, -1.0 = backward
+            math::vector3 vel_dir = reachable_region.velocity / vel_speed;
+            math::vector3 to_cast_dir = to_cast / distance;
+            float alignment = to_cast_dir.x * vel_dir.x + to_cast_dir.y * vel_dir.y + to_cast_dir.z * vel_dir.z;
+
+            // If cast position is behind the target's movement direction, tighten sigma
+            // This makes it harder to predict they'll turn around
+            if (alignment < 0.f)
+            {
+                // Scale penalty: fully backward (-1.0) = 30% tighter sigma
+                // Perpendicular (0) = no penalty
+                float penalty = 1.0f + (alignment * 0.3f);  // Range: 0.7 to 1.0
+                sigma *= penalty;
+            }
+        }
 
         // Gaussian weight (clamped to avoid exp overflow)
         float exponent = -(distance * distance) / (2.0f * sigma * sigma);
@@ -1167,7 +1397,9 @@ namespace HybridPred
         );
 
         // Weight area probability by Gaussian
-        float area_probability = intersection_area / reachable_region.area;
+        // FIX: Use safer divisor to prevent INF/NaN from tiny areas
+        float safe_area = std::max(reachable_region.area, 1.0f);
+        float area_probability = intersection_area / safe_area;
         float weighted_probability = gaussian_weight * area_probability;
 
         // Bonus if predicted center is inside projectile
@@ -1223,7 +1455,18 @@ namespace HybridPred
         // Calculate distance to escape (distance to edge of hitbox)
         // If target is outside spell, they're already safe
         if (distance_to_center >= projectile_radius)
+        {
+            // Debug: Log when returning 0 due to outside radius
+            if (PredictionSettings::get().enable_debug_logging && g_sdk)
+            {
+                char dbg[256];
+                snprintf(dbg, sizeof(dbg),
+                    "[Danny.Prediction] TIME_DODGE: dist=%.1f >= radius=%.1f RETURNING 0",
+                    distance_to_center, projectile_radius);
+                g_sdk->log_console(dbg);
+            }
             return 0.f;
+        }
 
         // Distance needed to run to safety
         float distance_to_edge = projectile_radius - distance_to_center;
@@ -1285,8 +1528,13 @@ namespace HybridPred
             math::vector3 escape_point_right = target_position + escape_dir_right * escape_distance;
 
             // Check if escape paths are walkable using nav mesh
-            bool can_dodge_left = g_sdk->nav_mesh->is_pathable(escape_point_left);
-            bool can_dodge_right = g_sdk->nav_mesh->is_pathable(escape_point_right);
+            bool can_dodge_left = true;
+            bool can_dodge_right = true;
+            if (g_sdk && g_sdk->nav_mesh)
+            {
+                can_dodge_left = g_sdk->nav_mesh->is_pathable(escape_point_left);
+                can_dodge_right = g_sdk->nav_mesh->is_pathable(escape_point_right);
+            }
 
             // Trapped against wall on both sides = guaranteed hit
             if (!can_dodge_left && !can_dodge_right)
@@ -1307,12 +1555,16 @@ namespace HybridPred
         // Linear ratio doesn't capture human dodge thresholds well
         float ratio = time_needed_to_escape / time_available;
 
-        constexpr float SIGMOID_STEEPNESS = 40.f;
-        constexpr float SIGMOID_MIDPOINT = 0.80f;
+        // FIX: Relaxed sigmoid parameters
+        // Old: MIDPOINT=0.80 penalized when target needed <80% of time to dodge (too aggressive)
+        // New: MIDPOINT=0.40 only penalizes when dodge is very easy (<40% time needed)
+        // This prevents 0% physics for stationary targets at range
+        constexpr float SIGMOID_STEEPNESS = 20.f;   // Less steep transition
+        constexpr float SIGMOID_MIDPOINT = 0.40f;   // 50% hit chance when 40% time needed to dodge
 
         // Clamp exponent to prevent overflow/underflow
         float exponent = -SIGMOID_STEEPNESS * (ratio - SIGMOID_MIDPOINT);
-        exponent = std::clamp(exponent, -50.0f, 50.0f);
+        exponent = std::clamp(exponent, -20.0f, 20.0f);
 
         float sigmoid_probability = 1.0f / (1.0f + std::exp(exponent));
 
@@ -1482,13 +1734,17 @@ namespace HybridPred
 
         // ADAPTIVE DECAY RATE: Adjust based on target mobility
         float decay_rate = get_adaptive_decay_rate(latest.velocity.magnitude());
+        float current_weight = 1.0f;  // decay_rate^0 = 1.0
 
         for (size_t i = 0; i < std::min(history.size(), size_t(20)); ++i)
         {
             size_t idx = history.size() - 1 - i;
             const auto& snapshot = history[idx];
 
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
+            float weight = current_weight;
+            current_weight *= decay_rate;  // Prepare next weight
+
             predicted_pos = predicted_pos + (snapshot.position + snapshot.velocity * prediction_time) * weight;
             total_weight += weight;
         }
@@ -1577,6 +1833,11 @@ namespace HybridPred
         // Handle stasis (Zhonya's, GA, Bard R) - PERFECT TIMING
         if (edge_cases.stasis.is_in_stasis)
         {
+            if (!g_sdk || !g_sdk->clock_facade)
+            {
+                result.is_valid = false;
+                return result;
+            }
             float current_time = g_sdk->clock_facade->get_game_time();
             float spell_travel_time = PhysicsPredictor::compute_arrival_time(
                 source->get_position(),
@@ -1608,6 +1869,15 @@ namespace HybridPred
             }
 
             // Perfect timing! Cast now for guaranteed hit on stasis exit
+            // But first check if in range
+            math::vector3 to_stasis = edge_cases.stasis.exit_position - source->get_position();
+            if (to_stasis.magnitude() > spell.range)
+            {
+                result.is_valid = false;
+                result.reasoning = "Stasis target out of range";
+                return result;
+            }
+
             result.cast_position = edge_cases.stasis.exit_position;
             result.hit_chance = 1.0f;  // 100% guaranteed
             result.physics_contribution = 1.0f;
@@ -1641,6 +1911,15 @@ namespace HybridPred
                 return result;
             }
 
+            // Check if in range
+            math::vector3 to_channel = edge_cases.channel.position - source->get_position();
+            if (to_channel.magnitude() > spell.range)
+            {
+                result.is_valid = false;
+                result.reasoning = "Channeling target out of range";
+                return result;
+            }
+
             // Stationary target - 100% hit chance
             result.cast_position = edge_cases.channel.position;
             result.hit_chance = 1.0f;
@@ -1664,65 +1943,138 @@ namespace HybridPred
                 spell.delay
             );
 
-            float current_time = g_sdk->clock_facade->get_game_time();
-            bool timing_valid = EdgeCases::validate_dash_timing(
-                edge_cases.dash,
-                spell_travel_time,
-                current_time
-            );
+            float current_time = 0.f;
+            if (g_sdk && g_sdk->clock_facade)
+                current_time = g_sdk->clock_facade->get_game_time();
 
-            if (!timing_valid)
+            // Calculate time relationship between spell arrival and dash end
+            float time_after_dash = spell_travel_time - edge_cases.dash.dash_arrival_time;
+            float move_speed = target->get_move_speed();
+
+            math::vector3 cast_position;
+            float confidence;
+            std::string reasoning;
+
+            // BLINK DETECTION: Very fast "dashes" are actually blinks (Ezreal E, Kassadin R, Flash)
+            // Blinks have no travel path to intercept - they teleport instantly
+            // Detect by: dash_arrival_time <= 0.1s (default for speed=0) or very high speed
+            bool is_blink = edge_cases.dash.dash_arrival_time <= 0.1f ||
+                           edge_cases.dash.dash_speed > 3000.f;
+
+            if (time_after_dash < 0.f && !is_blink)
             {
-                // Spell would arrive BEFORE enemy reaches dash endpoint
-                // Predict at current position with very low confidence
-                result.confidence_score = 0.3f;
-                result.reasoning = "Enemy dashing - spell arrives before dash ends (low confidence)";
+                // Spell arrives MID-DASH - this is a GREAT opportunity!
+                // They're locked in forced movement, can't dodge or change direction
+                // Calculate intercept position along dash path
+
+                math::vector3 dash_start = target->get_position();
+                math::vector3 dash_end = edge_cases.dash.dash_end_position;
+                math::vector3 dash_vector = dash_end - dash_start;
+                float dash_length = dash_vector.magnitude();
+
+                if (dash_length < 1.f)
+                {
+                    // Dash too short, use current position
+                    cast_position = dash_start;
+                    confidence = 0.85f;
+                    reasoning = "MID-DASH - Very short dash, high confidence";
+                }
+                else
+                {
+                    // ITERATIVE INTERCEPT: Refine estimate for accurate mid-dash hit
+                    // Problem: spell_travel_time is to dash_end, not mid-dash point
+                    // Solution: Iterate once to get better intercept estimate
+
+                    // Initial estimate using endpoint ratio
+                    float progress = spell_travel_time / edge_cases.dash.dash_arrival_time;
+                    math::vector3 intercept_pos = dash_start + dash_vector * progress;
+
+                    // Refine: calculate actual travel time to estimated intercept
+                    float dist_to_intercept = (intercept_pos - source->get_position()).magnitude();
+                    float refined_travel_time = spell.delay;
+                    if (spell.projectile_speed > 0.f)
+                        refined_travel_time += dist_to_intercept / spell.projectile_speed;
+
+                    // Recalculate progress with refined time
+                    progress = refined_travel_time / edge_cases.dash.dash_arrival_time;
+                    progress = std::clamp(progress, 0.1f, 0.95f);  // Stay within dash
+
+                    cast_position = dash_start + dash_vector * progress;
+
+                    // HIGH confidence - forced movement is very predictable
+                    confidence = 0.9f * edge_cases.dash.confidence_multiplier;
+
+                    int progress_pct = static_cast<int>(progress * 100);
+                    reasoning = "MID-DASH INTERCEPT - Hitting at " + std::to_string(progress_pct) +
+                        "% through dash (locked in forced movement)";
+                }
+            }
+            else if (time_after_dash < 0.f && is_blink)
+            {
+                // BLINK: No mid-point exists, aim at endpoint
+                // They teleport instantly - aim where they'll appear
+                cast_position = edge_cases.dash.dash_end_position;
+                confidence = 0.85f * edge_cases.dash.confidence_multiplier;
+                reasoning = "BLINK ENDPOINT - Instant teleport, aiming at destination";
             }
             else
             {
-                // FIX: Spell arrives AFTER dash ends - RETURN ENDPOINT IMMEDIATELY
-                // Don't run physics/behavior on dashing unit - they WILL stop at endpoint
-                // Treat like stasis: guaranteed position, high confidence
-                result.cast_position = edge_cases.dash.dash_end_position;
-                result.hit_chance = 1.0f * edge_cases.dash.confidence_multiplier;
-                result.physics_contribution = 1.0f;
-                result.behavior_contribution = 1.0f;  // Forced movement = 100% predictable
-                result.confidence_score = edge_cases.dash.confidence_multiplier;
-                result.is_valid = true;
-                result.reasoning = "DASH ENDPOINT - Aiming at confirmed stop position after dash completes";
+                // Spell arrives AFTER dash ends - aim at endpoint
+                // Confidence based on how much time they have to move after landing
+                cast_position = edge_cases.dash.dash_end_position;
 
-                // Update opportunity signals before returning
-                update_opportunity_signals(result, source, spell, tracker);
+                float potential_dodge_distance = move_speed * time_after_dash;
 
+                // Confidence decreases as potential dodge distance increases
+                float dodge_threshold = spell.radius * 2.0f;
+                float time_confidence = 1.0f;
+                if (potential_dodge_distance > 0.f && dodge_threshold > 0.f)
+                {
+                    time_confidence = 1.0f - std::min(potential_dodge_distance / dodge_threshold, 1.0f) * 0.5f;
+                }
+
+                // Additional penalty for long delay (>250ms to react)
+                if (time_after_dash > 0.25f)
+                {
+                    time_confidence *= 0.8f;
+                }
+
+                confidence = time_confidence * edge_cases.dash.confidence_multiplier;
+
+                int ms_after = static_cast<int>(time_after_dash * 1000);
+                if (time_after_dash < 0.1f)
+                    reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (excellent)";
+                else if (time_after_dash < 0.25f)
+                    reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (good)";
+                else
+                    reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (they may dodge)";
+            }
+
+            // Check if cast position is in range
+            math::vector3 to_cast = cast_position - source->get_position();
+            if (to_cast.magnitude() > spell.range)
+            {
+                result.is_valid = false;
+                result.reasoning = "Dash target position out of range";
                 return result;
             }
-        }
 
-        // =============================================================================
-        // AUTOMATIC CONE DETECTION: Check if spell has cone angle defined
-        if (spell.spell_slot >= 0)
-        {
-            spell_entry* spell_entry_ptr = source->get_spell(spell.spell_slot);
-            if (spell_entry_ptr)
-            {
-                auto spell_data = spell_entry_ptr->get_data();
-                if (spell_data)
-                {
-                    auto static_data = spell_data->get_static_data();
-                    if (static_data)
-                    {
-                        float cone_angle = static_data->get_cast_cone_angle();
-                        // If spell has cone angle > 0, it's a cone spell
-                        if (cone_angle > 0.f)
-                        {
-                            return compute_cone_prediction(source, target, spell, tracker, edge_cases);
-                        }
-                    }
-                }
-            }
+            result.cast_position = cast_position;
+            result.hit_chance = confidence;
+            result.physics_contribution = 1.0f;
+            result.behavior_contribution = confidence;
+            result.confidence_score = confidence;
+            result.is_valid = true;
+            result.reasoning = reasoning;
+
+            update_opportunity_signals(result, source, spell, tracker);
+
+            return result;
         }
 
         // Dispatch to spell-type specific implementation based on pred_sdk type
+        // NOTE: Automatic cone detection removed - SDK data has cone_angle for many non-cone spells
+        // (Viktor E, Mel Q, Pyke Q, etc.) causing false positives. Use explicit spell_type instead.
         HybridPredictionResult spell_result;
 
         switch (spell.spell_type)
@@ -1784,6 +2136,13 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
+        if (!source || !target || !source->is_valid() || !target->is_valid())
+        {
+            result.is_valid = false;
+            result.reasoning = "Invalid source or target";
+            return result;
+        }
+
         // Step 1: Compute arrival time
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source->get_position(),
@@ -1797,22 +2156,43 @@ namespace HybridPred
         // This follows actual waypoints instead of linear extrapolation
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
-        // Use path-predicted position as center, with reduced dodge time
-        // Path prediction handles movement along waypoints
+        // USE OBSERVED JUKE MAGNITUDE for reachable region
+        // This gives us actual observed dodge capability, not arbitrary factors
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time accounting for human reaction
+        // Enemy reacts when they SEE cast animation, not when projectile launches
+        // Actual dodge time = arrival_time - reaction_time
+        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
+        {
+            // Use observed juke magnitude, capped by available time
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+        }
+        // else: spell arrives before they can react - minimal reachable region
+
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * 0.3f,     // Reduced time - only dodge window
-            move_speed
+            dodge_time,
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF
+        // Step 3: Build behavior PDF and align with path prediction
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // Get current position for fusion calculations
+        math::vector3 current_pos = target->get_position();
 
         result.behavior_pdf = behavior_pdf;
 
@@ -1821,13 +2201,79 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Step 5: Find optimal cast position
-        math::vector3 optimal_cast_pos = find_optimal_cast_position(
-            reachable_region,
-            behavior_pdf,
-            source->get_position(),
-            spell.radius,
-            confidence
-        );
+        // Intelligent fusion of path prediction and behavior PDF
+        //
+        // Key insight: these systems capture different things well:
+        // - Path prediction: forward distance (follows actual waypoints)
+        // - Behavior PDF: lateral deviation (jukes, patterns from velocity history)
+        //
+        // Strategy:
+        // - If they agree (close together): use PDF peak (more nuanced, captures behavior)
+        // - If they disagree: decompose - path for forward, PDF for lateral
+        math::vector3 optimal_cast_pos = path_predicted_pos;
+
+        if (behavior_pdf.total_probability > EPSILON)
+        {
+            // Find PDF peak (highest probability position)
+            math::vector3 pdf_peak = behavior_pdf.origin;
+            float best_prob = 0.f;
+
+            constexpr int SEARCH_RADIUS = 6;
+            float step = behavior_pdf.cell_size;
+
+            for (int i = -SEARCH_RADIUS; i <= SEARCH_RADIUS; ++i)
+            {
+                for (int j = -SEARCH_RADIUS; j <= SEARCH_RADIUS; ++j)
+                {
+                    math::vector3 test = behavior_pdf.origin;
+                    test.x += i * step;
+                    test.z += j * step;
+
+                    float prob = behavior_pdf.sample(test);
+
+                    if (prob > best_prob)
+                    {
+                        best_prob = prob;
+                        pdf_peak = test;
+                    }
+                }
+            }
+
+            // Compute movement direction
+            math::vector3 path_dir = (path_predicted_pos - current_pos);
+            float path_dist = path_dir.magnitude();
+
+            if (path_dist > 10.f)
+            {
+                path_dir = path_dir / path_dist;
+                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
+
+                // Measure disagreement between path prediction and PDF
+                math::vector3 offset = pdf_peak - path_predicted_pos;
+                float separation = offset.magnitude();
+
+                // Agreement threshold: proportional to travel distance
+                // Close predictions = high confidence, use PDF nuance
+                // Far predictions = disagreement, decompose into components
+                float agreement_threshold = std::min(path_dist * 0.15f, 50.f);
+
+                if (separation <= agreement_threshold)
+                {
+                    // Agreement: path and PDF predict similar positions
+                    // Trust PDF peak - it captures behavioral nuances (slight jukes, hesitation)
+                    optimal_cast_pos = pdf_peak;
+                }
+                else
+                {
+                    // Disagreement: significant difference between predictions
+                    // This usually means velocity extrapolation is lagging (undershooting)
+                    //
+                    // Decompose: forward from path (accurate), lateral from PDF (jukes)
+                    float lateral_offset = offset.dot(path_perp);
+                    optimal_cast_pos = path_predicted_pos + path_perp * lateral_offset;
+                }
+            }
+        }
 
         // NAVMESH CLAMPING: Ensure cast position is on pathable terrain
         // If predicted position is in a wall, find nearest pathable point
@@ -1865,18 +2311,32 @@ namespace HybridPred
             }
         }
 
+        // RANGE CLAMPING: Ensure cast position is within spell range
+        math::vector3 source_pos = source->get_position();
+        math::vector3 to_cast = optimal_cast_pos - source_pos;
+        float distance_to_cast = to_cast.magnitude();
+        if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
+        {
+            // Clamp to max range (use manual normalize to avoid crash)
+            optimal_cast_pos = source_pos + (to_cast / distance_to_cast) * spell.range;
+        }
+
         result.cast_position = optimal_cast_pos;
 
         // Step 6: Evaluate final hit chance at optimal position
+        // Use effective radius = spell radius + target bounding radius
+        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
+        float effective_radius = spell.radius + target->get_bounding_radius();
+
         float physics_prob = PhysicsPredictor::compute_physics_hit_probability(
             optimal_cast_pos,
-            spell.radius,
+            effective_radius,
             reachable_region
         );
 
         float behavior_prob = BehaviorPredictor::compute_behavior_hit_probability(
             optimal_cast_pos,
-            spell.radius,
+            effective_radius,
             behavior_pdf
         );
 
@@ -1885,9 +2345,21 @@ namespace HybridPred
 
         // Weighted geometric fusion (trust physics more when behavior samples are sparse)
         size_t sample_count = tracker.get_history().size();
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
-        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
+        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed);
+
+        // Debug logging for 0 hit chance
+        if (result.hit_chance < 0.01f && g_sdk)
+        {
+            char debug_msg[512];
+            snprintf(debug_msg, sizeof(debug_msg),
+                "[Danny.Prediction] CIRCULAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu reachable_r=%.1f speed=%.1f",
+                arrival_time, physics_prob, behavior_prob, confidence, sample_count, reachable_region.max_radius, move_speed);
+            g_sdk->log_console(debug_msg);
+        }
 
         // Clamp to [0, 1]
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
@@ -1939,113 +2411,10 @@ namespace HybridPred
         if (edge_cases.channel.is_channeling || edge_cases.channel.is_recalling)
             return true;
 
-        // Check if walking in a perfectly straight line
-        // Requires at least 3 samples to establish pattern (reduced from 5)
-        const auto& history = tracker.get_history();
-        if (history.size() >= 3)
-        {
-            // Check last 3 velocity vectors for consistency
-            constexpr float DIRECTION_TOLERANCE = 0.15f;  // ~20 degrees tolerance (more forgiving)
-            bool is_straight = true;
-
-            math::vector3 base_direction = history[history.size() - 1].velocity;
-            float base_speed = base_direction.magnitude();
-
-            // Only consider "straight line" if actually moving
-            if (base_speed > 10.f)
-            {
-                base_direction = base_direction / base_speed;  // Manual normalize
-
-                size_t check_count = std::min(history.size(), static_cast<size_t>(3));
-                for (size_t i = history.size() - check_count; i < history.size() - 1; ++i)
-                {
-                    math::vector3 vel = history[i].velocity;
-                    float speed = vel.magnitude();
-
-                    if (speed < 10.f)
-                    {
-                        // Stopped moving - not straight line
-                        is_straight = false;
-                        break;
-                    }
-
-                    vel = vel / speed;  // Manual normalize
-
-                    // Check angle between velocities
-                    float dot = base_direction.x * vel.x + base_direction.z * vel.z;
-                    if (dot < 1.0f - DIRECTION_TOLERANCE)  // ~20 degrees
-                    {
-                        is_straight = false;
-                        break;
-                    }
-                }
-
-                if (is_straight)
-                    return true;
-            }
-        }
-
-        // NEW: Check if target has a predictable path ahead
-        // Only "obvious" if they'll walk straight for a meaningful distance
-        auto path = target->get_path();
-        if (path.size() > 1)
-        {
-            math::vector3 current_velocity = tracker.get_current_velocity();
-            float vel_speed = current_velocity.magnitude();
-
-            if (vel_speed > 50.f)  // Actually moving
-            {
-                math::vector3 current_pos = target->get_position();
-
-                // Calculate how far they'll walk in current direction before turning
-                float straight_distance = 0.f;
-                math::vector3 last_dir;
-                bool first_segment = true;
-
-                for (size_t i = 1; i < path.size(); ++i)
-                {
-                    math::vector3 segment_start = (i == 1) ? current_pos : path[i - 1];
-                    math::vector3 segment_end = path[i];
-                    math::vector3 segment = segment_end - segment_start;
-                    float segment_len = segment.magnitude();
-
-                    if (segment_len < 1.f)
-                        continue;
-
-                    math::vector3 segment_dir = segment / segment_len;
-
-                    if (first_segment)
-                    {
-                        // Check velocity aligns with first segment
-                        math::vector3 vel_dir = current_velocity / vel_speed;
-                        float alignment = vel_dir.x * segment_dir.x + vel_dir.z * segment_dir.z;
-                        if (alignment < 0.85f)
-                            break;  // Not following path
-
-                        straight_distance += segment_len;
-                        last_dir = segment_dir;
-                        first_segment = false;
-                    }
-                    else
-                    {
-                        // Check if this segment continues straight
-                        float dir_dot = last_dir.x * segment_dir.x + last_dir.z * segment_dir.z;
-                        if (dir_dot < 0.9f)  // Turn detected
-                            break;
-
-                        straight_distance += segment_len;
-                        last_dir = segment_dir;
-                    }
-                }
-
-                // Only "obvious hit" if they'll walk straight for 300+ units
-                // That's enough distance for most skillshots to land
-                if (straight_distance > 300.f)
-                {
-                    return true;
-                }
-            }
-        }
+        // NOTE: Straight-line walking is NOT an obvious hit
+        // Targets can still react to our cast animation and dodge
+        // Let the normal physics/behavior predictions handle this case
+        // which will naturally give high probability for straight-line movement
 
         return false;
     }
@@ -2071,9 +2440,9 @@ namespace HybridPred
         confidence *= std::exp(-distance * CONFIDENCE_DISTANCE_DECAY);
 
         // Latency factor (ping in seconds)
-        // CRASH FIX: Check net_client before accessing
+        // CRASH FIX: Check g_sdk AND net_client before accessing
         float ping = 0.f;
-        if (g_sdk->net_client)
+        if (g_sdk && g_sdk->net_client)
             ping = static_cast<float>(g_sdk->net_client->get_ping()) * 0.001f;
         confidence *= std::exp(-ping * CONFIDENCE_LATENCY_FACTOR);
 
@@ -2125,6 +2494,44 @@ namespace HybridPred
                 // Enemy can't see us - significant confidence boost
                 // They lose ~0.25s of reaction time (cast animation)
                 confidence *= 1.25f;
+            }
+        }
+
+        // Straight-line movement boost - modest increase for predictable movement
+        // Check if target has been moving in consistent direction
+        if (history.size() >= 6)
+        {
+            bool is_straight = true;
+            math::vector3 base_vel = history.back().velocity;
+            float base_speed = base_vel.magnitude();
+
+            if (base_speed > 50.f)
+            {
+                math::vector3 base_dir = base_vel / base_speed;
+
+                for (size_t i = history.size() - 6; i < history.size() - 1; ++i)
+                {
+                    float speed = history[i].velocity.magnitude();
+                    if (speed < 50.f)
+                    {
+                        is_straight = false;
+                        break;
+                    }
+
+                    math::vector3 dir = history[i].velocity / speed;
+                    float dot = base_dir.x * dir.x + base_dir.z * dir.z;
+                    if (dot < 0.95f)  // ~18 degrees tolerance
+                    {
+                        is_straight = false;
+                        break;
+                    }
+                }
+
+                if (is_straight)
+                {
+                    // Modest boost for straight-line movement
+                    confidence *= 1.08f;
+                }
             }
         }
 
@@ -2275,14 +2682,28 @@ namespace HybridPred
         // FIX: Use path-following prediction for better accuracy
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
+
+        // USE OBSERVED JUKE MAGNITUDE for reachable region
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time accounting for human reaction
+        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
+        {
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+        }
 
         // Use path-predicted position as center
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time * 0.3f,     // Reduced time - only dodge window
-            move_speed
+            dodge_time,
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
@@ -2290,6 +2711,7 @@ namespace HybridPred
         // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+        behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
 
@@ -2298,9 +2720,15 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Compute staleness for fusion
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
         size_t sample_count = tracker.get_history().size();
+
+        // Note: Linear spells use angular optimization (±10°) which already handles
+        // lateral variance through the PDF evaluation. No fusion needed here -
+        // it would double-compensate and overshoot jukes.
 
         // Step 5: Compute capsule parameters
         // Linear spell = capsule from source toward target
@@ -2318,7 +2746,8 @@ namespace HybridPred
         math::vector3 direction = to_target / dist_to_target;  // Safe manual normalize
         math::vector3 capsule_start = source->get_position();
         float capsule_length = spell.range;
-        float capsule_radius = spell.radius;
+        // Use effective radius = spell radius + target bounding radius
+        float capsule_radius = spell.radius + target->get_bounding_radius();
 
         // For linear spells, find optimal direction using angular search
         // Test multiple angles (±10°) around the predicted center to maximize hit probability
@@ -2360,16 +2789,90 @@ namespace HybridPred
             );
 
             // Compute hit probability for this angle using time-to-dodge method
-            // This is superior to area intersection for linear skillshots
-            math::vector3 test_cast_pos = capsule_start + test_direction * capsule_length;
+            // For linear spells, check if predicted position is within capsule
+            // Project predicted position onto spell line to find closest point
+            math::vector3 to_predicted = reachable_region.center - capsule_start;
+
+            // Use full 3D dot product for correct projection onto spell line
+            // 2D projection causes Y errors that scale with distance
+            float projection = to_predicted.x * test_direction.x +
+                              to_predicted.y * test_direction.y +
+                              to_predicted.z * test_direction.z;
+
+            // Clamp projection to spell range [0, capsule_length]
+            projection = std::max(0.f, std::min(projection, capsule_length));
+            math::vector3 closest_point = capsule_start + test_direction * projection;
+
+            // Calculate perpendicular distance to spell line
+            float perp_dist = (reachable_region.center - closest_point).magnitude();
+
+            // Debug: Log for center angle (i=3)
+            if (i == NUM_ANGLE_TESTS / 2 && PredictionSettings::get().enable_debug_logging && g_sdk)
+            {
+                char dbg[512];
+                snprintf(dbg, sizeof(dbg),
+                    "[Danny.Prediction] LINEAR PROJ: proj=%.1f dist_center=%.1f perp=%.1f radius=%.1f",
+                    projection, dist_to_center, perp_dist, capsule_radius);
+                g_sdk->log_console(dbg);
+            }
+
             float test_physics_prob = PhysicsPredictor::compute_time_to_dodge_probability(
-                target->get_position(),  // Current target position
-                test_cast_pos,           // Where spell will be
-                capsule_radius,          // Spell hitbox radius
-                move_speed,              // Target move speed
-                arrival_time,            // Time until spell arrives
-                HUMAN_REACTION_TIME      // 250ms reaction time
+                reachable_region.center,  // Predicted target position
+                closest_point,            // Closest point on spell line
+                capsule_radius,           // Spell hitbox radius
+                move_speed,               // Target move speed
+                arrival_time,             // Time until spell arrives
+                HUMAN_REACTION_TIME       // 250ms reaction time
             );
+
+            // FIX: Boost physics for stationary targets (with duration check)
+            // Physics assumes targets WILL dodge if they CAN, penalizing stationary targets at range
+            // Only boost if target has been stationary for a meaningful duration (not just a brief pause)
+            float current_speed = target_velocity.magnitude();
+            if (current_speed < 50.f)
+            {
+                // Check how long they've been stationary by examining movement history
+                const auto& history = tracker.get_history();
+                int stationary_samples = 0;
+                constexpr float STATIONARY_THRESHOLD = 50.f;
+
+                // Count consecutive stationary samples from most recent
+                for (auto it = history.rbegin(); it != history.rend(); ++it)
+                {
+                    if (it->velocity.magnitude() < STATIONARY_THRESHOLD)
+                        stationary_samples++;
+                    else
+                        break;  // Movement detected, stop counting
+                }
+
+                // Require at least 0.3s of stationary (6 samples at 50ms rate)
+                // Scale boost based on duration: 0.3s = 70%, 0.5s = 80%, 1.0s+ = 85%
+                constexpr int MIN_SAMPLES_FOR_BOOST = 6;   // ~0.3s
+                constexpr int MED_SAMPLES_FOR_BOOST = 10;  // ~0.5s
+                constexpr int MAX_SAMPLES_FOR_BOOST = 20;  // ~1.0s
+
+                if (stationary_samples >= MAX_SAMPLES_FOR_BOOST)
+                {
+                    // Very confident they're AFK or not reacting
+                    test_physics_prob = std::max(test_physics_prob, 0.85f);
+                }
+                else if (stationary_samples >= MED_SAMPLES_FOR_BOOST)
+                {
+                    // Confident they're stationary
+                    test_physics_prob = std::max(test_physics_prob, 0.80f);
+                }
+                else if (stationary_samples >= MIN_SAMPLES_FOR_BOOST)
+                {
+                    // Likely stationary but could be brief pause
+                    test_physics_prob = std::max(test_physics_prob, 0.70f);
+                }
+                // If < MIN_SAMPLES, don't boost - they might be about to move
+            }
+            else if (current_speed < 100.f)
+            {
+                // Very slow movement: modest boost floor to 40%
+                test_physics_prob = std::max(test_physics_prob, 0.4f);
+            }
 
             float test_behavior_prob = compute_capsule_behavior_probability(
                 capsule_start,
@@ -2385,7 +2888,8 @@ namespace HybridPred
                 test_behavior_prob,
                 confidence,
                 sample_count,
-                time_since_update
+                time_since_update,
+                move_speed
             );
 
             // Track best configuration
@@ -2395,10 +2899,31 @@ namespace HybridPred
                 optimal_direction = test_direction;
                 best_physics_prob = test_physics_prob;
                 best_behavior_prob = test_behavior_prob;
+
+                // Debug: Log when we update best
+                if (PredictionSettings::get().enable_debug_logging && g_sdk)
+                {
+                    char dbg[256];
+                    snprintf(dbg, sizeof(dbg),
+                        "[Danny.Prediction] BEST UPDATE: angle=%d phys=%.3f behav=%.3f hit=%.3f",
+                        i, test_physics_prob, test_behavior_prob, test_hit_chance);
+                    g_sdk->log_console(dbg);
+                }
             }
         }
 
-        result.cast_position = source->get_position() + optimal_direction * capsule_length;
+        // Cast position should be the predicted target position, not max range
+        // This is where we aim the spell to hit the target
+        result.cast_position = reachable_region.center;
+
+        // RANGE CLAMPING: Ensure cast position is within spell range
+        math::vector3 to_cast = result.cast_position - capsule_start;
+        float distance_to_cast = to_cast.magnitude();
+        if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
+        {
+            // Clamp to max range (use manual normalize to avoid crash)
+            result.cast_position = capsule_start + (to_cast / distance_to_cast) * spell.range;
+        }
 
         // Use best probabilities found
         float physics_prob = best_physics_prob;
@@ -2409,6 +2934,16 @@ namespace HybridPred
 
         // Use best hit chance from angular optimization
         result.hit_chance = std::clamp(best_hit_chance, 0.f, 1.f);
+
+        // Debug logging for 0 hit chance
+        if (result.hit_chance < 0.01f && g_sdk)
+        {
+            char debug_msg[512];
+            snprintf(debug_msg, sizeof(debug_msg),
+                "[Danny.Prediction] LINEAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu move_speed=%.1f",
+                arrival_time, physics_prob, behavior_prob, confidence, sample_count, move_speed);
+            g_sdk->log_console(debug_msg);
+        }
 
 #if HYBRID_PRED_ENABLE_REASONING
         // Generate mathematical reasoning
@@ -2504,14 +3039,30 @@ namespace HybridPred
         );
 
         // Step 2: Build reachable region (physics)
+        // FIX: Use path-following prediction for better accuracy
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
+
+        // USE OBSERVED JUKE MAGNITUDE for reachable region
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time accounting for human reaction
+        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
+        {
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+        }
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_position(),
-            target_velocity,
-            arrival_time,
-            move_speed
+            path_predicted_pos,
+            math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
+            dodge_time,
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
@@ -2519,6 +3070,7 @@ namespace HybridPred
         // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+        behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
 
@@ -2526,13 +3078,19 @@ namespace HybridPred
         float confidence = compute_confidence_score(source, target, spell, tracker, edge_cases);
         result.confidence_score = confidence;
 
+        // Note: Vector spells use orientation optimization which handles lateral
+        // variance through PDF evaluation. No fusion needed - would double-compensate.
+
         // Step 5: Optimize vector orientation
         // Test multiple orientations to find best two-position configuration
         size_t sample_count = tracker.get_history().size();
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
         VectorConfiguration best_config = optimize_vector_orientation(
             source,
+            target,
             reachable_region.center,
             reachable_region,
             behavior_pdf,
@@ -2583,7 +3141,8 @@ namespace HybridPred
         game_object* target,
         const pred_sdk::spell_data& spell,
         TargetBehaviorTracker& tracker,
-        const EdgeCases::EdgeCaseAnalysis& edge_cases)
+        const EdgeCases::EdgeCaseAnalysis& edge_cases,
+        float cone_angle_override)
     {
         HybridPredictionResult result;
 
@@ -2611,13 +3170,14 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             target->get_position(),
             target_velocity,
             arrival_time,
-            move_speed
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
@@ -2633,15 +3193,21 @@ namespace HybridPred
         result.confidence_score = confidence;
 
         // Step 5: Compute cone parameters
-        // TODO: CONE ANGLE INTERPRETATION IS AMBIGUOUS
-        // Current assumption: spell.radius = "width at range", so half-angle = atan2(radius, range)
-        // BUT SDK might encode differently:
-        //   - Option 1: spell.radius = total cone spread in degrees (e.g., Annie W = 50°)
-        //   - Option 2: spell.radius = half-angle already (e.g., Annie W = 25°)
-        //   - Option 3: spell.radius = width at max range (current assumption)
-        // REQUIRES EMPIRICAL TESTING with known cone spells (Annie W, Cassio R, etc.)
-        float cone_half_angle = std::atan2(spell.radius, spell.range);
+        float cone_half_angle;
         float cone_range = spell.range;
+
+        if (cone_angle_override > 0.f)
+        {
+            // Use the angle from get_cast_cone_angle() - this is the TOTAL angle in degrees
+            // Convert to half-angle in radians
+            cone_half_angle = (cone_angle_override * 0.5f) * (PI / 180.f);
+        }
+        else
+        {
+            // Fallback: calculate from radius (assuming radius = width at range)
+            // This is less accurate but works when cone angle isn't available
+            cone_half_angle = std::atan2(spell.radius, spell.range);
+        }
 
         // Optimal direction toward predicted target position
         math::vector3 to_center = reachable_region.center - source->get_position();
@@ -2659,11 +3225,14 @@ namespace HybridPred
         result.cast_position = source->get_position() + direction * cone_range;
 
         // Step 6: Compute hit probabilities for cone
+        // Use effective range = cone range + target bounding radius
+        float effective_range = cone_range + target->get_bounding_radius();
+
         float physics_prob = compute_cone_reachability_overlap(
             source->get_position(),
             direction,
             cone_half_angle,
-            cone_range,
+            effective_range,
             reachable_region
         );
 
@@ -2671,7 +3240,7 @@ namespace HybridPred
             source->get_position(),
             direction,
             cone_half_angle,
-            cone_range,
+            effective_range,
             behavior_pdf
         );
 
@@ -2680,9 +3249,11 @@ namespace HybridPred
 
         // Weighted geometric fusion (trust physics more when behavior samples are sparse)
         size_t sample_count = tracker.get_history().size();
-        float current_time = g_sdk->clock_facade->get_game_time();
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
-        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
+        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed);
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
 
 #if HYBRID_PRED_ENABLE_REASONING
@@ -3003,6 +3574,7 @@ namespace HybridPred
 
     HybridFusionEngine::VectorConfiguration HybridFusionEngine::optimize_vector_orientation(
         game_object* source,
+        game_object* target,
         const math::vector3& predicted_target_pos,
         const ReachableRegion& reachable_region,
         const BehaviorPDF& behavior_pdf,
@@ -3038,7 +3610,8 @@ namespace HybridPred
 
         math::vector3 source_pos = source->get_position();
         float vector_length = spell.range;
-        float vector_width = spell.radius;
+        // Use effective width = spell radius + target bounding radius
+        float vector_width = spell.radius + target->get_bounding_radius();
         float max_first_cast_range = spell.cast_range;
 
         // If cast_range is 0, use range as default (some spells don't set cast_range)
@@ -3049,7 +3622,71 @@ namespace HybridPred
         math::vector3 to_predicted = predicted_target_pos - source_pos;
         float dist_to_predicted = to_predicted.magnitude();
 
-        // Test multiple orientations
+        // PRIMARY: Calculate direct line from source to target
+        // This is what players expect - a straight laser towards the enemy
+        if (dist_to_predicted > EPSILON)
+        {
+            math::vector3 direct_direction = to_predicted / dist_to_predicted;
+
+            // Place first_cast along the line from source to target
+            // If target is close, center the laser on them
+            // If target is far, place first_cast at max range
+            math::vector3 first_cast;
+            math::vector3 second_cast;
+
+            if (dist_to_predicted <= max_first_cast_range + vector_length * 0.5f)
+            {
+                // Target is close enough to center laser on them
+                first_cast = predicted_target_pos - direct_direction * (vector_length * 0.5f);
+                second_cast = predicted_target_pos + direct_direction * (vector_length * 0.5f);
+
+                // Adjust if first_cast is out of range
+                float distance_to_first = (first_cast - source_pos).magnitude();
+                if (distance_to_first > max_first_cast_range)
+                {
+                    first_cast = source_pos + direct_direction * max_first_cast_range;
+                    second_cast = first_cast + direct_direction * vector_length;
+                }
+            }
+            else
+            {
+                // Target is far - place first_cast at max range, laser extends towards target
+                first_cast = source_pos + direct_direction * max_first_cast_range;
+                second_cast = first_cast + direct_direction * vector_length;
+            }
+
+            // Compute hit probability for direct line
+            float physics_prob = compute_capsule_reachability_overlap(
+                first_cast,
+                direct_direction,
+                vector_length,
+                vector_width,
+                reachable_region
+            );
+
+            float behavior_prob = compute_capsule_behavior_probability(
+                first_cast,
+                direct_direction,
+                vector_length,
+                vector_width,
+                behavior_pdf
+            );
+
+            float target_speed = target ? target->get_move_speed() : 350.f;
+            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, target_speed);
+
+            // Use direct line as best configuration
+            best_config.first_cast_position = first_cast;
+            best_config.cast_position = second_cast;
+            best_config.hit_chance = hit_chance;
+            best_config.physics_prob = physics_prob;
+            best_config.behavior_prob = behavior_prob;
+        }
+
+        // OPTIONAL: Test other orientations only if we want to optimize for multi-target or special cases
+        // For now, skip this since single-target direct line is what players expect
+        // Can be re-enabled for AOE vector spell optimization
+        #if 0
         constexpr int NUM_ORIENTATIONS = 20;
 
         for (int i = 0; i < NUM_ORIENTATIONS; ++i)
@@ -3062,66 +3699,9 @@ namespace HybridPred
             math::vector3 first_cast = predicted_target_pos - direction * (vector_length * 0.5f);
             math::vector3 second_cast = predicted_target_pos + direction * (vector_length * 0.5f);
 
-            // Check if first_cast is within range from source
-            float distance_to_first_cast = (first_cast - source_pos).magnitude();
-            if (distance_to_first_cast > max_first_cast_range)
-            {
-                // Adjust: Slide line along orientation direction towards source
-                // This maintains the line's orientation while bringing first_cast within range
-
-                // Calculate how much to slide the line towards source
-                float overshoot = distance_to_first_cast - max_first_cast_range;
-
-                // Slide both points along the line's direction (towards source)
-                // Direction from first_cast to source along the line's orientation
-                math::vector3 to_first_cast = first_cast - source_pos;
-                float dot_product = to_first_cast.dot(direction);
-
-                // Project onto line direction and slide
-                math::vector3 slide_offset = direction * overshoot;
-                first_cast = first_cast - slide_offset;
-                second_cast = second_cast - slide_offset;
-
-                // Verify first_cast is now within range (safety check)
-                float new_distance = (first_cast - source_pos).magnitude();
-                if (new_distance > max_first_cast_range)
-                {
-                    // Fallback: place first_cast at max range in line direction
-                    first_cast = source_pos + direction * max_first_cast_range;
-                    second_cast = first_cast + direction * vector_length;
-                }
-            }
-
-            // Compute hit probability for this configuration
-            float physics_prob = compute_capsule_reachability_overlap(
-                first_cast,
-                direction,
-                vector_length,
-                vector_width,
-                reachable_region
-            );
-
-            float behavior_prob = compute_capsule_behavior_probability(
-                first_cast,
-                direction,
-                vector_length,
-                vector_width,
-                behavior_pdf
-            );
-
-            // Weighted geometric fusion (trust physics more when behavior samples are sparse)
-            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update);
-
-            // Update best configuration
-            if (hit_chance > best_config.hit_chance)
-            {
-                best_config.first_cast_position = first_cast;
-                best_config.cast_position = second_cast;
-                best_config.hit_chance = hit_chance;
-                best_config.physics_prob = physics_prob;
-                best_config.behavior_prob = behavior_prob;
-            }
+            // ... rest of orientation testing loop ...
         }
+        #endif
 
         // If no valid configuration found, use default (aim at target)
         if (best_config.hit_chance < EPSILON)
