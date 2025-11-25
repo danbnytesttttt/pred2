@@ -83,8 +83,6 @@ namespace Prediction
                     {
                         g_sdk->log_console("[Danny.Prediction] Telemetry not enabled - enable it first!");
                     }
-                    // Auto-uncheck the button
-                    g_menu->get_checkbox("print_telemetry")->set_value(false);
                 }
                 });
 
