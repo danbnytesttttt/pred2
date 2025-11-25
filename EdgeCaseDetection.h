@@ -208,32 +208,35 @@ namespace EdgeCases
             info.dash_arrival_time = 0.1f;  // 100ms default
         }
 
-        // Confidence based on dash travel time (longer = more time to intercept = higher confidence)
-        // Key insight: We predict the ENDPOINT (known position), so more travel time = easier to hit
+        // Confidence based on dash travel time
+        // Key insight: Longer dashes = committed animation = easier to intercept
+        // Blinks are HARDER despite known endpoint (no flight interception, instant reaction time needed)
         if (info.dash_arrival_time < 0.1f)
         {
-            // Instant blink (Flash, Ezreal E, Kassadin R): Teleports to known endpoint
-            // Very predictable since endpoint is certain and immediate
-            info.confidence_multiplier = 0.95f;
+            // Instant blink (Flash, Ezreal E, Kassadin R)
+            // LOWER confidence because:
+            // - No interception window during flight (already completed)
+            // - They can move/react immediately after landing
+            // - Detection delay means they have time to dodge our incoming spell
+            // - No "committed" animation period to exploit
+            info.confidence_multiplier = 0.75f;
         }
         else if (info.dash_arrival_time < 0.3f)
         {
-            // Short dash (quick hops): Less time to react but endpoint still known
-            // Examples: Short Graves E, Vayne Q
-            info.confidence_multiplier = 0.90f;
+            // Short dash (Graves E, Vayne Q)
+            // Brief travel time, small interception window but still catchable
+            info.confidence_multiplier = 0.85f;
         }
         else if (info.dash_arrival_time < 0.6f)
         {
-            // Medium dash: Optimal interception window
-            // Examples: Tristana W, Lucian E, most standard dashes
-            // More time to calculate and aim = highest confidence
+            // Medium dash (Tristana W, Lucian E)
+            // Optimal: Committed to animation, good interception window during flight
             info.confidence_multiplier = 0.95f;
         }
         else
         {
-            // Long dash: Maximum time to intercept during flight or at endpoint
-            // Examples: Long-range Tristana W, Zac E
-            // Plenty of time to aim = very high confidence
+            // Long dash (Zac E, long Tristana W)
+            // Easiest: Long commitment period, multiple opportunities to intercept
             info.confidence_multiplier = 1.0f;
         }
 
