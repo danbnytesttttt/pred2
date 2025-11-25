@@ -69,6 +69,12 @@ namespace Prediction
 
             g_menu->add_checkbox("telemetry", "Enable Telemetry", false, [](bool value) {
                 PredictionSettings::get().enable_telemetry = value;
+                if (value)
+                {
+                    // Initialize telemetry with champion name
+                    PredictionTelemetry::TelemetryLogger::initialize(MyHeroNamePredCore, true);
+                    g_sdk->log_console("[Danny.Prediction] Telemetry enabled and initialized");
+                }
                 });
 
             g_menu->add_checkbox("print_telemetry", "Print Telemetry Report", false, [](bool value) {
