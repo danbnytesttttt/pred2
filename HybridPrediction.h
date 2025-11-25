@@ -59,7 +59,7 @@ namespace HybridPred
     constexpr int MOVEMENT_HISTORY_SIZE = 100;      // Track last N positions
     constexpr float MOVEMENT_SAMPLE_RATE = 0.05f;   // Sample every 50ms
     constexpr float BEHAVIOR_DECAY_RATE = 0.95f;    // Exponential decay factor
-    constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 40;    // Minimum 2 seconds of observation before trusting behavior patterns
+    constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 35;    // Minimum 1.75 seconds of observation before trusting behavior patterns
 
     // Tracker cleanup parameters
     constexpr float TRACKER_TIMEOUT = 30.0f;        // Remove trackers after 30s when target doesn't exist
@@ -161,29 +161,29 @@ namespace HybridPred
 
         // Determine fusion weight based on behavior sample quality
         // PHILOSOPHY: Physics is the reliable foundation, behavior is supplementary
-        // We NEVER let behavior dominate - physics always has majority weight
-        float physics_weight = 0.65f;  // Default: physics-dominant
+        // Physics always has majority weight, but behavior can contribute meaningfully
+        float physics_weight = 0.63f;  // Default: physics-dominant
 
         // If we have very few behavior samples, trust physics heavily
         if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            // Ramp from 0.85 (no samples) down to 0.65 (minimum samples)
-            // 0 samples = pure physics, 40 samples = start incorporating behavior
+            // Ramp from 0.85 (no samples) down to 0.63 (minimum samples)
+            // 0 samples = pure physics, 35 samples = start incorporating behavior
             float factor = static_cast<float>(sample_count) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.85f - 0.20f * factor;  // 0.85 → 0.65
+            physics_weight = 0.85f - 0.22f * factor;  // 0.85 → 0.63
         }
         else if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR * 2)
         {
-            // Ramp from 0.65 down to 0.58 (still physics-dominant)
-            // 40-80 samples: gradually trust behavior more, but physics stays majority
+            // Ramp from 0.63 down to 0.56 (still physics-dominant)
+            // 35-70 samples: gradually trust behavior more, but physics stays majority
             float factor = static_cast<float>(sample_count - MIN_SAMPLES_FOR_BEHAVIOR) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.65f - 0.07f * factor;  // 0.65 → 0.58
+            physics_weight = 0.63f - 0.07f * factor;  // 0.63 → 0.56
         }
         else
         {
-            // Abundant data (80+ samples = 4+ seconds): physics still leads
-            // Never go below 58% physics - behavior is adjustment, not primary predictor
-            physics_weight = 0.58f;
+            // Abundant data (70+ samples = 3.5+ seconds): physics still leads
+            // 56% physics, 44% behavior - behavior has meaningful contribution
+            physics_weight = 0.56f;
         }
 
         // MOBILITY FACTOR: Fast targets are more reactive and unpredictable
