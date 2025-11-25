@@ -58,7 +58,9 @@ namespace HybridPred
     // Movement tracking parameters
     constexpr int MOVEMENT_HISTORY_SIZE = 100;      // Track last N positions
     constexpr float MOVEMENT_SAMPLE_RATE = 0.05f;   // Sample every 50ms
-    constexpr float BEHAVIOR_DECAY_RATE = 0.95f;    // Exponential decay factor
+    // Time-based decay half-life (seconds) - how quickly old samples lose relevance
+    // At half-life, a sample has 50% weight. At 2x half-life, 25% weight, etc.
+    constexpr float BEHAVIOR_HALF_LIFE_BASE = 0.5f;  // 500ms base half-life
     constexpr int MIN_SAMPLES_FOR_BEHAVIOR = 10;    // Minimum data for behavior model
 
     // Tracker cleanup parameters
@@ -75,8 +77,11 @@ namespace HybridPred
     constexpr float MAX_REACTION_TIME = 0.35f;      // Slow reactions (distracted, teamfight)
 
     // Confidence parameters
-    constexpr float CONFIDENCE_DISTANCE_DECAY = 0.00005f;  // Per-unit distance penalty (REDUCED 10x from 0.0005)
-    constexpr float CONFIDENCE_LATENCY_FACTOR = 0.01f;    // Per-ms latency penalty
+    // TRAVEL-TIME BASED DECAY: Confidence decreases with spell travel time, not raw distance
+    // Rationale: A fast spell at 1000 units is accurate. A slow spell at 500 units is not.
+    // Travel time = distance/speed + cast_delay, which captures actual reaction window
+    constexpr float CONFIDENCE_TRAVEL_TIME_DECAY = 0.8f;   // Per-second travel time penalty
+    constexpr float CONFIDENCE_LATENCY_FACTOR = 0.01f;     // Per-ms latency penalty
     constexpr float ANIMATION_LOCK_CONFIDENCE_BOOST = 0.3f; // Boost when immobile
 
     // =========================================================================
@@ -84,22 +89,44 @@ namespace HybridPred
     // =========================================================================
 
     /**
-     * Compute adaptive decay rate based on target mobility
-     * Fast-moving targets: faster decay (recent data more important)
-     * Slow-moving targets: slower decay (longer history matters)
+     * Compute adaptive half-life based on target mobility (TIME-BASED DECAY)
+     *
+     * Fast-moving targets: shorter half-life (recent data more important)
+     * Slow-moving targets: longer half-life (longer history matters)
+     *
+     * Returns half-life in seconds. Weight formula: exp(-(t_now - t_sample) / half_life)
+     * This is frame-rate independent and handles fog/lag gracefully.
      */
-    inline float get_adaptive_decay_rate(float move_speed)
+    inline float get_adaptive_half_life(float move_speed)
     {
-        // High mobility (>450): 0.90 decay (half-life = 0.34s)
+        // High mobility (>450): 0.3s half-life (aggressive decay)
         if (move_speed > 450.f)
-            return 0.90f;
+            return 0.3f;
 
-        // Normal mobility (350-450): 0.95 decay (half-life = 0.675s)
+        // Normal mobility (350-450): 0.5s half-life (balanced)
         if (move_speed > 350.f)
-            return 0.95f;
+            return 0.5f;
 
-        // Low mobility (<350): 0.97 decay (half-life = 1.15s)
-        return 0.97f;
+        // Low mobility (<350): 0.8s half-life (longer memory)
+        return 0.8f;
+    }
+
+    /**
+     * Compute time-based exponential decay weight
+     *
+     * @param time_delta Time since sample was recorded (seconds)
+     * @param half_life Half-life in seconds
+     * @return Weight in range (0, 1], where 1 = current time
+     */
+    inline float compute_time_decay_weight(float time_delta, float half_life)
+    {
+        if (half_life < EPSILON)
+            return 1.0f;  // No decay if half-life is zero
+
+        // w = exp(-t * ln(2) / half_life) = 2^(-t / half_life)
+        // Using ln(2) ≈ 0.693 for proper half-life semantics
+        constexpr float LN2 = 0.693147f;
+        return std::exp(-time_delta * LN2 / half_life);
     }
 
     /**
@@ -212,14 +239,28 @@ namespace HybridPred
         // Key: previous move (-1, 0, 1), Value: map of next move to count
         std::map<int, std::map<int, int>> ngram_transitions;
 
-        // Get N-Gram probability for a predicted move given current state
+        /**
+         * Get N-Gram probability for a predicted move given current state
+         *
+         * Uses LAPLACE SMOOTHING (add-one smoothing) to prevent overconfidence
+         * with sparse data. Without smoothing, 1 observation = 100% probability,
+         * which is statistically invalid for small sample sizes.
+         *
+         * Formula: P = (count + 1) / (total + num_categories)
+         * - With 0 observations: P = 1/3 = 33% (uniform prior)
+         * - With 1 observation out of 1: P = 2/4 = 50% (not 100%)
+         * - With 10 observations out of 10: P = 11/13 = 85% (approaches true value)
+         */
         float get_ngram_probability(int predicted_move) const
         {
-            if (juke_sequence.empty()) return 0.33f;  // No data
+            constexpr int NUM_CATEGORIES = 3;  // left, straight, right
+            constexpr float UNIFORM_PRIOR = 1.0f / NUM_CATEGORIES;  // 0.33...
+
+            if (juke_sequence.empty()) return UNIFORM_PRIOR;  // No data - uniform
 
             int last_move = juke_sequence.back();
             auto it = ngram_transitions.find(last_move);
-            if (it == ngram_transitions.end()) return 0.33f;  // No transitions from this state
+            if (it == ngram_transitions.end()) return UNIFORM_PRIOR;  // No transitions from this state
 
             const auto& next_counts = it->second;
             int total = 0;
@@ -232,8 +273,9 @@ namespace HybridPred
                     target_count = pair.second;
             }
 
-            if (total == 0) return 0.33f;
-            return static_cast<float>(target_count) / static_cast<float>(total);
+            // LAPLACE SMOOTHING: Add 1 to count, add NUM_CATEGORIES to total
+            // This prevents 0% and 100% probabilities from sparse data
+            return static_cast<float>(target_count + 1) / static_cast<float>(total + NUM_CATEGORIES);
         }
 
         DodgePattern() : left_dodge_frequency(0.5f), right_dodge_frequency(0.5f),
@@ -531,9 +573,13 @@ namespace HybridPred
          * PDF(p, t) = Σᵢ wᵢ * K(p - pᵢ(t))
          *
          * where:
-         * - wᵢ = BEHAVIOR_DECAY_RATE^i (recent data weighted more)
-         * - K is a kernel function (Gaussian)
+         * - wᵢ = exp(-Δtᵢ * ln(2) / half_life)  [TIME-BASED DECAY]
+         *   (Δtᵢ = time since snapshot i, half_life adapts to mobility)
+         * - K is a Gaussian kernel function
          * - pᵢ(t) is predicted position from snapshot i
+         *
+         * Time-based decay is frame-rate independent and handles
+         * fog-of-war/lag gracefully (no artificial weight changes).
          */
         static BehaviorPDF build_pdf_from_history(
             const TargetBehaviorTracker& tracker,

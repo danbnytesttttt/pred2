@@ -584,8 +584,9 @@ namespace HybridPred
         if (pdf.cell_size < EPSILON)
             pdf.cell_size = 25.f;  // Safe default
 
-        // ADAPTIVE DECAY RATE: Adjust based on target mobility
-        float decay_rate = get_adaptive_decay_rate(latest.velocity.magnitude());
+        // TIME-BASED DECAY: Use half-life instead of per-sample decay rate
+        // This is frame-rate independent and handles fog/lag correctly
+        float half_life = get_adaptive_half_life(latest.velocity.magnitude());
 
         // If animation locked, predict stationary at current position
         if (latest.is_cced || latest.is_casting)
@@ -607,9 +608,10 @@ namespace HybridPred
             size_t idx = movement_history_.size() - 1 - i;
             const auto& snapshot = movement_history_[idx];
 
-            // Exponential decay weighting (recent data more important)
-            // Use adaptive decay rate based on target mobility
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // TIME-BASED exponential decay weighting (recent data more important)
+            // Weight = 2^(-time_delta / half_life), so at half_life seconds ago, weight = 0.5
+            float time_delta = current_time - snapshot.timestamp;
+            float weight = compute_time_decay_weight(time_delta, half_life);
 
             // Predict position from this snapshot
             math::vector3 predicted_pos = snapshot.position + snapshot.velocity * prediction_time;
@@ -642,9 +644,9 @@ namespace HybridPred
             size_t idx = movement_history_.size() - 1 - i;
             const auto& snapshot = movement_history_[idx];
 
-            // Exponential decay weighting (recent data more important)
-            // Use adaptive decay rate based on target mobility
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // TIME-BASED exponential decay weighting
+            float time_delta = current_time - snapshot.timestamp;
+            float weight = compute_time_decay_weight(time_delta, half_life);
 
             // Predict position from this snapshot
             math::vector3 predicted_pos = snapshot.position + snapshot.velocity * prediction_time;
@@ -1474,21 +1476,28 @@ namespace HybridPred
         if (history.empty())
             return math::vector3{};
 
+        // Get current time for time-based decay
+        if (!g_sdk || !g_sdk->clock_facade)
+            return math::vector3{};
+        float current_time = g_sdk->clock_facade->get_game_time();
+
         const auto& latest = history.back();
 
         // Weighted average of predicted positions
         math::vector3 predicted_pos{};
         float total_weight = 0.f;
 
-        // ADAPTIVE DECAY RATE: Adjust based on target mobility
-        float decay_rate = get_adaptive_decay_rate(latest.velocity.magnitude());
+        // TIME-BASED DECAY: Use half-life instead of per-sample decay rate
+        float half_life = get_adaptive_half_life(latest.velocity.magnitude());
 
         for (size_t i = 0; i < std::min(history.size(), size_t(20)); ++i)
         {
             size_t idx = history.size() - 1 - i;
             const auto& snapshot = history[idx];
 
-            float weight = std::pow(decay_rate, static_cast<float>(i));
+            // TIME-BASED exponential decay weighting
+            float time_delta = current_time - snapshot.timestamp;
+            float weight = compute_time_decay_weight(time_delta, half_life);
             predicted_pos = predicted_pos + (snapshot.position + snapshot.velocity * prediction_time) * weight;
             total_weight += weight;
         }
@@ -2066,9 +2075,28 @@ namespace HybridPred
 
         float confidence = 1.0f;
 
-        // Distance factor - further = less confident
+        // TRAVEL-TIME BASED DECAY: Confidence decreases with spell travel time
+        // This is conceptually superior to distance-based decay because:
+        // - Fast spell at 1000 units = short travel time = high confidence
+        // - Slow spell at 500 units = long travel time = lower confidence
+        // Travel time captures the actual reaction window the target has
         float distance = (target->get_position() - source->get_position()).magnitude();
-        confidence *= std::exp(-distance * CONFIDENCE_DISTANCE_DECAY);
+        float travel_time = spell.delay;  // Start with cast delay
+
+        // Add projectile flight time (if not instant)
+        if (spell.projectile_speed > EPSILON && spell.projectile_speed < FLT_MAX / 2.f)
+        {
+            travel_time += distance / spell.projectile_speed;
+        }
+        // Instant spells: travel_time remains just the cast delay
+
+        // Apply travel time decay: confidence = e^(-travel_time * decay_rate)
+        // With CONFIDENCE_TRAVEL_TIME_DECAY = 0.8:
+        //   0.25s travel = 82% confidence (fast spell)
+        //   0.50s travel = 67% confidence
+        //   1.00s travel = 45% confidence (slow spell)
+        //   2.00s travel = 20% confidence (very slow)
+        confidence *= std::exp(-travel_time * CONFIDENCE_TRAVEL_TIME_DECAY);
 
         // Latency factor (ping in seconds)
         // CRASH FIX: Check net_client before accessing
@@ -2076,18 +2104,6 @@ namespace HybridPred
         if (g_sdk->net_client)
             ping = static_cast<float>(g_sdk->net_client->get_ping()) * 0.001f;
         confidence *= std::exp(-ping * CONFIDENCE_LATENCY_FACTOR);
-
-        // Spell-specific adjustments
-        if (spell.projectile_speed >= FLT_MAX / 2.f)
-        {
-            // Instant spell - higher confidence (less time for target to react)
-            confidence *= 1.2f;
-        }
-        else if (spell.projectile_speed < 1000.f)
-        {
-            // Slow projectile - lower confidence (more time to dodge)
-            confidence *= 0.9f;
-        }
 
         // Mobility factor - high mobility champions are harder to predict
         float move_speed = target->get_move_speed();
