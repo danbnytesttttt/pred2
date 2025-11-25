@@ -1230,8 +1230,12 @@ namespace HybridPred
          */
 
          // Validate inputs
-        if (target_move_speed < EPSILON || arrival_time < EPSILON)
-            return 0.f;
+        if (arrival_time < EPSILON)
+            return 0.f;  // Invalid arrival time
+
+        // CC'd target = guaranteed hit (can't dodge)
+        if (target_move_speed < EPSILON)
+            return 1.0f;
 
         // Calculate distance from target to spell center
         float distance_to_center = (target_position - cast_position).magnitude();
@@ -1243,10 +1247,6 @@ namespace HybridPred
 
         // Distance needed to run to safety
         float distance_to_edge = projectile_radius - distance_to_center;
-
-        // CRITICAL: Check for zero move speed to avoid division by zero
-        if (target_move_speed < EPSILON)
-            return 1.0f;  // Can't move = guaranteed hit
 
         // Time needed to escape
         float time_needed_to_escape = distance_to_edge / target_move_speed;
