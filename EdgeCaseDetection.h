@@ -208,11 +208,34 @@ namespace EdgeCases
             info.dash_arrival_time = 0.1f;  // 100ms default
         }
 
-        // Confidence decreases with dash distance
-        // Short dashes (< 400 units): high confidence
-        // Long dashes (> 800 units): low confidence
-        float conf = 1.0f - distance / 1600.f;
-        info.confidence_multiplier = (conf < 0.5f) ? 0.5f : (conf > 1.0f) ? 1.0f : conf;
+        // Confidence based on dash travel time (longer = more time to intercept = higher confidence)
+        // Key insight: We predict the ENDPOINT (known position), so more travel time = easier to hit
+        if (info.dash_arrival_time < 0.1f)
+        {
+            // Instant blink (Flash, Ezreal E, Kassadin R): Teleports to known endpoint
+            // Very predictable since endpoint is certain and immediate
+            info.confidence_multiplier = 0.95f;
+        }
+        else if (info.dash_arrival_time < 0.3f)
+        {
+            // Short dash (quick hops): Less time to react but endpoint still known
+            // Examples: Short Graves E, Vayne Q
+            info.confidence_multiplier = 0.90f;
+        }
+        else if (info.dash_arrival_time < 0.6f)
+        {
+            // Medium dash: Optimal interception window
+            // Examples: Tristana W, Lucian E, most standard dashes
+            // More time to calculate and aim = highest confidence
+            info.confidence_multiplier = 0.95f;
+        }
+        else
+        {
+            // Long dash: Maximum time to intercept during flight or at endpoint
+            // Examples: Long-range Tristana W, Zac E
+            // Plenty of time to aim = very high confidence
+            info.confidence_multiplier = 1.0f;
+        }
 
         return info;
     }
