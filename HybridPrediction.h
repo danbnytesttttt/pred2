@@ -84,6 +84,40 @@ namespace HybridPred
     // =========================================================================
 
     /**
+     * Get effective move speed accounting for CC status
+     *
+     * Problem: target->get_move_speed() returns the stat value (e.g., 450),
+     * but CC'd targets can't actually move. Using the stat for reachable
+     * region computation creates incorrectly large circles.
+     *
+     * This helper returns 0 for immobilizing CC, allowing normal logic
+     * to correctly identify "no dodge possible" scenarios.
+     *
+     * @param target The target to check
+     * @return Effective move speed (0 if immobilized, stat value otherwise)
+     */
+    inline float get_effective_move_speed(game_object* target)
+    {
+        if (!target || !target->is_valid())
+            return 0.f;
+
+        // Check for immobilizing CC (can't move at all)
+        if (target->has_buff_of_type(buff_type::stun) ||
+            target->has_buff_of_type(buff_type::snare) ||
+            target->has_buff_of_type(buff_type::charm) ||
+            target->has_buff_of_type(buff_type::fear) ||
+            target->has_buff_of_type(buff_type::taunt) ||
+            target->has_buff_of_type(buff_type::suppression) ||
+            target->has_buff_of_type(buff_type::knockup) ||
+            target->has_buff_of_type(buff_type::knockback))
+        {
+            return 0.f;  // Immobilized - can't dodge
+        }
+
+        return target->get_move_speed();
+    }
+
+    /**
      * Compute adaptive decay rate based on target mobility
      * Fast-moving targets: faster decay (recent data more important)
      * Slow-moving targets: slower decay (longer history matters)

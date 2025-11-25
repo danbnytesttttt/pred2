@@ -866,7 +866,8 @@ namespace HybridPred
                 }
 
                 // Gaussian weight: high when spell arrives near expected juke time
-                float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
+                // Defensive: max(0, variance) handles floating point precision edge cases
+                float sigma = std::sqrt(std::max(0.f, dodge_pattern_.juke_interval_variance));
                 float time_diff = prediction_time - time_until_next_juke;
                 juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
                 juke_cadence_weight = std::clamp(juke_cadence_weight, 0.3f, 1.0f);
@@ -874,7 +875,8 @@ namespace HybridPred
             else if (dodge_pattern_.juke_interval_variance > EPSILON)
             {
                 // Fallback: no juke history yet, use old method
-                float sigma = std::sqrt(dodge_pattern_.juke_interval_variance);
+                // Defensive: max(0, variance) handles floating point precision edge cases
+                float sigma = std::sqrt(std::max(0.f, dodge_pattern_.juke_interval_variance));
                 float time_diff = prediction_time - dodge_pattern_.juke_interval_mean;
                 juke_cadence_weight = std::exp(-0.5f * (time_diff * time_diff) / (sigma * sigma));
                 juke_cadence_weight = std::clamp(juke_cadence_weight, 0.3f, 1.0f);
@@ -1131,9 +1133,10 @@ namespace HybridPred
         float elapsed_time = current_time - window.window_start_time;
 
         // Calculate opportunity score: how good is this moment relative to recent peak?
+        // Clamped to [0, 1] range to ensure it's a valid probability
         if (window.peak_hit_chance > EPSILON)
         {
-            result.opportunity_score = result.hit_chance / window.peak_hit_chance;
+            result.opportunity_score = std::min(result.hit_chance / window.peak_hit_chance, 1.0f);
         }
         else
         {
@@ -1286,6 +1289,19 @@ namespace HybridPred
             return math::vector3{};
 
         math::vector3 position = target->get_position();
+
+        // CC CHECK: Immobilized targets can't follow their path
+        // Return current position for stuns, snares, etc. (but allow knockbacks to follow forced movement)
+        if (target->has_buff_of_type(buff_type::stun) ||
+            target->has_buff_of_type(buff_type::snare) ||
+            target->has_buff_of_type(buff_type::charm) ||
+            target->has_buff_of_type(buff_type::fear) ||
+            target->has_buff_of_type(buff_type::taunt) ||
+            target->has_buff_of_type(buff_type::suppression))
+        {
+            return position;  // CC'd - stay at current position
+        }
+
         auto path = target->get_path();
 
         // No path or stationary - return current position
@@ -2139,7 +2155,8 @@ namespace HybridPred
         // This follows actual waypoints instead of linear extrapolation
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
         // This gives us actual observed dodge capability, not arbitrary factors
@@ -2152,10 +2169,10 @@ namespace HybridPred
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
 
         float dodge_time = 0.f;
-        if (max_dodge_time > 0.f && move_speed > EPSILON)
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
             // Use observed juke magnitude, capped by available time
-            float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
         }
         // else: spell arrives before they can react - minimal reachable region
@@ -2164,7 +2181,7 @@ namespace HybridPred
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             dodge_time,
-            move_speed
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
@@ -2664,7 +2681,8 @@ namespace HybridPred
         // FIX: Use path-following prediction for better accuracy
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
@@ -2673,9 +2691,9 @@ namespace HybridPred
         // Calculate dodge time accounting for human reaction
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
         float dodge_time = 0.f;
-        if (max_dodge_time > 0.f && move_speed > EPSILON)
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
         }
 
@@ -2684,7 +2702,7 @@ namespace HybridPred
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             dodge_time,
-            move_speed
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
@@ -3023,7 +3041,8 @@ namespace HybridPred
         // FIX: Use path-following prediction for better accuracy
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float move_speed = target->get_move_speed();  // Stat value for historical lookups
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
@@ -3032,9 +3051,9 @@ namespace HybridPred
         // Calculate dodge time accounting for human reaction
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
         float dodge_time = 0.f;
-        if (max_dodge_time > 0.f && move_speed > EPSILON)
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            float observed_dodge_time = (observed_magnitude * 1.2f) / move_speed;
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
         }
 
@@ -3042,7 +3061,7 @@ namespace HybridPred
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             dodge_time,
-            move_speed
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
@@ -3150,13 +3169,13 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();
+        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             target->get_position(),
             target_velocity,
             arrival_time,
-            move_speed
+            effective_move_speed  // Use effective speed (0 if CC'd)
         );
 
         result.reachable_region = reachable_region;
