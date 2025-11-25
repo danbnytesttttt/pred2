@@ -27,8 +27,11 @@ namespace PredictionTelemetry
         float timestamp = 0.f;
         std::string target_name = "";
         std::string spell_type = "";
+        int spell_slot = -1;  // 0=Q, 1=W, 2=E, 3=R
         float hit_chance = 0.f;
         float confidence = 0.f;
+        float physics_contribution = 0.f;
+        float behavior_contribution = 0.f;
         float distance = 0.f;
         bool was_dash = false;
         bool was_stationary = false;
@@ -81,6 +84,21 @@ namespace PredictionTelemetry
         // Per-spell-type stats
         std::unordered_map<std::string, int> spell_type_counts;
         std::unordered_map<std::string, float> spell_type_avg_hitchance;
+
+        // Per-spell-slot stats (Q/W/E/R)
+        struct SpellSlotStats {
+            int count = 0;
+            float total_hc = 0.f;
+            float total_confidence = 0.f;
+            float total_physics = 0.f;
+            float total_behavior = 0.f;
+            int edge_case_dash = 0;
+            int edge_case_stasis = 0;
+            int edge_case_channel = 0;
+            int while_moving = 0;
+            int while_stationary = 0;
+        };
+        std::unordered_map<int, SpellSlotStats> spell_slot_stats;  // key = spell_slot (0-3)
 
         // Per-target stats
         std::unordered_map<std::string, int> target_prediction_counts;
@@ -198,6 +216,24 @@ namespace PredictionTelemetry
             // Per-spell-type stats
             stats_.spell_type_counts[event.spell_type]++;
             stats_.spell_type_avg_hitchance[event.spell_type] += event.hit_chance;
+
+            // Per-spell-slot stats (Q/W/E/R)
+            if (event.spell_slot >= 0 && event.spell_slot <= 3)
+            {
+                auto& slot_stats = stats_.spell_slot_stats[event.spell_slot];
+                slot_stats.count++;
+                slot_stats.total_hc += event.hit_chance;
+                slot_stats.total_confidence += event.confidence;
+                slot_stats.total_physics += event.physics_contribution;
+                slot_stats.total_behavior += event.behavior_contribution;
+
+                if (event.edge_case == "dash") slot_stats.edge_case_dash++;
+                else if (event.edge_case == "stasis") slot_stats.edge_case_stasis++;
+                else if (event.edge_case == "channeling") slot_stats.edge_case_channel++;
+
+                if (event.target_is_moving) slot_stats.while_moving++;
+                else slot_stats.while_stationary++;
+            }
 
             // Per-target stats
             stats_.target_prediction_counts[event.target_name]++;
@@ -418,6 +454,55 @@ namespace PredictionTelemetry
                 snprintf(buf, sizeof(buf), "--- PATTERNS DETECTED: %d (Alt: %d | Rep: %d) ---",
                     stats_.patterns_detected, stats_.alternating_patterns, stats_.repeating_patterns);
                 g_sdk->log_console(buf);
+            }
+
+            // PER-SPELL BREAKDOWN (Q/W/E/R) - DETAILED
+            if (!stats_.spell_slot_stats.empty())
+            {
+                g_sdk->log_console("=============================================================================");
+                g_sdk->log_console("DETAILED PER-SPELL BREAKDOWN (Q/W/E/R)");
+                g_sdk->log_console("=============================================================================");
+
+                const char* spell_names[] = { "Q", "W", "E", "R" };
+                for (int slot = 0; slot <= 3; slot++)
+                {
+                    auto it = stats_.spell_slot_stats.find(slot);
+                    if (it == stats_.spell_slot_stats.end() || it->second.count == 0)
+                        continue;
+
+                    const auto& s = it->second;
+                    float avg_hc = s.total_hc / s.count;
+                    float avg_conf = s.total_confidence / s.count;
+                    float avg_phys = s.total_physics / s.count;
+                    float avg_behav = s.total_behavior / s.count;
+
+                    g_sdk->log_console("-----------------------------------------------------------------------------");
+                    snprintf(buf, sizeof(buf), "SPELL [%s] - %d predictions", spell_names[slot], s.count);
+                    g_sdk->log_console(buf);
+                    g_sdk->log_console("-----------------------------------------------------------------------------");
+
+                    snprintf(buf, sizeof(buf), "Average Hit Chance: %.1f%%", avg_hc * 100.f);
+                    g_sdk->log_console(buf);
+                    snprintf(buf, sizeof(buf), "Average Confidence: %.1f%%", avg_conf * 100.f);
+                    g_sdk->log_console(buf);
+
+                    snprintf(buf, sizeof(buf), "Physics Contribution: %.1f%% | Behavior Contribution: %.1f%%",
+                        avg_phys * 100.f, avg_behav * 100.f);
+                    g_sdk->log_console(buf);
+
+                    snprintf(buf, sizeof(buf), "Movement Context: Moving=%d (%.1f%%) | Stationary=%d (%.1f%%)",
+                        s.while_moving, s.while_moving * 100.f / s.count,
+                        s.while_stationary, s.while_stationary * 100.f / s.count);
+                    g_sdk->log_console(buf);
+
+                    if (s.edge_case_dash > 0 || s.edge_case_stasis > 0 || s.edge_case_channel > 0)
+                    {
+                        snprintf(buf, sizeof(buf), "Edge Cases: Dash=%d | Stasis=%d | Channel=%d",
+                            s.edge_case_dash, s.edge_case_stasis, s.edge_case_channel);
+                        g_sdk->log_console(buf);
+                    }
+                }
+                g_sdk->log_console("=============================================================================");
             }
 
             // Per-spell-type stats

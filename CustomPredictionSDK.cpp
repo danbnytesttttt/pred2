@@ -543,8 +543,11 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 default: event.spell_type = "unknown"; break;
                 }
 
+                event.spell_slot = spell_data.spell_slot;
                 event.hit_chance = hybrid_result.hit_chance;
                 event.confidence = hybrid_result.confidence_score;
+                event.physics_contribution = hybrid_result.physics_contribution;
+                event.behavior_contribution = hybrid_result.behavior_contribution;
                 event.distance = spell_data.source->get_position().distance(obj->get_position());
                 event.computation_time_ms = computation_time_ms;
 

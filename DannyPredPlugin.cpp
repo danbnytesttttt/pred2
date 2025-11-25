@@ -71,6 +71,23 @@ namespace Prediction
                 PredictionSettings::get().enable_telemetry = value;
                 });
 
+            g_menu->add_checkbox("print_telemetry", "Print Telemetry Report", false, [](bool value) {
+                if (value)
+                {
+                    if (PredictionSettings::get().enable_telemetry)
+                    {
+                        g_sdk->log_console("[Danny.Prediction] ===== TELEMETRY REPORT =====");
+                        PredictionTelemetry::TelemetryLogger::write_report();
+                    }
+                    else
+                    {
+                        g_sdk->log_console("[Danny.Prediction] Telemetry not enabled - enable it first!");
+                    }
+                    // Auto-uncheck the button
+                    g_menu->get_checkbox("print_telemetry")->set_value(false);
+                }
+                });
+
             g_menu->add_checkbox("visuals", "Draw Predictions", false, [](bool value) {
                 PredictionSettings::get().enable_visuals = value;
                 });
