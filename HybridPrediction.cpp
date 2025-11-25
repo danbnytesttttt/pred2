@@ -475,7 +475,8 @@ namespace HybridPred
         // Detect alternating pattern (L-R-L-R or R-L-R-L)
         // EARNED CONFIDENCE: Require more evidence before trusting patterns
         // Don't give high confidence after just L-R-L-R - need sustained pattern
-        if (dodge_pattern_.juke_sequence.size() >= 6)  // Need 6+ jukes, not 4
+        // Increased thresholds to match more conservative overall approach (40 sample minimum)
+        if (dodge_pattern_.juke_sequence.size() >= 8)  // Need 8+ jukes for reliability
         {
             bool is_alternating = true;
             int alternation_count = 0;
@@ -499,9 +500,9 @@ namespace HybridPred
                 }
             }
 
-            // Require 4+ alternations for pattern (was 2)
-            // Confidence scales: 4 alt = 0.5, 5 = 0.6, 6 = 0.7, 7+ = 0.75 max
-            if (is_alternating && alternation_count >= 4)
+            // Require 5+ alternations for pattern (more conservative)
+            // Confidence scales: 5 alt = 0.55, 6 = 0.625, 7 = 0.70, 8+ = 0.75 max
+            if (is_alternating && alternation_count >= 5)
             {
                 // Alternating pattern detected with sufficient evidence
                 dodge_pattern_.has_pattern = true;
@@ -530,8 +531,8 @@ namespace HybridPred
                 }
             }
             // Detect repeating sequence (e.g., L-L-R-L-L-R)
-            // Require 8+ jukes for repeating pattern (was 6)
-            else if (dodge_pattern_.juke_sequence.size() >= 8)
+            // Require 10+ jukes for repeating pattern (more complex, needs more evidence)
+            else if (dodge_pattern_.juke_sequence.size() >= 10)
             {
                 // Check if first half matches second half
                 size_t half = dodge_pattern_.juke_sequence.size() / 2;
