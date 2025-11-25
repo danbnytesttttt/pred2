@@ -615,21 +615,21 @@ namespace PredictionTelemetry
                 if (stats_.close_range_predictions > 0)
                 {
                     float avg_hc = stats_.close_range_total_hc / stats_.close_range_predictions;
-                    snprintf(buf, sizeof(buf), "Close (0-400u): %d casts @ %.0f%% avg HC",
+                    snprintf(buf, sizeof(buf), "Close (0-400u): %d casts @ %.0f avg HC",
                         stats_.close_range_predictions, avg_hc * 100.f);
                     g_sdk->log_console(buf);
                 }
                 if (stats_.mid_range_predictions > 0)
                 {
                     float avg_hc = stats_.mid_range_total_hc / stats_.mid_range_predictions;
-                    snprintf(buf, sizeof(buf), "Mid (400-700u): %d casts @ %.0f%% avg HC",
+                    snprintf(buf, sizeof(buf), "Mid (400-700u): %d casts @ %.0f avg HC",
                         stats_.mid_range_predictions, avg_hc * 100.f);
                     g_sdk->log_console(buf);
                 }
                 if (stats_.long_range_predictions > 0)
                 {
                     float avg_hc = stats_.long_range_total_hc / stats_.long_range_predictions;
-                    snprintf(buf, sizeof(buf), "Long (700+u): %d casts @ %.0f%% avg HC",
+                    snprintf(buf, sizeof(buf), "Long (700+u): %d casts @ %.0f avg HC",
                         stats_.long_range_predictions, avg_hc * 100.f);
                     g_sdk->log_console(buf);
                 }
