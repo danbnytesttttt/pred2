@@ -79,8 +79,8 @@ namespace Prediction
                 PredictionSettings::get().enable_physics_measurement = value;
                 });
 
-            g_menu->add_checkbox("output_telemetry", "Output Telemetry Report", false, [](bool value) {
-                if (value && g_sdk)
+            g_menu->add_hotkey("output_telemetry", "Output Telemetry Report", 0, false, false, [](std::string*, bool pressed) {
+                if (pressed && g_sdk)
                 {
                     g_sdk->log_console("[Danny.Prediction] ===== TELEMETRY REPORT =====");
                     PredictionTelemetry::TelemetryLogger::write_report();
