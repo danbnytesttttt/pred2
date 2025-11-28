@@ -3901,25 +3901,20 @@ namespace HybridPred
         float time_since_update)
     {
         /**
-         * Vector Spell Optimization Algorithm
-         * ====================================
+         * Vector Spell Optimization Algorithm (Viktor E, Rumble R, etc.)
+         * ===============================================================
          *
-         * Goal: Find optimal two-position configuration (first_cast, cast_position)
-         * that maximizes hit_chance against predicted target
-         *
-         * Constraints:
-         * - first_cast must be within spell.cast_range of source
-         * - Vector line length = spell.range (from first_cast to cast_position)
-         * - Line passes through or near predicted_target_pos
+         * Vector spells are NOT like linear skillshots. You want to:
+         * 1. Cast ALONG their movement path (to burn them as they run)
+         * 2. Cast PERPENDICULAR to catch strafing/dodging
+         * 3. NOT just aim straight at them like Ezreal Q
          *
          * Method:
-         * 1. Test multiple orientations (20 angles from 0-360°)
-         * 2. For each orientation:
-         *    a. Position line centered on predicted target
-         *    b. Compute first_cast and cast_position
-         *    c. Verify first_cast is within cast_range
-         *    d. Compute hit probability using capsule geometry
-         * 3. Return configuration with highest hit_chance
+         * 1. Test smart angles: parallel and perpendicular to velocity
+         * 2. Test sweep angles: 16 angles for full 360° coverage
+         * 3. Center vector on predicted target position
+         * 4. Clamp first_cast to within cast_range
+         * 5. Return configuration with highest hit_chance
          */
 
         VectorConfiguration best_config;
@@ -3927,7 +3922,6 @@ namespace HybridPred
 
         math::vector3 source_pos = source->get_position();
         float vector_length = spell.range;
-        // Use effective width = spell radius + target bounding radius
         float vector_width = spell.radius + target->get_bounding_radius();
         float max_first_cast_range = spell.cast_range;
 
@@ -3935,109 +3929,101 @@ namespace HybridPred
         if (max_first_cast_range < EPSILON)
             max_first_cast_range = spell.range;
 
-        // Precompute distance to predicted target for normalization check
-        math::vector3 to_predicted = predicted_target_pos - source_pos;
-        float dist_to_predicted = to_predicted.magnitude();
+        // Get target velocity direction for smart alignment
+        math::vector3 target_vel = reachable_region.velocity;
+        float target_speed = target_vel.magnitude();
+        math::vector3 move_dir = (target_speed > 10.f) ? target_vel / target_speed : math::vector3(0, 0, 0);
 
-        // PRIMARY: Calculate direct line from source to target
-        // This is what players expect - a straight laser towards the enemy
-        if (dist_to_predicted > EPSILON)
+        // Build list of angles to test
+        std::vector<float> test_angles;
+
+        // 1. SMART ANGLES: Align with and against movement (highest priority)
+        if (target_speed > 10.f)
         {
-            math::vector3 direct_direction = to_predicted / dist_to_predicted;
+            float move_angle = std::atan2(move_dir.z, move_dir.x);
+            test_angles.push_back(move_angle);              // Parallel (Chase/Run) - burn them as they flee
+            test_angles.push_back(move_angle + PI);         // Reverse (Kiting) - burn them as they chase
+            test_angles.push_back(move_angle + PI / 2);     // Perpendicular (Catch strafe left)
+            test_angles.push_back(move_angle - PI / 2);     // Perpendicular (Catch strafe right)
+        }
 
-            // Place first_cast along the line from source to target
-            // If target is close, center the laser on them
-            // If target is far, place first_cast at max range
-            math::vector3 first_cast;
-            math::vector3 second_cast;
+        // 2. SWEEP ANGLES: Full 360° coverage for stationary targets or weird angles
+        constexpr int NUM_SWEEP = 16;
+        for (int i = 0; i < NUM_SWEEP; ++i)
+        {
+            test_angles.push_back((2.f * PI * i) / NUM_SWEEP);
+        }
 
-            if (dist_to_predicted <= max_first_cast_range + vector_length * 0.5f)
+        // Test each angle
+        for (float angle : test_angles)
+        {
+            math::vector3 dir(std::cos(angle), 0.f, std::sin(angle));
+
+            // Strategy: Center the vector on the predicted target position
+            // Start = Center - (Dir * Length / 2)
+            // End   = Center + (Dir * Length / 2)
+            math::vector3 potential_first = predicted_target_pos - dir * (vector_length * 0.5f);
+            math::vector3 potential_second = predicted_target_pos + dir * (vector_length * 0.5f);
+
+            // Constraint: First cast must be within cast_range of source
+            float dist_to_start = (potential_first - source_pos).magnitude();
+
+            // If start is out of range, slide the vector closer while keeping direction
+            if (dist_to_start > max_first_cast_range)
             {
-                // Target is close enough to center laser on them
-                first_cast = predicted_target_pos - direct_direction * (vector_length * 0.5f);
-                second_cast = predicted_target_pos + direct_direction * (vector_length * 0.5f);
-
-                // Adjust if first_cast is out of range
-                float distance_to_first = (first_cast - source_pos).magnitude();
-                if (distance_to_first > max_first_cast_range)
+                math::vector3 to_start = potential_first - source_pos;
+                float to_start_mag = to_start.magnitude();
+                if (to_start_mag > EPSILON)
                 {
-                    first_cast = source_pos + direct_direction * max_first_cast_range;
-                    second_cast = first_cast + direct_direction * vector_length;
+                    potential_first = source_pos + (to_start / to_start_mag) * max_first_cast_range;
+                    potential_second = potential_first + dir * vector_length;
                 }
             }
-            else
-            {
-                // Target is far - place first_cast at max range, laser extends towards target
-                first_cast = source_pos + direct_direction * max_first_cast_range;
-                second_cast = first_cast + direct_direction * vector_length;
-            }
 
-            // Compute hit probability for direct line
+            // Calculate Hit Chance for this orientation
             float physics_prob = compute_capsule_reachability_overlap(
-                first_cast,
-                direct_direction,
-                vector_length,
-                vector_width,
-                reachable_region
+                potential_first, dir, vector_length, vector_width, reachable_region
             );
 
             float behavior_prob = compute_capsule_behavior_probability(
-                first_cast,
-                direct_direction,
-                vector_length,
-                vector_width,
-                behavior_pdf
+                potential_first, dir, vector_length, vector_width, behavior_pdf
             );
 
-            float target_speed = target ? target->get_move_speed() : 350.f;
-            float hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, target_speed);
+            // Compute Hit Chance
+            float test_hit_chance = fuse_probabilities(
+                physics_prob, behavior_prob, confidence,
+                sample_count, time_since_update, target_speed
+            );
 
-            // Use direct line as best configuration
-            best_config.first_cast_position = first_cast;
-            best_config.cast_position = second_cast;
-            best_config.hit_chance = hit_chance;
-            best_config.physics_prob = physics_prob;
-            best_config.behavior_prob = behavior_prob;
+            // Bonus: If aligned with movement, slight boost (caught in stride)
+            if (target_speed > 10.f)
+            {
+                float alignment = std::abs(dir.dot(move_dir));
+                if (alignment > 0.9f)
+                    test_hit_chance *= 1.05f; // 5% bonus for parallel alignment
+            }
+
+            if (test_hit_chance > best_config.hit_chance)
+            {
+                best_config.hit_chance = test_hit_chance;
+                best_config.first_cast_position = potential_first;
+                best_config.cast_position = potential_second;
+                best_config.physics_prob = physics_prob;
+                best_config.behavior_prob = behavior_prob;
+            }
         }
 
-        // OPTIONAL: Test other orientations only if we want to optimize for multi-target or special cases
-        // For now, skip this since single-target direct line is what players expect
-        // Can be re-enabled for AOE vector spell optimization
-        #if 0
-        constexpr int NUM_ORIENTATIONS = 20;
-
-        for (int i = 0; i < NUM_ORIENTATIONS; ++i)
-        {
-            float angle = (2.f * PI * i) / NUM_ORIENTATIONS;
-            math::vector3 direction(std::cos(angle), 0.f, std::sin(angle));
-
-            // Position vector line centered on predicted target
-            // Line goes from (target - dir*length/2) to (target + dir*length/2)
-            math::vector3 first_cast = predicted_target_pos - direction * (vector_length * 0.5f);
-            math::vector3 second_cast = predicted_target_pos + direction * (vector_length * 0.5f);
-
-            // ... rest of orientation testing loop ...
-        }
-        #endif
-
-        // If no valid configuration found, use default (aim at target)
+        // Fallback: If no valid angle found (e.g. target out of range), aim directly at them
         if (best_config.hit_chance < EPSILON)
         {
-            math::vector3 direction_to_target;
-            if (dist_to_predicted > EPSILON)
-            {
-                direction_to_target = to_predicted / dist_to_predicted;  // Safe manual normalize
-            }
-            else
-            {
-                // Target too close - use forward direction (along x-axis)
-                direction_to_target = math::vector3(1.f, 0.f, 0.f);
-            }
+            math::vector3 to_target = predicted_target_pos - source_pos;
+            float dist = to_target.magnitude();
+            math::vector3 dir = (dist > EPSILON) ? to_target / dist : math::vector3(1, 0, 0);
 
-            best_config.first_cast_position = source_pos + direction_to_target * std::min(max_first_cast_range, vector_length * 0.5f);
-            best_config.cast_position = best_config.first_cast_position + direction_to_target * vector_length;
-            best_config.hit_chance = 0.1f;  // Low default
-            best_config.physics_prob = 0.1f;
+            best_config.first_cast_position = source_pos + dir * std::min(max_first_cast_range, dist);
+            best_config.cast_position = best_config.first_cast_position + dir * vector_length;
+            best_config.hit_chance = 0.05f; // Low confidence fallback
+            best_config.physics_prob = 0.05f;
             best_config.behavior_prob = 1.0f;
         }
 
