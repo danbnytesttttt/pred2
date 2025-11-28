@@ -237,7 +237,9 @@ namespace HybridPred
                 // ================================================================
                 // DYNAMIC PHYSICS: Always measure acceleration/deceleration
                 // Used for per-target prediction regardless of debug setting
+                // Skip during dashes/knockbacks (forced movement, not player input)
                 // ================================================================
+                if (!snapshot.is_dashing && !snapshot.is_cced)
                 {
                     float current_speed = snapshot.velocity.magnitude();
                     float prev_speed = last_measured_speed_;
@@ -278,8 +280,9 @@ namespace HybridPred
                             }
                         }
                     }
-                    last_measured_speed_ = current_speed;
                 }
+                // Always update last speed (even during dash) to prevent stale comparisons
+                last_measured_speed_ = snapshot.velocity.magnitude();
                 // ================================================================
 
                 // VELOCITY SANITY CAPPING: Prevent extreme values
