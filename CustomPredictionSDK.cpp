@@ -1826,8 +1826,7 @@ bool CustomPredictionSDK::check_collision_simple(
                 }
             }
         }
-        else if (collision_type == pred_sdk::collision_type::terrain ||
-                 collision_type == pred_sdk::collision_type::wall)
+        else if (collision_type == pred_sdk::collision_type::terrain)
         {
             if (!g_sdk || !g_sdk->nav_mesh) continue;
 
@@ -1848,7 +1847,8 @@ bool CustomPredictionSDK::check_collision_simple(
             }
 
             // Also check the endpoint explicitly
-            if (!g_sdk->nav_mesh->is_pathable(end)) return true;
+            math::vector3 end_point = end;  // Copy to avoid const issues
+            if (!g_sdk->nav_mesh->is_pathable(end_point)) return true;
         }
     }
 
