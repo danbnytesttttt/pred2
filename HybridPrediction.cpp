@@ -132,10 +132,11 @@ namespace HybridPred
         bool currently_visible = target_->is_visible();
         if (currently_visible && !was_visible_last_update_)
         {
-            // Target just emerged from fog - clear stale history
+            // Target just emerged from fog - clear ALL stale data
             movement_history_.clear();
-            // Also clear last update time to force immediate sample
             last_update_time_ = 0.f;
+            last_measured_speed_ = 0.f;  // Reset to prevent garbage acceleration measurements
+            has_last_path_endpoint_ = false;  // Path data is stale too
         }
         was_visible_last_update_ = currently_visible;
 
