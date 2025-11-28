@@ -1704,174 +1704,151 @@ bool CustomPredictionSDK::check_collision_simple(
     const pred_sdk::spell_data& spell_data,
     const game_object* target_obj)
 {
-    // CRITICAL: Validate SDK before checking collisions
     if (!g_sdk || !g_sdk->object_manager)
-        return false;  // No collision if can't check
+        return false;
 
-    // Check each collision type
+    // Safety buffer: Inflate hitboxes to avoid "grazing" shots
+    // Better to hold fire than to hit a minion edge
+    constexpr float COLLISION_BUFFER = 15.0f;
+
     for (auto collision_type : spell_data.forbidden_collisions)
     {
         if (collision_type == pred_sdk::collision_type::unit)
         {
             auto minions = g_sdk->object_manager->get_minions();
-
             for (auto* minion : minions)
             {
-                if (!minion || minion == target_obj)
-                    continue;
+                if (!minion || !minion->is_valid() || minion == target_obj) continue;
+                if (!is_collision_object(minion, spell_data)) continue;
+                if (minion->get_team_id() == spell_data.source->get_team_id()) continue;
 
-                if (!is_collision_object(minion, spell_data))
-                    continue;
-
-                // Only ENEMY minions block skillshots
-                if (minion->get_team_id() == spell_data.source->get_team_id())
-                    continue;
-
-                // Skip wards
+                // Skip wards/traps
                 std::string name = minion->get_char_name();
-                if (name.find("Ward") != std::string::npos ||
-                    name.find("Trinket") != std::string::npos ||
-                    name.find("YellowTrinket") != std::string::npos)
-                    continue;
+                if (name.find("Ward") != std::string::npos || name.find("Trinket") != std::string::npos) continue;
 
-                // Point-to-line distance check
-                math::vector3 minion_pos = minion->get_position();
+                math::vector3 current_minion_pos = minion->get_position();
+                math::vector3 predicted_minion_pos = current_minion_pos;
+
                 math::vector3 line_diff = end - start;
                 float line_length = line_diff.magnitude();
-                if (line_length < 0.001f)
-                    continue;  // Start and end are same point
+                if (line_length < 0.001f) continue;
                 math::vector3 line_dir = line_diff / line_length;
 
-                // FIX: Predict minion position when spell arrives
-                // Calculate time for spell to reach minion's current position
-                math::vector3 to_minion_current = minion_pos - start;
+                // Calculate distance along line to minion
+                math::vector3 to_minion_current = current_minion_pos - start;
                 float distance_to_minion = to_minion_current.dot(line_dir);
 
+                // IGNORE minions behind us
+                if (distance_to_minion < -50.f) continue;
+
+                // 1. PREDICT MINION POSITION at impact time
                 if (distance_to_minion > 0 && spell_data.projectile_speed > 0)
                 {
                     float travel_time = spell_data.delay + (distance_to_minion / spell_data.projectile_speed);
 
-                    // Predict minion movement (minions move at ~325 MS along path)
                     if (minion->is_moving())
                     {
                         auto path = minion->get_path();
                         if (!path.empty())
                         {
-                            // Last waypoint is the path end
-                            math::vector3 minion_path_end = path.back();
-                            math::vector3 move_dir = minion_path_end - minion_pos;
+                            math::vector3 path_end = path.back();
+                            math::vector3 move_dir = path_end - current_minion_pos;
                             float move_dist = move_dir.magnitude();
 
                             if (move_dist > 1.0f)
                             {
                                 move_dir = move_dir / move_dist;
                                 float minion_speed = minion->get_move_speed();
-                                float predicted_move = minion_speed * travel_time;
-
-                                // Don't predict beyond path end
-                                predicted_move = std::min(predicted_move, move_dist);
-                                minion_pos = minion_pos + move_dir * predicted_move;
+                                float predicted_dist = minion_speed * travel_time;
+                                predicted_dist = std::min(predicted_dist, move_dist);
+                                predicted_minion_pos = current_minion_pos + move_dir * predicted_dist;
                             }
                         }
                     }
                 }
 
-                math::vector3 to_minion = minion_pos - start;
-
-                float projection = to_minion.dot(line_dir);
                 float minion_radius = minion->get_bounding_radius();
-                float collision_radius = spell_data.radius + minion_radius;
+                float total_radius = spell_data.radius + minion_radius + COLLISION_BUFFER;
 
-                // FIX: Account for bounding radius when checking projection bounds
-                // Minion can block if its hitbox overlaps the line, even if center is behind/beyond
-                if (projection < -minion_radius || projection > line_length + minion_radius)
-                    continue;
-
-                // Clamp projection to line segment for distance calculation
-                float clamped_proj = std::max(0.f, std::min(projection, line_length));
-                math::vector3 closest_point = start + line_dir * clamped_proj;
-                float distance = minion_pos.distance(closest_point);
-
-                if (distance <= collision_radius)
+                // CHECK 1: PREDICTED POSITION (Standard check - will minion be there?)
+                math::vector3 to_pred = predicted_minion_pos - start;
+                float proj_pred = to_pred.dot(line_dir);
+                if (proj_pred > -minion_radius && proj_pred < line_length + minion_radius)
                 {
-                    return true;  // Collision detected
+                    float clamped = std::max(0.f, std::min(proj_pred, line_length));
+                    math::vector3 closest = start + line_dir * clamped;
+                    if (predicted_minion_pos.distance(closest) <= total_radius) return true;
+                }
+
+                // CHECK 2: CURRENT POSITION (Instant block check)
+                // If minion is close (< 400 units), check if it blocks us RIGHT NOW.
+                // We assume it might not move out of the way in time (network lag, turn time).
+                if (distance_to_minion > 0.f && distance_to_minion < 400.f)
+                {
+                    if (distance_to_minion < line_length + minion_radius)
+                    {
+                        float clamped = std::max(0.f, std::min(distance_to_minion, line_length));
+                        math::vector3 closest = start + line_dir * clamped;
+
+                        // Use slightly tighter buffer for static check to allow *some* tight squeezes
+                        if (current_minion_pos.distance(closest) <= total_radius - 5.f) return true;
+                    }
                 }
             }
         }
         else if (collision_type == pred_sdk::collision_type::hero)
         {
-            if (!g_sdk || !g_sdk->object_manager)
-                continue;
+            if (!g_sdk || !g_sdk->object_manager) continue;
             auto heroes = g_sdk->object_manager->get_heroes();
 
             for (auto* hero : heroes)
             {
-                if (!hero || hero == target_obj || hero == spell_data.source)
-                    continue;
-
-                if (!is_collision_object(hero, spell_data))
-                    continue;
-
-                // Only ENEMY heroes block skillshots
-                if (hero->get_team_id() == spell_data.source->get_team_id())
-                    continue;
+                if (!hero || hero == target_obj || hero == spell_data.source) continue;
+                if (!is_collision_object(hero, spell_data)) continue;
+                if (hero->get_team_id() == spell_data.source->get_team_id()) continue;
 
                 math::vector3 hero_pos = hero->get_position();
                 math::vector3 line_diff = end - start;
                 float line_length = line_diff.magnitude();
-                if (line_length < 0.001f)
-                    continue;  // Start and end are same point
+                if (line_length < 0.001f) continue;
                 math::vector3 line_dir = line_diff / line_length;
-                math::vector3 to_hero = hero_pos - start;
 
+                math::vector3 to_hero = hero_pos - start;
                 float projection = to_hero.dot(line_dir);
                 float hero_radius = hero->get_bounding_radius();
-                float collision_radius = spell_data.radius + hero_radius;
+                float total_radius = spell_data.radius + hero_radius + COLLISION_BUFFER;
 
-                // FIX: Account for bounding radius when checking projection bounds
-                if (projection < -hero_radius || projection > line_length + hero_radius)
-                    continue;
-
-                // Clamp projection to line segment for distance calculation
-                float clamped_proj = std::max(0.f, std::min(projection, line_length));
-                math::vector3 closest_point = start + line_dir * clamped_proj;
-                float distance = hero_pos.distance(closest_point);
-
-                if (distance <= collision_radius)
+                if (projection > -hero_radius && projection < line_length + hero_radius)
                 {
-                    return true;  // Collision detected
+                    float clamped = std::max(0.f, std::min(projection, line_length));
+                    math::vector3 closest = start + line_dir * clamped;
+                    if (hero_pos.distance(closest) <= total_radius) return true;
                 }
             }
         }
         else if (collision_type == pred_sdk::collision_type::terrain ||
                  collision_type == pred_sdk::collision_type::wall)
         {
-            // Terrain/wall collision: sample points along path and check navmesh
-            if (!g_sdk || !g_sdk->nav_mesh)
-                continue;
+            if (!g_sdk || !g_sdk->nav_mesh) continue;
 
-            math::vector3 line_diff = end - start;
-            float line_length = line_diff.magnitude();
-            if (line_length < 0.001f)
-                continue;
+            math::vector3 diff = end - start;
+            float length = diff.magnitude();
+            if (length < 0.001f) continue;
 
-            math::vector3 line_dir = line_diff / line_length;
+            math::vector3 dir = diff / length;
 
-            // Sample every 50 units along the path
-            constexpr float SAMPLE_STEP = 50.f;
-            int num_samples = static_cast<int>(line_length / SAMPLE_STEP) + 1;
+            // Finer sampling (40 units) for better wall detection
+            constexpr float SAMPLE_STEP = 40.f;
+            int steps = static_cast<int>(length / SAMPLE_STEP);
 
-            for (int i = 1; i <= num_samples; ++i)
+            for (int i = 1; i <= steps; ++i)
             {
-                float dist = std::min(i * SAMPLE_STEP, line_length);
-                math::vector3 sample_point = start + line_dir * dist;
-
-                // Check if point is inside terrain (not pathable)
-                if (!g_sdk->nav_mesh->is_pathable(sample_point))
-                {
-                    return true;  // Hits wall
-                }
+                math::vector3 point = start + dir * (i * SAMPLE_STEP);
+                if (!g_sdk->nav_mesh->is_pathable(point)) return true;
             }
+
+            // Also check the endpoint explicitly
+            if (!g_sdk->nav_mesh->is_pathable(end)) return true;
         }
     }
 
