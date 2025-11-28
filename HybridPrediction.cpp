@@ -201,9 +201,9 @@ namespace HybridPred
 
                 // ================================================================
                 // PHYSICS MEASUREMENT: Determine real acceleration/deceleration
-                // Enable with debug logging to collect empirical data
+                // Enable with enable_physics_measurement setting (separate from debug)
                 // ================================================================
-                if (PredictionSettings::get().enable_debug_logging && g_sdk)
+                if (PredictionSettings::get().enable_physics_measurement && g_sdk)
                 {
                     float current_speed = snapshot.velocity.magnitude();
                     float prev_speed = movement_history_.back().velocity.magnitude();
@@ -3982,8 +3982,8 @@ namespace HybridPred
 
             last_update_time_ = current_time;
 
-            // Also measure self physics if debug logging enabled
-            if (PredictionSettings::get().enable_debug_logging)
+            // Also measure self physics if physics measurement enabled
+            if (PredictionSettings::get().enable_physics_measurement)
             {
                 measure_self_physics();
             }
