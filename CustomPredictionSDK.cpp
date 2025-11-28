@@ -481,8 +481,8 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
 
                     if (away_speed > 100.f)  // Moving away at significant speed
                     {
-                        // They'll move further during cast animation (~0.25s)
-                        float cast_animation_movement = away_speed * 0.25f;
+                        // They'll move further during cast animation (use actual spell delay)
+                        float cast_animation_movement = away_speed * spell_data.delay;
                         effective_range -= cast_animation_movement;
                     }
                 }
@@ -1843,7 +1843,36 @@ bool CustomPredictionSDK::check_collision_simple(
                 }
             }
         }
-        // Terrain collision skipped - would need navmesh API
+        else if (collision_type == pred_sdk::collision_type::terrain ||
+                 collision_type == pred_sdk::collision_type::wall)
+        {
+            // Terrain/wall collision: sample points along path and check navmesh
+            if (!g_sdk || !g_sdk->nav_mesh)
+                continue;
+
+            math::vector3 line_diff = end - start;
+            float line_length = line_diff.magnitude();
+            if (line_length < 0.001f)
+                continue;
+
+            math::vector3 line_dir = line_diff / line_length;
+
+            // Sample every 50 units along the path
+            constexpr float SAMPLE_STEP = 50.f;
+            int num_samples = static_cast<int>(line_length / SAMPLE_STEP) + 1;
+
+            for (int i = 1; i <= num_samples; ++i)
+            {
+                float dist = std::min(i * SAMPLE_STEP, line_length);
+                math::vector3 sample_point = start + line_dir * dist;
+
+                // Check if point is inside terrain (not pathable)
+                if (!g_sdk->nav_mesh->is_pathable(sample_point))
+                {
+                    return true;  // Hits wall
+                }
+            }
+        }
     }
 
     return false;
