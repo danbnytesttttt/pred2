@@ -84,6 +84,43 @@ inline bool is_knocked_up(game_object* obj)
 // 25ms = ~1 server tick, covers input latency + mental processing without being sloppy
 constexpr float HUMAN_REACTION_BUFFER = 0.025f;
 
+// Helper: Get correct windup time (Scales with Attack Speed for AAs)
+// CRITICAL FIX: Auto-attack windup scales with AS - a Level 18 ADC with 2.0 AS
+// has ~3x faster windup than the base spell data suggests
+inline float get_current_windup(game_object* obj, spell_cast* cast)
+{
+    if (!obj || !cast) return 0.f;
+
+    if (cast->is_basic_attack())
+    {
+        // Use get_attack_cast_delay() which accounts for Attack Speed
+        // The raw spell data only holds the BASE windup (e.g. 0.25s), ignoring AS items
+        return obj->get_attack_cast_delay();
+    }
+
+    // For spells, use the static data delay
+    return cast->get_cast_delay();
+}
+
+// Get exact time remaining in animation lock
+// Returns 0 if not locked, otherwise the time until they can move again
+inline float get_remaining_lock_time(game_object* obj)
+{
+    if (!obj) return 0.f;
+    auto active_cast = obj->get_active_spell_cast();
+    if (!active_cast) return 0.f;
+    auto spell_cast = active_cast->get_spell_cast();
+    if (!spell_cast) return 0.f;
+
+    if (!g_sdk || !g_sdk->clock_facade) return 0.f;
+    float current_time = g_sdk->clock_facade->get_game_time();
+    float cast_start = active_cast->get_cast_start_time();
+    float windup = get_current_windup(obj, spell_cast);
+
+    float end_time = cast_start + windup + HUMAN_REACTION_BUFFER;
+    return std::max(0.f, end_time - current_time);
+}
+
 inline bool is_auto_attacking(game_object* obj)
 {
     if (!obj) return false;
@@ -97,7 +134,9 @@ inline bool is_auto_attacking(game_object* obj)
     if (!g_sdk || !g_sdk->clock_facade) return false;
     float current_time = g_sdk->clock_facade->get_game_time();
     float cast_start = active_cast->get_cast_start_time();
-    float windup = spell_cast->get_cast_delay();
+
+    // CRITICAL FIX: Use dynamic windup that accounts for Attack Speed
+    float windup = get_current_windup(obj, spell_cast);
 
     // Still in windup + reaction buffer = effectively locked
     return (current_time - cast_start) < (windup + HUMAN_REACTION_BUFFER);

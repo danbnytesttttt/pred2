@@ -84,47 +84,88 @@ namespace HybridPred
     // =========================================================================
 
     /**
-     * Get effective move speed accounting for CC status
+     * Get effective move speed accounting for CC and animation locks
      *
-     * Problem: target->get_move_speed() returns the stat value (e.g., 450),
-     * but CC'd targets can't actually move. Using the stat for reachable
-     * region computation creates incorrectly large circles.
-     *
-     * This helper returns 0 for immobilizing CC, allowing normal logic
-     * to correctly identify "no dodge possible" scenarios.
+     * CRITICAL FIX: Now considers prediction_time to calculate partial freedom.
+     * If target is locked for 0.1s but spell lands in 0.5s, they can move for 0.4s.
+     * Returns scaled speed based on the % of time they're free to move.
      *
      * @param target The target to check
-     * @return Effective move speed (0 if immobilized, stat value otherwise)
+     * @param prediction_time Time until spell arrives (0 = instant check, returns binary)
+     * @return Effective move speed (scaled by free time ratio)
      */
-    inline float get_effective_move_speed(game_object* target)
+    inline float get_effective_move_speed(game_object* target, float prediction_time = 0.f)
     {
         if (!target || !target->is_valid())
             return 0.f;
 
-        // Check for immobilizing CC (can't move at all)
-        if (target->has_buff_of_type(buff_type::stun) ||
+        float base_speed = target->get_move_speed();
+
+        // 1. HARD CC CHECK (Stun, Snare, etc.)
+        bool is_immobile = target->has_buff_of_type(buff_type::stun) ||
             target->has_buff_of_type(buff_type::snare) ||
             target->has_buff_of_type(buff_type::charm) ||
             target->has_buff_of_type(buff_type::fear) ||
             target->has_buff_of_type(buff_type::taunt) ||
             target->has_buff_of_type(buff_type::suppression) ||
             target->has_buff_of_type(buff_type::knockup) ||
-            target->has_buff_of_type(buff_type::knockback))
+            target->has_buff_of_type(buff_type::knockback);
+
+        if (is_immobile)
         {
-            return 0.f;  // Immobilized - can't dodge
+            // No prediction time = binary check (backward compat)
+            if (prediction_time <= 0.001f) return 0.f;
+
+            // Calculate how long CC lasts vs spell flight time
+            float current_time = (g_sdk && g_sdk->clock_facade) ? g_sdk->clock_facade->get_game_time() : 0.f;
+            float max_cc_end = 0.f;
+
+            auto buffs = target->get_buffs();
+            for (auto* buff : buffs)
+            {
+                if (!buff || !buff->is_active()) continue;
+                buff_type t = buff->get_type();
+                if (t == buff_type::stun || t == buff_type::snare || t == buff_type::charm ||
+                    t == buff_type::fear || t == buff_type::taunt || t == buff_type::suppression ||
+                    t == buff_type::knockup || t == buff_type::knockback)
+                {
+                    if (buff->get_end_time() > max_cc_end)
+                        max_cc_end = buff->get_end_time();
+                }
+            }
+
+            float arrival_time_abs = current_time + prediction_time;
+            if (max_cc_end >= arrival_time_abs) return 0.f;  // CC lasts until spell lands
+
+            // They wake up before spell lands - scale by free time
+            float time_locked = std::max(0.f, max_cc_end - current_time);
+            float time_free = prediction_time - time_locked;
+            return base_speed * (time_free / prediction_time);
         }
 
-        // PHYSICS: Animation lock is a GAME MECHANIC, not a behavior pattern
-        // During AA windup or spell cast, target CANNOT move (hard constraint)
-        // This should reduce reachable region (physics), not boost behavior
-        // FIX: Check is_moving() to handle move-while-casting champions (Syndra, Orianna)
-        // If they ARE moving while casting, they're not truly animation locked
-        if ((is_auto_attacking(target) || is_casting_spell(target)) && !target->is_moving())
+        // 2. ANIMATION LOCK CHECK (Auto-Attack / Cast)
+        // FIX: Calculate "Free Time" exactly like CC
+        // Do NOT assume speed=0 just because they are attacking NOW
+        bool locked_state = (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target));
+
+        if (locked_state && !target->is_moving())
         {
-            return 0.f;  // Animation locked AND not moving - physically cannot dodge
+            // No prediction time = binary check (backward compat)
+            if (prediction_time <= 0.001f) return 0.f;
+
+            // Get exact time until animation/windup finishes
+            float remaining_lock = get_remaining_lock_time(target);
+
+            // If lock lasts longer than flight time, they are truly stationary
+            if (remaining_lock >= prediction_time) return 0.f;
+
+            // Otherwise, they will move for part of the flight
+            // Scale speed by the % of time they are free
+            float time_free = prediction_time - remaining_lock;
+            return base_speed * (time_free / prediction_time);
         }
 
-        return target->get_move_speed();
+        return base_speed;
     }
 
     /**

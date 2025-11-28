@@ -2375,7 +2375,7 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
-        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
+        float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
         // This gives us actual observed dodge capability, not arbitrary factors
@@ -2907,7 +2907,7 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
-        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
+        float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
@@ -3291,7 +3291,7 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
-        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
+        float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
@@ -3425,7 +3425,7 @@ namespace HybridPred
         // Step 2: Build reachable region (physics)
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
-        float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
+        float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
         // Use dynamic acceleration if tracker has measured it, otherwise fall back to defaults
         float dynamic_accel = tracker.has_measured_physics() ?
