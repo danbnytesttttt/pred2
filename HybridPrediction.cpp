@@ -199,6 +199,42 @@ namespace HybridPred
             {
                 snapshot.velocity = compute_velocity(movement_history_.back(), snapshot);
 
+                // ================================================================
+                // PHYSICS MEASUREMENT: Determine real acceleration/deceleration
+                // Enable with debug logging to collect empirical data
+                // ================================================================
+                if (PredictionSettings::get().enable_debug_logging && g_sdk)
+                {
+                    float current_speed = snapshot.velocity.magnitude();
+                    float prev_speed = movement_history_.back().velocity.magnitude();
+                    float dt = current_time - movement_history_.back().timestamp;
+
+                    // Detect "Start from Standstill" (0 -> Moving)
+                    // Clean signal for measuring base acceleration
+                    if (prev_speed < 10.f && current_speed > 100.f && dt > 0.001f)
+                    {
+                        float accel = (current_speed - prev_speed) / dt;
+                        char log_msg[256];
+                        snprintf(log_msg, sizeof(log_msg),
+                            "[PHYSICS] ACCEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
+                            prev_speed, current_speed, dt, accel);
+                        g_sdk->log_console(log_msg);
+                    }
+
+                    // Detect "Stop from Sprint" (Moving -> 0)
+                    // Measures deceleration (braking)
+                    if (prev_speed > 300.f && current_speed < 50.f && dt > 0.001f)
+                    {
+                        float decel = (prev_speed - current_speed) / dt;
+                        char log_msg[256];
+                        snprintf(log_msg, sizeof(log_msg),
+                            "[PHYSICS] DECEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
+                            prev_speed, current_speed, dt, decel);
+                        g_sdk->log_console(log_msg);
+                    }
+                }
+                // ================================================================
+
                 // VELOCITY SANITY CAPPING: Prevent extreme values
                 // Max champion speed with all boosts is ~800 units/sec
                 // Anything above 1000 is likely a calculation error or micro-teleport
@@ -3945,8 +3981,64 @@ namespace HybridPred
             }
 
             last_update_time_ = current_time;
+
+            // Also measure self physics if debug logging enabled
+            if (PredictionSettings::get().enable_debug_logging)
+            {
+                measure_self_physics();
+            }
         } // End master try
         catch (...) { /* Prevent any crash from update */ }
+    }
+
+    void PredictionManager::measure_self_physics()
+    {
+        // SELF-MEASUREMENT: Track local player to test your own acceleration/deceleration
+        // Move from standstill, then stop suddenly to generate measurements
+        if (!g_sdk || !g_sdk->object_manager || !g_sdk->clock_facade)
+            return;
+
+        game_object* local_player = g_sdk->object_manager->get_local_player();
+        if (!local_player || !local_player->is_valid())
+            return;
+
+        float current_time = g_sdk->clock_facade->get_game_time();
+        math::vector3 current_pos = local_player->get_position();
+
+        // Calculate velocity from position delta
+        float dt = current_time - self_last_time_;
+        if (dt > 0.01f && dt < 0.2f && self_last_time_ > 0.f)
+        {
+            math::vector3 delta = current_pos - self_last_pos_;
+            float current_speed = delta.magnitude() / dt;
+
+            // Detect "Start from Standstill" (0 -> Moving)
+            if (self_last_speed_ < 10.f && current_speed > 100.f)
+            {
+                float accel = (current_speed - self_last_speed_) / dt;
+                char log_msg[256];
+                snprintf(log_msg, sizeof(log_msg),
+                    "[SELF PHYSICS] ACCEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
+                    self_last_speed_, current_speed, dt, accel);
+                g_sdk->log_console(log_msg);
+            }
+
+            // Detect "Stop from Sprint" (Moving -> 0)
+            if (self_last_speed_ > 300.f && current_speed < 50.f)
+            {
+                float decel = (self_last_speed_ - current_speed) / dt;
+                char log_msg[256];
+                snprintf(log_msg, sizeof(log_msg),
+                    "[SELF PHYSICS] DECEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
+                    self_last_speed_, current_speed, dt, decel);
+                g_sdk->log_console(log_msg);
+            }
+
+            self_last_speed_ = current_speed;
+        }
+
+        self_last_pos_ = current_pos;
+        self_last_time_ = current_time;
     }
 
     TargetBehaviorTracker* PredictionManager::get_tracker(game_object* target)

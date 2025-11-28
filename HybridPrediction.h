@@ -910,11 +910,22 @@ namespace HybridPred
         static inline std::unordered_map<uint32_t, std::unique_ptr<TargetBehaviorTracker>> trackers_;
         static inline float last_update_time_;
 
+        // Self-measurement for physics testing
+        static inline math::vector3 self_last_pos_;
+        static inline float self_last_speed_ = 0.f;
+        static inline float self_last_time_ = 0.f;
+
     public:
         /**
          * Update all trackers (call every frame)
          */
         static void update();
+
+        /**
+         * Measure local player physics (for testing acceleration/deceleration)
+         * Enable debug logging to see output
+         */
+        static void measure_self_physics();
 
         /**
          * Get or create tracker for target
