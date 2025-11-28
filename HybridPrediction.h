@@ -64,10 +64,10 @@ namespace HybridPred
     // Tracker cleanup parameters
     constexpr float TRACKER_TIMEOUT = 30.0f;        // Remove trackers after 30s when target doesn't exist
 
-    // Physics parameters (UPDATED: Higher values match game engine better)
+    // Physics parameters (REVERTED: Use battle-tested values until empirically verified)
     constexpr float DEFAULT_TURN_RATE = 2.0f * PI;  // radians/second
-    constexpr float DEFAULT_ACCELERATION = 2500.0f; // units/s² (was 1200 - too slow)
-    constexpr float DEFAULT_DECELERATION = 4000.0f; // units/s² (was 2000 - stops are instant in LoL)
+    constexpr float DEFAULT_ACCELERATION = 1200.0f; // units/s² (standard, tested)
+    constexpr float DEFAULT_DECELERATION = 2000.0f; // units/s² (standard, tested)
 
     // Human reaction time parameters (CRITICAL for realistic predictions)
     constexpr float HUMAN_REACTION_TIME = 0.25f;    // Average human reaction time (250ms)
@@ -170,31 +170,30 @@ namespace HybridPred
         }
 
         // Determine fusion weight based on behavior sample quality
-        // UPDATED: More balanced fusion (55% physics / 45% behavior with good data)
-        // Physics is geometric constraints, behavior captures player patterns
-        // Both are valuable - don't over-weight physics for normal movement
-        float physics_weight = 0.55f;  // Default: slightly physics-favored
+        // PHILOSOPHY: Physics = Constraint (geometry), Behavior = Suggestion (patterns)
+        // Physics should dominate slightly to prevent bad behavior reads from vetoing trapped targets
+        float physics_weight = 0.60f;  // Default: physics-favored (60/40)
 
         // If we have very few behavior samples, trust physics heavily
         if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            // Ramp from 0.85 (no samples) down to 0.55 (minimum samples)
-            // 0 samples = pure physics, 35 samples = start balanced fusion
+            // Ramp from 0.85 (no samples) down to 0.60 (minimum samples)
+            // 0 samples = pure physics, 35 samples = start incorporating behavior
             float factor = static_cast<float>(sample_count) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.85f - 0.30f * factor;  // 0.85 → 0.55
+            physics_weight = 0.85f - 0.25f * factor;  // 0.85 → 0.60
         }
         else if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR * 2)
         {
-            // Ramp from 0.55 down to 0.50 (truly balanced)
-            // 35-70 samples: near-equal trust in both systems
+            // Ramp from 0.60 down to 0.55 (still physics-favored)
+            // 35-70 samples: physics leads, behavior supplements
             float factor = static_cast<float>(sample_count - MIN_SAMPLES_FOR_BEHAVIOR) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.55f - 0.05f * factor;  // 0.55 → 0.50
+            physics_weight = 0.60f - 0.05f * factor;  // 0.60 → 0.55
         }
         else
         {
-            // Abundant data (70+ samples = 3.5+ seconds): balanced fusion
-            // 50% physics, 50% behavior - both systems contribute equally
-            physics_weight = 0.50f;
+            // Abundant data (70+ samples = 3.5+ seconds): physics still leads
+            // 55% physics, 45% behavior - physics is constraint, behavior is suggestion
+            physics_weight = 0.55f;
         }
 
         // MOBILITY FACTOR: Fast targets are more reactive and unpredictable

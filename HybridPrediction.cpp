@@ -238,10 +238,10 @@ namespace HybridPred
                     }
                     else
                     {
-                        // CASE 4: NORMAL MOVEMENT - Increased alpha for faster response
-                        // Old: 0.3f caused ~200ms lag catching up to direction changes
-                        // New: 0.7f responds within ~50ms while still filtering noise
-                        constexpr float SMOOTH_ALPHA = 0.7f;
+                        // CASE 4: NORMAL MOVEMENT - Balanced alpha (IIR low-pass filter)
+                        // 0.3f = too sluggish, 0.7f = too jittery on noisy data
+                        // 0.5f = Nyquist sweet spot, responds in ~100ms while filtering noise
+                        constexpr float SMOOTH_ALPHA = 0.5f;
                         smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
                     }
                 }
@@ -753,6 +753,49 @@ namespace HybridPred
             return pdf;
         }
 
+        // ADAPTIVE HISTORY WINDOW: Use fewer samples for juking targets, more for straight runners
+        // High variance (juking) = recent data matters most, use 15 samples (~0.75s)
+        // Low variance (straight) = use longer history for stability, use 50 samples (~2.5s)
+        int adaptive_sample_limit = 30;  // Default
+
+        if (movement_history_.size() >= 10)
+        {
+            // Calculate velocity variance from last 10 samples
+            float mean_vx = 0.f, mean_vz = 0.f;
+            int variance_samples = std::min(static_cast<int>(movement_history_.size()), 10);
+
+            for (int i = 0; i < variance_samples; ++i)
+            {
+                const auto& snap = movement_history_[movement_history_.size() - 1 - i];
+                mean_vx += snap.velocity.x;
+                mean_vz += snap.velocity.z;
+            }
+            mean_vx /= variance_samples;
+            mean_vz /= variance_samples;
+
+            float variance = 0.f;
+            for (int i = 0; i < variance_samples; ++i)
+            {
+                const auto& snap = movement_history_[movement_history_.size() - 1 - i];
+                float dx = snap.velocity.x - mean_vx;
+                float dz = snap.velocity.z - mean_vz;
+                variance += dx * dx + dz * dz;
+            }
+            variance /= variance_samples;
+
+            // Normalize variance by move_speed squared (so it's scale-independent)
+            float normalized_variance = (move_speed > 10.f) ? variance / (move_speed * move_speed) : 0.f;
+
+            // High variance (> 0.3) = juking, use short window
+            // Low variance (< 0.1) = running straight, use long window
+            if (normalized_variance > 0.3f)
+                adaptive_sample_limit = 15;   // Juking: ~0.75s of history
+            else if (normalized_variance < 0.1f)
+                adaptive_sample_limit = 50;   // Straight: ~2.5s of history
+            else
+                adaptive_sample_limit = 30;   // Mixed: default
+        }
+
         // First pass: Compute weighted average of predicted positions
         // This centers the grid where samples will actually fall, not just where latest velocity predicts
         math::vector3 predicted_center{};
@@ -760,7 +803,7 @@ namespace HybridPred
         int sample_count = 0;
         float current_weight = 1.0f;  // decay_rate^0 = 1.0
 
-        for (size_t i = 0; i < movement_history_.size() && sample_count < 30; ++i)
+        for (size_t i = 0; i < movement_history_.size() && sample_count < adaptive_sample_limit; ++i)
         {
             size_t idx = movement_history_.size() - 1 - i;
             const auto& snapshot = movement_history_[idx];
@@ -814,7 +857,7 @@ namespace HybridPred
         sample_count = 0;
         current_weight = 1.0f;  // Reset for second pass
 
-        for (size_t i = 0; i < movement_history_.size() && sample_count < 30; ++i)
+        for (size_t i = 0; i < movement_history_.size() && sample_count < adaptive_sample_limit; ++i)
         {
             size_t idx = movement_history_.size() - 1 - i;
             const auto& snapshot = movement_history_[idx];
@@ -1198,12 +1241,12 @@ namespace HybridPred
             result.adaptive_threshold, elapsed_time,
             patience_window);
 
-        // OPPORTUNITY ENFORCEMENT: Penalize non-peak opportunities
-        // If accuracy is still rising (not at peak) and we're not already at a high hit chance,
-        // reduce confidence to encourage waiting for a better moment
-        if (!result.is_peak_opportunity && result.hit_chance < 0.90f)
+        // OPPORTUNITY ENFORCEMENT: Gentle penalty for non-peak opportunities
+        // RELAXED: Only penalize if < 80% (good shots should fire regardless of peak)
+        // REDUCED: 10% penalty instead of 15% (avoid "double jeopardy" with stricter thresholds)
+        if (!result.is_peak_opportunity && result.hit_chance < 0.80f)
         {
-            result.hit_chance *= 0.85f;  // 15% penalty for impatience
+            result.hit_chance *= 0.90f;  // 10% penalty for impatience
         }
 
         // Reset window if spell was likely cast (hit_chance suddenly drops or becomes invalid)
@@ -1629,12 +1672,12 @@ namespace HybridPred
         // Linear ratio doesn't capture human dodge thresholds well
         float ratio = time_needed_to_escape / time_available;
 
-        // SIGMOID CORRECTION: Tighter parameters require target to be more trapped
-        // MIDPOINT=0.60 means 50% hit chance when target needs 60% of available time to escape
-        // Higher midpoint = stricter, only high-confidence shots pass
-        // STEEPNESS=25 creates sharper transition around the midpoint
-        constexpr float SIGMOID_STEEPNESS = 25.f;   // Sharper transition
-        constexpr float SIGMOID_MIDPOINT = 0.60f;   // 50% hit chance when 60% time needed to dodge
+        // SIGMOID: Balanced parameters (adjusted for 60/40 physics fusion)
+        // MIDPOINT=0.50 is mathematically neutral: need half the time = 50% chance
+        // Combined with 60% physics weight, this avoids double-conservative behavior
+        // STEEPNESS=25 creates clear transition without being too harsh
+        constexpr float SIGMOID_STEEPNESS = 25.f;   // Sharp transition
+        constexpr float SIGMOID_MIDPOINT = 0.50f;   // Neutral: 50% time = 50% chance
 
         // Clamp exponent to prevent overflow/underflow
         float exponent = -SIGMOID_STEEPNESS * (ratio - SIGMOID_MIDPOINT);
@@ -1653,21 +1696,24 @@ namespace HybridPred
     {
         float distance = (target_pos - source_pos).magnitude();
 
-        // LATENCY COMPENSATION: Account for network delay + server tick
+        // Instant spell: No projectile travel time, no latency compensation
+        // Instant spells (Annie W, Darius Q) feel "slippery" with latency leading
+        if (projectile_speed < EPSILON || projectile_speed >= FLT_MAX / 2.f)
+        {
+            return cast_delay;  // Just the windup, no compensation
+        }
+
+        // LATENCY COMPENSATION: Only for projectile spells
         // ping: round-trip network latency (we use half for one-way)
         // server_tick: 33ms (LoL runs at 30Hz server tick rate)
         float ping_compensation = 0.f;
         if (g_sdk && g_sdk->net_client)
         {
             float ping_ms = g_sdk->net_client->get_ping();
+            // Sanity bounds: reject garbage values
+            ping_ms = std::clamp(ping_ms, 10.f, 150.f);
             // Use half ping (one-way) + one server tick
             ping_compensation = (ping_ms / 2.f / 1000.f) + 0.033f;
-        }
-
-        if (projectile_speed < EPSILON || projectile_speed >= FLT_MAX / 2.f)
-        {
-            // Instant spell
-            return cast_delay + ping_compensation;
         }
 
         return cast_delay + (distance / projectile_speed) + ping_compensation;

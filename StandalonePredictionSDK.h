@@ -80,7 +80,9 @@ inline bool is_knocked_up(game_object* obj)
 }
 
 // Animation state detection - checks if ACTUALLY locked (in windup), not just animating
-// REMOVED: HUMAN_REACTION_BUFFER - match game engine timing exactly
+// Human reaction buffer: Players don't move instantly when animation ends ("mental follow-through")
+// 25ms = ~1 server tick, covers input latency + mental processing without being sloppy
+constexpr float HUMAN_REACTION_BUFFER = 0.025f;
 
 inline bool is_auto_attacking(game_object* obj)
 {
@@ -97,8 +99,8 @@ inline bool is_auto_attacking(game_object* obj)
     float cast_start = active_cast->get_cast_start_time();
     float windup = spell_cast->get_cast_delay();
 
-    // Still in windup = effectively locked (no buffer - match game engine)
-    return (current_time - cast_start) < windup;
+    // Still in windup + reaction buffer = effectively locked
+    return (current_time - cast_start) < (windup + HUMAN_REACTION_BUFFER);
 }
 
 inline bool is_casting_spell(game_object* obj)
@@ -119,8 +121,8 @@ inline bool is_casting_spell(game_object* obj)
     // Some spells have 0 cast delay (instant) - not locked
     if (cast_delay < 0.01f) return false;
 
-    // Match game engine timing exactly (no buffer)
-    return (current_time - cast_start) < cast_delay;
+    // Include reaction buffer for mental follow-through
+    return (current_time - cast_start) < (cast_delay + HUMAN_REACTION_BUFFER);
 }
 
 inline bool is_channeling(game_object* obj)
