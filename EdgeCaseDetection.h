@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "sdk.hpp"
 #include "StandalonePredictionSDK.h"  // MUST be included AFTER sdk.hpp for compatibility
@@ -208,11 +208,37 @@ namespace EdgeCases
             info.dash_arrival_time = 0.1f;  // 100ms default
         }
 
-        // Confidence decreases with dash distance
-        // Short dashes (< 400 units): high confidence
-        // Long dashes (> 800 units): low confidence
-        float conf = 1.0f - distance / 1600.f;
-        info.confidence_multiplier = (conf < 0.5f) ? 0.5f : (conf > 1.0f) ? 1.0f : conf;
+        // Confidence based on dash travel time
+        // Key insight: Longer dashes = committed animation = easier to intercept
+        // Blinks are HARDER despite known endpoint (no flight interception, instant reaction time needed)
+        if (info.dash_arrival_time < 0.1f)
+        {
+            // Instant blink (Flash, Ezreal E, Kassadin R)
+            // LOWER confidence because:
+            // - No interception window during flight (already completed)
+            // - They can move/react immediately after landing
+            // - Detection delay means they have time to dodge our incoming spell
+            // - No "committed" animation period to exploit
+            info.confidence_multiplier = 0.75f;
+        }
+        else if (info.dash_arrival_time < 0.3f)
+        {
+            // Short dash (Graves E, Vayne Q)
+            // Brief travel time, small interception window but still catchable
+            info.confidence_multiplier = 0.85f;
+        }
+        else if (info.dash_arrival_time < 0.6f)
+        {
+            // Medium dash (Tristana W, Lucian E)
+            // Optimal: Committed to animation, good interception window during flight
+            info.confidence_multiplier = 0.95f;
+        }
+        else
+        {
+            // Long dash (Zac E, long Tristana W)
+            // Easiest: Long commitment period, multiple opportunities to intercept
+            info.confidence_multiplier = 1.0f;
+        }
 
         return info;
     }
@@ -559,6 +585,8 @@ namespace EdgeCases
         int blocking_minions = 0;
 
         // Get all minions (SDK uses get_minions(), not get_enemy_minions())
+        if (!g_sdk || !g_sdk->object_manager)
+            return 1.0f;  // Can't check minions, assume clear
         auto minions = g_sdk->object_manager->get_minions();
         for (auto* minion : minions)
         {
@@ -573,16 +601,49 @@ namespace EdgeCases
                 continue;
 
             // Check if minion is between source and target
-            math::vector3 to_minion = minion->get_position() - source_pos;
+            math::vector3 minion_pos = minion->get_position();
+            math::vector3 to_minion = minion_pos - source_pos;
             float distance_along_path = to_minion.dot(direction);
 
             // Minion must be between source and target
             if (distance_along_path < 0.f || distance_along_path > distance_to_target)
                 continue;
 
+            // FIX: Predict minion position when spell arrives
+            // Estimate travel time to minion position (assume ~1200 projectile speed if not specified)
+            float travel_time = distance_along_path / 1200.f;
+
+            if (minion->is_moving() && travel_time > 0.05f)
+            {
+                auto path = minion->get_path();
+                if (!path.empty())
+                {
+                    // Last waypoint is the path end
+                    math::vector3 minion_path_end = path.back();
+                    math::vector3 move_dir = minion_path_end - minion_pos;
+                    float move_dist = move_dir.magnitude();
+
+                    if (move_dist > 1.0f)
+                    {
+                        move_dir = move_dir / move_dist;
+                        float minion_speed = minion->get_move_speed();
+                        float predicted_move = std::min(minion_speed * travel_time, move_dist);
+                        minion_pos = minion_pos + move_dir * predicted_move;
+
+                        // Recalculate distance along path with predicted position
+                        to_minion = minion_pos - source_pos;
+                        distance_along_path = to_minion.dot(direction);
+
+                        // Skip if minion will have moved out of path
+                        if (distance_along_path < 0.f || distance_along_path > distance_to_target)
+                            continue;
+                    }
+                }
+            }
+
             // Compute perpendicular distance from minion to projectile path
             math::vector3 closest_point_on_path = source_pos + direction * distance_along_path;
-            float perpendicular_distance = (minion->get_position() - closest_point_on_path).magnitude();
+            float perpendicular_distance = (minion_pos - closest_point_on_path).magnitude();
 
             // Check if minion hitbox overlaps projectile
             float minion_radius = minion->get_bounding_radius();
@@ -739,8 +800,10 @@ namespace EdgeCases
         if (analysis.dash.is_dashing)
             analysis.confidence_multiplier *= analysis.dash.confidence_multiplier;
 
+        // Spell shields: Don't penalize confidence - we want to break shields
+        // Instead, reduce priority so we prefer unshielded targets when multiple options
         if (analysis.has_shield)
-            analysis.confidence_multiplier *= 0.5f;  // Spell will be blocked
+            analysis.priority_multiplier *= 0.7f;  // Prefer unshielded targets
 
         if (analysis.blocked_by_windwall)
             analysis.confidence_multiplier *= 0.2f;  // Will be blocked by windwall

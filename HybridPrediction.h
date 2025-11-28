@@ -64,10 +64,10 @@ namespace HybridPred
     // Tracker cleanup parameters
     constexpr float TRACKER_TIMEOUT = 30.0f;        // Remove trackers after 30s when target doesn't exist
 
-    // Physics parameters
+    // Physics parameters (UPDATED: Higher values match game engine better)
     constexpr float DEFAULT_TURN_RATE = 2.0f * PI;  // radians/second
-    constexpr float DEFAULT_ACCELERATION = 1200.0f; // units/s²
-    constexpr float DEFAULT_DECELERATION = 2000.0f; // units/s²
+    constexpr float DEFAULT_ACCELERATION = 2500.0f; // units/s² (was 1200 - too slow)
+    constexpr float DEFAULT_DECELERATION = 4000.0f; // units/s² (was 2000 - stops are instant in LoL)
 
     // Human reaction time parameters (CRITICAL for realistic predictions)
     constexpr float HUMAN_REACTION_TIME = 0.25f;    // Average human reaction time (250ms)
@@ -117,9 +117,11 @@ namespace HybridPred
         // PHYSICS: Animation lock is a GAME MECHANIC, not a behavior pattern
         // During AA windup or spell cast, target CANNOT move (hard constraint)
         // This should reduce reachable region (physics), not boost behavior
-        if (is_auto_attacking(target) || is_casting_spell(target))
+        // FIX: Check is_moving() to handle move-while-casting champions (Syndra, Orianna)
+        // If they ARE moving while casting, they're not truly animation locked
+        if ((is_auto_attacking(target) || is_casting_spell(target)) && !target->is_moving())
         {
-            return 0.f;  // Animation locked - physically cannot dodge
+            return 0.f;  // Animation locked AND not moving - physically cannot dodge
         }
 
         return target->get_move_speed();
@@ -168,30 +170,31 @@ namespace HybridPred
         }
 
         // Determine fusion weight based on behavior sample quality
-        // PHILOSOPHY: Physics is MATH (always correct). Behavior is GUESS (could be wrong).
-        // Physics always has strong majority weight - behavior supplements but never dominates.
-        float physics_weight = 0.70f;  // Default: physics-dominant
+        // UPDATED: More balanced fusion (55% physics / 45% behavior with good data)
+        // Physics is geometric constraints, behavior captures player patterns
+        // Both are valuable - don't over-weight physics for normal movement
+        float physics_weight = 0.55f;  // Default: slightly physics-favored
 
         // If we have very few behavior samples, trust physics heavily
         if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            // Ramp from 0.85 (no samples) down to 0.70 (minimum samples)
-            // 0 samples = pure physics, 35 samples = start incorporating behavior
+            // Ramp from 0.85 (no samples) down to 0.55 (minimum samples)
+            // 0 samples = pure physics, 35 samples = start balanced fusion
             float factor = static_cast<float>(sample_count) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.85f - 0.15f * factor;  // 0.85 → 0.70
+            physics_weight = 0.85f - 0.30f * factor;  // 0.85 → 0.55
         }
         else if (sample_count < MIN_SAMPLES_FOR_BEHAVIOR * 2)
         {
-            // Ramp from 0.70 down to 0.65 (still physics-dominant)
-            // 35-70 samples: gradually trust behavior more, but physics maintains strong majority
+            // Ramp from 0.55 down to 0.50 (truly balanced)
+            // 35-70 samples: near-equal trust in both systems
             float factor = static_cast<float>(sample_count - MIN_SAMPLES_FOR_BEHAVIOR) / MIN_SAMPLES_FOR_BEHAVIOR;
-            physics_weight = 0.70f - 0.05f * factor;  // 0.70 → 0.65
+            physics_weight = 0.55f - 0.05f * factor;  // 0.55 → 0.50
         }
         else
         {
-            // Abundant data (70+ samples = 3.5+ seconds): physics still strongly leads
-            // 65% physics, 35% behavior - behavior can supplement but not override
-            physics_weight = 0.65f;
+            // Abundant data (70+ samples = 3.5+ seconds): balanced fusion
+            // 50% physics, 50% behavior - both systems contribute equally
+            physics_weight = 0.50f;
         }
 
         // MOBILITY FACTOR: Fast targets are more reactive and unpredictable
@@ -391,8 +394,10 @@ namespace HybridPred
         std::vector<math::vector3> boundary_points; // Discretized boundary
         float area;                      // Total reachable area
         math::vector3 velocity;          // Target velocity (for momentum weighting)
+        float pathable_ratio;            // Fraction of region that's walkable (0-1)
+                                         // Low ratio = wall-hugging = higher hit chance
 
-        ReachableRegion() : center{}, max_radius(0.f), area(0.f), velocity{} {}
+        ReachableRegion() : center{}, max_radius(0.f), area(0.f), velocity{}, pathable_ratio(1.0f) {}
     };
 
     /**
@@ -516,6 +521,10 @@ namespace HybridPred
 
         // Smoothed velocity to reduce jitter from spam clicking
         math::vector3 smoothed_velocity_;
+
+        // Event-driven sampling: Track last path endpoint to detect new clicks
+        math::vector3 last_path_endpoint_;
+        bool has_last_path_endpoint_ = false;
 
     public:
         TargetBehaviorTracker(game_object* target);

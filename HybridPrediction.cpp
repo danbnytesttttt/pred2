@@ -143,8 +143,28 @@ namespace HybridPred
         if (!currently_visible)
             return;
 
-        // Sample at fixed rate
-        if (current_time - last_update_time_ < MOVEMENT_SAMPLE_RATE)
+        // EVENT-DRIVEN SAMPLING: Detect path changes for zero-latency response
+        // If target clicked a new destination, sample immediately (bypass 50ms timer)
+        bool force_sample = false;
+        auto current_path = target_->get_path();
+        if (!current_path.empty())
+        {
+            math::vector3 current_endpoint = current_path.back();
+            if (has_last_path_endpoint_)
+            {
+                // Check if path endpoint changed significantly (new click)
+                float endpoint_delta = (current_endpoint - last_path_endpoint_).magnitude();
+                if (endpoint_delta > 50.f)  // 50 units = meaningful new destination
+                {
+                    force_sample = true;  // New click detected - sample NOW
+                }
+            }
+            last_path_endpoint_ = current_endpoint;
+            has_last_path_endpoint_ = true;
+        }
+
+        // Sample at fixed rate OR on path change event
+        if (!force_sample && current_time - last_update_time_ < MOVEMENT_SAMPLE_RATE)
             return;
 
         // Create snapshot
@@ -190,13 +210,23 @@ namespace HybridPred
                     snapshot.velocity = (snapshot.velocity / vel_magnitude) * MAX_SANE_VELOCITY;
                 }
 
-                // SMART VELOCITY SMOOTHING: Snap on sharp turns, smooth otherwise
-                // Standard smoothing causes "drift" on sharp jukes - takes ~200ms to catch up
-                // If angle change > 60 degrees, snap instantly to catch the juke
+                // SMART VELOCITY SMOOTHING: Handle special cases before blending
                 float raw_speed = snapshot.velocity.magnitude();
                 float smooth_speed = smoothed_velocity_.magnitude();
 
-                if (raw_speed > 100.f && smooth_speed > 100.f)
+                // CASE 1: DASHING - Reset smoother to avoid polluting history
+                // Dash velocity is forced movement, not player input
+                if (snapshot.is_dashing)
+                {
+                    smoothed_velocity_ = math::vector3(0, 0, 0);
+                }
+                // CASE 2: STOPPED - Snap to zero immediately (fixes "drift" when target stops)
+                else if (raw_speed < 10.f)
+                {
+                    smoothed_velocity_ = math::vector3(0, 0, 0);
+                }
+                // CASE 3: SHARP TURN - Snap to new direction (angle > 60 degrees)
+                else if (raw_speed > 100.f && smooth_speed > 100.f)
                 {
                     // Check angle between new raw velocity and old smoothed velocity
                     float dot = snapshot.velocity.normalized().dot(smoothed_velocity_.normalized());
@@ -208,8 +238,10 @@ namespace HybridPred
                     }
                     else
                     {
-                        // Smooth movement: Apply exponential smoothing
-                        constexpr float SMOOTH_ALPHA = 0.3f;
+                        // CASE 4: NORMAL MOVEMENT - Increased alpha for faster response
+                        // Old: 0.3f caused ~200ms lag catching up to direction changes
+                        // New: 0.7f responds within ~50ms while still filtering noise
+                        constexpr float SMOOTH_ALPHA = 0.7f;
                         smoothed_velocity_ = smoothed_velocity_ * (1.0f - SMOOTH_ALPHA) + snapshot.velocity * SMOOTH_ALPHA;
                     }
                 }
@@ -1106,6 +1138,9 @@ namespace HybridPred
         int spell_slot = spell.spell_slot;
 
         // ADAPTIVE PATIENCE: Calculate patience window based on spell cooldown
+        // LOW-CD FIX: Old range (2.0-4.0s) was too long for Ezreal Q, Zeri Q, etc.
+        // New range (0.25-1.0s) allows low-CD spells to fire quickly while still
+        // waiting for peak opportunities on high-CD ults
         float spell_cooldown = 10.0f;  // Default fallback
         if (source && source->is_valid() && spell_slot >= 0 && spell_slot <= 3)
         {
@@ -1115,7 +1150,7 @@ namespace HybridPred
                 spell_cooldown = spell_entry_ptr->get_cooldown();
             }
         }
-        float patience_window = std::clamp(spell_cooldown * 0.3f, 2.0f, 4.0f);
+        float patience_window = std::clamp(spell_cooldown * 0.3f, 0.25f, 1.0f);
 
         // Safety: Validate spell slot (should be 0-3 for Q/W/E/R, or special slots)
         if (spell_slot < -1 || spell_slot > 10)
@@ -1162,6 +1197,14 @@ namespace HybridPred
         result.is_peak_opportunity = window.is_peak_opportunity(current_time, result.hit_chance,
             result.adaptive_threshold, elapsed_time,
             patience_window);
+
+        // OPPORTUNITY ENFORCEMENT: Penalize non-peak opportunities
+        // If accuracy is still rising (not at peak) and we're not already at a high hit chance,
+        // reduce confidence to encourage waiting for a better moment
+        if (!result.is_peak_opportunity && result.hit_chance < 0.90f)
+        {
+            result.hit_chance *= 0.85f;  // 15% penalty for impatience
+        }
 
         // Reset window if spell was likely cast (hit_chance suddenly drops or becomes invalid)
         // This happens when target moves out of range or dies
@@ -1270,6 +1313,35 @@ namespace HybridPred
 
         // Area = πr²
         region.area = PI * max_distance * max_distance;
+
+        // WALL-HUGGER DETECTION: Sample terrain around reachable region
+        // If target is against a wall, they can't dodge in that direction
+        // This significantly increases hit probability for choke points
+        region.pathable_ratio = 1.0f;  // Default: fully pathable
+        if (g_sdk && g_sdk->nav_mesh && max_distance > 10.f)
+        {
+            int pathable_count = 0;
+            constexpr int SAMPLE_DIRECTIONS = 8;  // N, NE, E, SE, S, SW, W, NW
+
+            for (int i = 0; i < SAMPLE_DIRECTIONS; ++i)
+            {
+                float angle = (2.f * PI * i) / SAMPLE_DIRECTIONS;
+                math::vector3 sample_point = region.center;
+                // Sample at 80% of max radius to account for hitbox overlap
+                sample_point.x += max_distance * 0.8f * std::cos(angle);
+                sample_point.z += max_distance * 0.8f * std::sin(angle);
+
+                if (g_sdk->nav_mesh->is_pathable(sample_point))
+                {
+                    pathable_count++;
+                }
+            }
+
+            region.pathable_ratio = static_cast<float>(pathable_count) / SAMPLE_DIRECTIONS;
+
+            // Clamp to minimum 0.25 (target can always try to dodge somewhere)
+            region.pathable_ratio = std::max(0.25f, region.pathable_ratio);
+        }
 
         return region;
     }
@@ -1397,8 +1469,10 @@ namespace HybridPred
         );
 
         // Weight area probability by Gaussian
-        // FIX: Use safer divisor to prevent INF/NaN from tiny areas
-        float safe_area = std::max(reachable_region.area, 1.0f);
+        // WALL-HUGGER BOOST: If target can't dodge in all directions, reduce effective area
+        // pathable_ratio of 0.5 means half the circle is blocked by walls → higher hit chance
+        float effective_area = reachable_region.area * reachable_region.pathable_ratio;
+        float safe_area = std::max(effective_area, 1.0f);
         float area_probability = intersection_area / safe_area;
         float weighted_probability = gaussian_weight * area_probability;
 
@@ -1555,12 +1629,12 @@ namespace HybridPred
         // Linear ratio doesn't capture human dodge thresholds well
         float ratio = time_needed_to_escape / time_available;
 
-        // FIX: Relaxed sigmoid parameters
-        // Old: MIDPOINT=0.80 penalized when target needed <80% of time to dodge (too aggressive)
-        // New: MIDPOINT=0.40 only penalizes when dodge is very easy (<40% time needed)
-        // This prevents 0% physics for stationary targets at range
-        constexpr float SIGMOID_STEEPNESS = 20.f;   // Less steep transition
-        constexpr float SIGMOID_MIDPOINT = 0.40f;   // 50% hit chance when 40% time needed to dodge
+        // SIGMOID CORRECTION: Tighter parameters require target to be more trapped
+        // MIDPOINT=0.60 means 50% hit chance when target needs 60% of available time to escape
+        // Higher midpoint = stricter, only high-confidence shots pass
+        // STEEPNESS=25 creates sharper transition around the midpoint
+        constexpr float SIGMOID_STEEPNESS = 25.f;   // Sharper transition
+        constexpr float SIGMOID_MIDPOINT = 0.60f;   // 50% hit chance when 60% time needed to dodge
 
         // Clamp exponent to prevent overflow/underflow
         float exponent = -SIGMOID_STEEPNESS * (ratio - SIGMOID_MIDPOINT);
@@ -1579,13 +1653,24 @@ namespace HybridPred
     {
         float distance = (target_pos - source_pos).magnitude();
 
+        // LATENCY COMPENSATION: Account for network delay + server tick
+        // ping: round-trip network latency (we use half for one-way)
+        // server_tick: 33ms (LoL runs at 30Hz server tick rate)
+        float ping_compensation = 0.f;
+        if (g_sdk && g_sdk->net_client)
+        {
+            float ping_ms = g_sdk->net_client->get_ping();
+            // Use half ping (one-way) + one server tick
+            ping_compensation = (ping_ms / 2.f / 1000.f) + 0.033f;
+        }
+
         if (projectile_speed < EPSILON || projectile_speed >= FLT_MAX / 2.f)
         {
             // Instant spell
-            return cast_delay;
+            return cast_delay + ping_compensation;
         }
 
-        return cast_delay + (distance / projectile_speed);
+        return cast_delay + (distance / projectile_speed) + ping_compensation;
     }
 
     float PhysicsPredictor::circle_circle_intersection_area(
@@ -2912,17 +2997,35 @@ namespace HybridPred
             }
         }
 
-        // Cast position should be the predicted target position, not max range
-        // This is where we aim the spell to hit the target
-        result.cast_position = reachable_region.center;
+        // LINEAR AIM FIX: Use the optimal direction from angular optimization
+        // Old code used reachable_region.center which ignored the angle we found
+        // New code: Project along optimal_direction to the correct distance
+        //
+        // Calculate the distance to aim: project target center onto optimal direction
+        math::vector3 to_center_vec = reachable_region.center - capsule_start;
+        float project_distance = to_center_vec.x * optimal_direction.x +
+                                  to_center_vec.y * optimal_direction.y +
+                                  to_center_vec.z * optimal_direction.z;
 
-        // RANGE CLAMPING: Ensure cast position is within spell range
-        math::vector3 to_cast = result.cast_position - capsule_start;
-        float distance_to_cast = to_cast.magnitude();
-        if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
+        // Clamp to spell range
+        project_distance = std::clamp(project_distance, 0.f, spell.range);
+
+        // Cast position is along the optimal direction at the projected distance
+        result.cast_position = capsule_start + optimal_direction * project_distance;
+
+        // SAFETY: If projected distance is too small, fall back to center (avoid aiming at feet)
+        if (project_distance < 50.f && dist_to_center > 50.f)
         {
-            // Clamp to max range (use manual normalize to avoid crash)
-            result.cast_position = capsule_start + (to_cast / distance_to_cast) * spell.range;
+            // Fallback to center-based aiming
+            result.cast_position = reachable_region.center;
+
+            // RANGE CLAMPING for fallback
+            math::vector3 to_cast = result.cast_position - capsule_start;
+            float distance_to_cast = to_cast.magnitude();
+            if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
+            {
+                result.cast_position = capsule_start + (to_cast / distance_to_cast) * spell.range;
+            }
         }
 
         // Use best probabilities found

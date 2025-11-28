@@ -80,8 +80,7 @@ inline bool is_knocked_up(game_object* obj)
 }
 
 // Animation state detection - checks if ACTUALLY locked (in windup), not just animating
-// Includes small human latency buffer - players don't move instantly when lock ends
-constexpr float HUMAN_REACTION_BUFFER = 0.05f;  // 50ms buffer after windup
+// REMOVED: HUMAN_REACTION_BUFFER - match game engine timing exactly
 
 inline bool is_auto_attacking(game_object* obj)
 {
@@ -93,14 +92,13 @@ inline bool is_auto_attacking(game_object* obj)
 
     // Only locked during windup (before projectile fires)
     // After windup, champion can animation cancel and move
-    // Add small buffer for human reaction time
     if (!g_sdk || !g_sdk->clock_facade) return false;
     float current_time = g_sdk->clock_facade->get_game_time();
     float cast_start = active_cast->get_cast_start_time();
     float windup = spell_cast->get_cast_delay();
 
-    // Still in windup + human reaction buffer = effectively locked
-    return (current_time - cast_start) < (windup + HUMAN_REACTION_BUFFER);
+    // Still in windup = effectively locked (no buffer - match game engine)
+    return (current_time - cast_start) < windup;
 }
 
 inline bool is_casting_spell(game_object* obj)
@@ -112,7 +110,6 @@ inline bool is_casting_spell(game_object* obj)
     if (!spell_cast || spell_cast->is_basic_attack()) return false;
 
     // Only locked during cast delay (before spell releases)
-    // Add small buffer for human reaction time
     if (!g_sdk || !g_sdk->clock_facade) return false;
     float current_time = g_sdk->clock_facade->get_game_time();
     float cast_start = active_cast->get_cast_start_time();
@@ -122,8 +119,8 @@ inline bool is_casting_spell(game_object* obj)
     // Some spells have 0 cast delay (instant) - not locked
     if (cast_delay < 0.01f) return false;
 
-    // Include human reaction buffer
-    return (current_time - cast_start) < (cast_delay + HUMAN_REACTION_BUFFER);
+    // Match game engine timing exactly (no buffer)
+    return (current_time - cast_start) < cast_delay;
 }
 
 inline bool is_channeling(game_object* obj)

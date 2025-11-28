@@ -796,16 +796,16 @@ pred_sdk::pred_data CustomPredictionSDK::convert_to_pred_data(
 pred_sdk::hitchance CustomPredictionSDK::convert_hit_chance_to_enum(float hit_chance)
 {
     // Map [0,1] to hitchance enum
-    // Adjusted thresholds for more aggressive casting (less "holding")
-    if (hit_chance >= 0.95f)
+    // STRICTER thresholds to avoid coin-flip (50/50) casts
+    if (hit_chance >= 0.98f)
         return pred_sdk::hitchance::guaranteed_hit;
-    else if (hit_chance >= 0.80f)  // very_high: kept at 80%
+    else if (hit_chance >= 0.85f)  // very_high: raised from 80% to 85%
         return pred_sdk::hitchance::very_high;
-    else if (hit_chance >= 0.65f)  // high: kept at 65%
+    else if (hit_chance >= 0.75f)  // high: raised from 65% to 75% (no more coin flips)
         return pred_sdk::hitchance::high;
-    else if (hit_chance >= 0.50f)  // medium: 50%
+    else if (hit_chance >= 0.55f)  // medium: raised from 50% to 55%
         return pred_sdk::hitchance::medium;
-    else if (hit_chance >= 0.30f)  // low: 30%
+    else if (hit_chance >= 0.35f)  // low: raised from 30% to 35%
         return pred_sdk::hitchance::low;
     else
         return pred_sdk::hitchance::any;
@@ -1747,14 +1747,6 @@ bool CustomPredictionSDK::check_collision_simple(
                 math::vector3 to_minion_current = minion_pos - start;
                 float distance_to_minion = to_minion_current.dot(line_dir);
 
-                // Calculate perpendicular distance to spell line (for safety margin calculations)
-                float perp_distance_sq = to_minion_current.magnitude() * to_minion_current.magnitude()
-                                        - distance_to_minion * distance_to_minion;
-                float perp_distance = (perp_distance_sq > 0.f) ? std::sqrt(perp_distance_sq) : 0.f;
-
-                // Extra safety margin for stationary minions that might start moving
-                float safety_margin = 0.f;
-
                 if (distance_to_minion > 0 && spell_data.projectile_speed > 0)
                 {
                     float travel_time = spell_data.delay + (distance_to_minion / spell_data.projectile_speed);
@@ -1781,41 +1773,6 @@ bool CustomPredictionSDK::check_collision_simple(
                                 minion_pos = minion_pos + move_dir * predicted_move;
                             }
                         }
-
-                        // Add uncertainty margin for moving minions (they might change direction)
-                        // Scale with travel time - longer travel = more uncertainty
-                        safety_margin = std::min(travel_time * 30.f, 50.f);  // Max 50 units
-                    }
-                    else
-                    {
-                        // CRITICAL FIX: Stationary minions near the spell path are DANGEROUS
-                        // They can start moving at any time (after attack animation, aggro change, etc.)
-                        //
-                        // For long travel times (like Thresh Q: 0.5s delay + flight time),
-                        // a stationary minion can easily walk 100+ units into the path
-                        //
-                        // Safety margin scales with:
-                        // 1. Travel time (longer = more time for minion to start moving)
-                        // 2. Proximity to spell line (closer = more likely to block)
-
-                        float minion_speed = minion->get_move_speed();  // Usually ~325 for caster, ~345 for melee
-
-                        // How far could minion move if it starts walking NOW?
-                        // Use 60% of travel time (assumes ~0.3s reaction + attack finish)
-                        float potential_movement = minion_speed * travel_time * 0.6f;
-
-                        // If minion is close to the path and could reach it, add safety margin
-                        // Only apply if minion is within potential movement distance of the path
-                        if (perp_distance < potential_movement + spell_data.radius + 50.f)
-                        {
-                            // Scale margin: closer to path = bigger margin (more dangerous)
-                            // Max margin when minion is right on the edge of collision radius
-                            float proximity_factor = 1.0f - std::min(perp_distance / (potential_movement + 50.f), 1.0f);
-                            safety_margin = potential_movement * proximity_factor * 0.5f;
-
-                            // Cap at reasonable value
-                            safety_margin = std::min(safety_margin, 80.f);
-                        }
                     }
                 }
 
@@ -1823,7 +1780,7 @@ bool CustomPredictionSDK::check_collision_simple(
 
                 float projection = to_minion.dot(line_dir);
                 float minion_radius = minion->get_bounding_radius();
-                float collision_radius = spell_data.radius + minion_radius + safety_margin;
+                float collision_radius = spell_data.radius + minion_radius;
 
                 // FIX: Account for bounding radius when checking projection bounds
                 // Minion can block if its hitbox overlaps the line, even if center is behind/beyond
