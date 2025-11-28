@@ -506,6 +506,30 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             return result;
         }
 
+        // VECTOR SPELL SAFETY: Validate first_cast_position is within cast_range
+        // optimize_vector_orientation should clamp this, but double-check here
+        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+        {
+            float first_cast_range = spell_data.cast_range;
+            if (first_cast_range < 1.f) first_cast_range = spell_data.range;  // Fallback if cast_range not set
+
+            float first_cast_distance = result.first_cast_position.distance(source_pos);
+            if (first_cast_distance > first_cast_range + 50.f)  // 50 unit buffer for edge cases
+            {
+                if (PredictionSettings::get().enable_debug_logging)
+                {
+                    char range_msg[256];
+                    snprintf(range_msg, sizeof(range_msg),
+                        "[REJECT] Vector first_cast out of range: %.0f > %.0f",
+                        first_cast_distance, first_cast_range);
+                    g_sdk->log_console(range_msg);
+                }
+                result.is_valid = false;
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
+        }
+
         // Check collision if required
         if (!spell_data.forbidden_collisions.empty())
         {
