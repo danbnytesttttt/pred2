@@ -1274,6 +1274,7 @@ namespace HybridPred
     void HybridFusionEngine::update_opportunity_signals(
         HybridPredictionResult& result,
         game_object* source,
+        game_object* target,
         const pred_sdk::spell_data& spell,
         TargetBehaviorTracker& tracker)
     {
@@ -1290,20 +1291,37 @@ namespace HybridPred
         float current_time = g_sdk->clock_facade->get_game_time();
         int spell_slot = spell.spell_slot;
 
-        // TRIGGER HAPPY OVERRIDE: Animation Locks
-        // If target is locked in animation (AA/Cast/CC), DO NOT WAIT.
-        // The "Patience Window" is for moving targets. Stationary targets are free hits.
-        // Fire immediately before they wake up.
-        if (tracker.is_animation_locked())
+        // SMART TRIGGER: Animation Lock Check
+        // Only bypass patience if the lock lasts long enough for the spell to land
+        // Otherwise, the target will be free to dodge by the time our spell arrives
+        if (tracker.is_animation_locked() && source && target)
         {
-            result.is_peak_opportunity = true;
-            result.opportunity_score = 1.0f;
-            result.adaptive_threshold = 0.50f;  // Lower threshold to ensure we take the shot
+            // Calculate how long until the spell lands
+            float arrival_time = PhysicsPredictor::compute_arrival_time(
+                source->get_position(),
+                target->get_position(),
+                spell.projectile_speed,
+                spell.delay
+            );
 
-            // Still update window history so we resume tracking correctly after lock ends
-            OpportunityWindow& window = tracker.get_opportunity_window(spell.spell_slot);
-            window.update(current_time, result.hit_chance);
-            return;
+            // Get how long the target will remain locked
+            float remaining_lock = get_remaining_lock_time(target);
+
+            // Only bypass patience if lock lasts until (or past) spell arrival
+            // This prevents firing at targets who will be free to dodge
+            if (remaining_lock >= arrival_time)
+            {
+                result.is_peak_opportunity = true;
+                result.opportunity_score = 1.0f;
+                result.adaptive_threshold = 0.50f;  // Lower threshold to ensure we take the shot
+
+                // Still update window history so we resume tracking correctly after lock ends
+                OpportunityWindow& window = tracker.get_opportunity_window(spell.spell_slot);
+                window.update(current_time, result.hit_chance);
+                return;
+            }
+            // If lock ends before spell lands, fall through to normal patience logic
+            // The get_effective_move_speed() will handle partial freedom calculation
         }
 
         // ADAPTIVE PATIENCE: Calculate patience window based on spell cooldown
@@ -2324,7 +2342,7 @@ namespace HybridPred
             result.is_valid = true;
             result.reasoning = reasoning;
 
-            update_opportunity_signals(result, source, spell, tracker);
+            update_opportunity_signals(result, source, target, spell, tracker);
 
             return result;
         }
@@ -2646,7 +2664,7 @@ namespace HybridPred
         result.is_valid = true;
 
         // Update opportunistic casting signals
-        update_opportunity_signals(result, source, spell, tracker);
+        update_opportunity_signals(result, source, target, spell, tracker);
 
         return result;
     }
@@ -3252,7 +3270,7 @@ namespace HybridPred
         result.is_valid = true;
 
         // Update opportunistic casting signals
-        update_opportunity_signals(result, source, spell, tracker);
+        update_opportunity_signals(result, source, target, spell, tracker);
 
         return result;
     }
@@ -3424,7 +3442,7 @@ namespace HybridPred
         result.is_valid = true;
 
         // Update opportunistic casting signals
-        update_opportunity_signals(result, source, spell, tracker);
+        update_opportunity_signals(result, source, target, spell, tracker);
 
         return result;
     }
@@ -3575,7 +3593,7 @@ namespace HybridPred
         result.is_valid = true;
 
         // Update opportunistic casting signals
-        update_opportunity_signals(result, source, spell, tracker);
+        update_opportunity_signals(result, source, target, spell, tracker);
 
         return result;
     }

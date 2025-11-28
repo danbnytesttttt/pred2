@@ -946,6 +946,7 @@ namespace HybridPred
         static void update_opportunity_signals(
             HybridPredictionResult& result,
             game_object* source,
+            game_object* target,
             const pred_sdk::spell_data& spell,
             TargetBehaviorTracker& tracker
         );
