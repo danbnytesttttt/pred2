@@ -526,11 +526,12 @@ namespace HybridPred
         bool has_last_path_endpoint_ = false;
 
         // Dynamic acceleration measurement (per-target)
-        float measured_acceleration_ = DEFAULT_ACCELERATION;   // Rolling average of observed acceleration
-        float measured_deceleration_ = DEFAULT_DECELERATION;   // Rolling average of observed deceleration
-        int accel_sample_count_ = 0;                           // Number of acceleration samples
-        int decel_sample_count_ = 0;                           // Number of deceleration samples
-        float last_measured_speed_ = 0.f;                      // Previous frame's speed for delta calculation
+        // Start near measured averages (~20-25k), then adapt per-target
+        float measured_acceleration_ = 15000.0f;  // Slightly conservative start
+        float measured_deceleration_ = 20000.0f;  // Decel measured slightly higher
+        int accel_sample_count_ = 0;              // Number of acceleration samples
+        int decel_sample_count_ = 0;              // Number of deceleration samples
+        float last_measured_speed_ = 0.f;         // Previous frame's speed for delta calculation
 
     public:
         TargetBehaviorTracker(game_object* target);
