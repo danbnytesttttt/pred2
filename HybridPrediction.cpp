@@ -164,7 +164,22 @@ namespace HybridPred
             has_last_path_endpoint_ = true;
         }
 
-        // Sample at fixed rate OR on path change event
+        // ANIMATION STATE CHANGE DETECTION: Sample immediately when AA/Cast starts
+        // Don't wait 50ms to detect lock - that's 50ms of wasted opportunity
+        bool current_is_attacking = is_auto_attacking(target_);
+        bool current_is_casting = is_casting_spell(target_);
+
+        if (!movement_history_.empty())
+        {
+            const auto& last = movement_history_.back();
+            if (current_is_attacking != last.is_auto_attacking ||
+                current_is_casting != last.is_casting)
+            {
+                force_sample = true;  // Animation state changed - sample NOW
+            }
+        }
+
+        // Sample at fixed rate OR on event (path change, animation state change)
         if (!force_sample && current_time - last_update_time_ < MOVEMENT_SAMPLE_RATE)
             return;
 
@@ -301,9 +316,17 @@ namespace HybridPred
                 float raw_speed = snapshot.velocity.magnitude();
                 float smooth_speed = smoothed_velocity_.magnitude();
 
+                // CASE 0: ANIMATION LOCKED - Anchor them in place
+                // Humans cannot slide while auto-attacking/casting. Force velocity to zero.
+                // This prevents "sliding prediction" where we aim in front of a standing target.
+                if (snapshot.is_auto_attacking || snapshot.is_casting || snapshot.is_cced)
+                {
+                    smoothed_velocity_ = math::vector3(0, 0, 0);
+                    snapshot.velocity = math::vector3(0, 0, 0);  // Override raw velocity too
+                }
                 // CASE 1: DASHING - Reset smoother to avoid polluting history
                 // Dash velocity is forced movement, not player input
-                if (snapshot.is_dashing)
+                else if (snapshot.is_dashing)
                 {
                     smoothed_velocity_ = math::vector3(0, 0, 0);
                 }
@@ -1266,6 +1289,22 @@ namespace HybridPred
 
         float current_time = g_sdk->clock_facade->get_game_time();
         int spell_slot = spell.spell_slot;
+
+        // TRIGGER HAPPY OVERRIDE: Animation Locks
+        // If target is locked in animation (AA/Cast/CC), DO NOT WAIT.
+        // The "Patience Window" is for moving targets. Stationary targets are free hits.
+        // Fire immediately before they wake up.
+        if (tracker.is_animation_locked())
+        {
+            result.is_peak_opportunity = true;
+            result.opportunity_score = 1.0f;
+            result.adaptive_threshold = 0.50f;  // Lower threshold to ensure we take the shot
+
+            // Still update window history so we resume tracking correctly after lock ends
+            OpportunityWindow& window = tracker.get_opportunity_window(spell.spell_slot);
+            window.update(current_time, result.hit_chance);
+            return;
+        }
 
         // ADAPTIVE PATIENCE: Calculate patience window based on spell cooldown
         // LOW-CD FIX: Old range (2.0-4.0s) was too long for Ezreal Q, Zeri Q, etc.
