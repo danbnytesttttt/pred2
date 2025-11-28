@@ -75,6 +75,10 @@ namespace Prediction
                 PredictionSettings::get().enable_visuals = value;
                 });
 
+            g_menu->add_checkbox("physics_measure", "Measure Physics (Calibration)", false, [](bool value) {
+                PredictionSettings::get().enable_physics_measurement = value;
+                });
+
             g_menu->add_label("Prediction Features");
 
             g_menu->add_checkbox("dash_pred", "Dash Endpoint Prediction", true, [](bool value) {
