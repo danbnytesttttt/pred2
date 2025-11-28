@@ -4012,10 +4012,12 @@ namespace HybridPred
             math::vector3 delta = current_pos - self_last_pos_;
             float current_speed = delta.magnitude() / dt;
 
-            // Detect "Start from Standstill" (0 -> Moving)
-            if (self_last_speed_ < 10.f && current_speed > 100.f)
+            float speed_change = current_speed - self_last_speed_;
+
+            // Detect acceleration (speed increasing significantly)
+            if (speed_change > 50.f && current_speed > 50.f)
             {
-                float accel = (current_speed - self_last_speed_) / dt;
+                float accel = speed_change / dt;
                 char log_msg[256];
                 snprintf(log_msg, sizeof(log_msg),
                     "[SELF PHYSICS] ACCEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
@@ -4023,10 +4025,10 @@ namespace HybridPred
                 g_sdk->log_console(log_msg);
             }
 
-            // Detect "Stop from Sprint" (Moving -> 0)
-            if (self_last_speed_ > 300.f && current_speed < 50.f)
+            // Detect deceleration (speed decreasing significantly)
+            if (speed_change < -50.f && self_last_speed_ > 50.f)
             {
-                float decel = (self_last_speed_ - current_speed) / dt;
+                float decel = -speed_change / dt;
                 char log_msg[256];
                 snprintf(log_msg, sizeof(log_msg),
                     "[SELF PHYSICS] DECEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
