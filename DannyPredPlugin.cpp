@@ -79,6 +79,14 @@ namespace Prediction
                 PredictionSettings::get().enable_physics_measurement = value;
                 });
 
+            g_menu->add_checkbox("output_telemetry", "Output Telemetry Report", false, [](bool value) {
+                if (value && g_sdk)
+                {
+                    g_sdk->log_console("[Danny.Prediction] ===== TELEMETRY REPORT =====");
+                    PredictionTelemetry::TelemetryLogger::write_report();
+                }
+                });
+
             g_menu->add_label("Prediction Features");
 
             g_menu->add_checkbox("dash_pred", "Dash Endpoint Prediction", true, [](bool value) {
