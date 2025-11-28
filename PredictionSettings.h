@@ -14,10 +14,26 @@
 namespace PredictionSettings
 {
     /**
+     * Stores last spell data for dump/debug feature
+     */
+    struct LastSpellData
+    {
+        float range = 0.f;
+        float radius = 0.f;
+        float delay = 0.f;
+        float speed = 0.f;
+        int spell_type = 0;
+        int hitchance = 0;
+        bool valid = false;
+    };
+
+    /**
      * Configuration settings with menu integration
      */
     struct Settings
     {
+        // Last spell data for debug dump
+        LastSpellData last_spell_data;
         // Debug settings
         bool enable_debug_logging = false;  // Verbose console logging
         bool enable_telemetry = true;       // Log predictions to file for analysis

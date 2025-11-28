@@ -1745,7 +1745,7 @@ namespace HybridPred
         float ping_compensation = 0.f;
         if (g_sdk && g_sdk->net_client)
         {
-            float ping_ms = g_sdk->net_client->get_ping();
+            float ping_ms = static_cast<float>(g_sdk->net_client->get_ping());
             // Sanity bounds: reject garbage values
             ping_ms = std::clamp(ping_ms, 10.f, 150.f);
             // Use half ping (one-way) + one server tick
