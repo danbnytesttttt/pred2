@@ -233,6 +233,53 @@ namespace HybridPred
                         g_sdk->log_console(log_msg);
                     }
                 }
+
+                // ================================================================
+                // DYNAMIC PHYSICS: Always measure acceleration/deceleration
+                // Used for per-target prediction regardless of debug setting
+                // ================================================================
+                {
+                    float current_speed = snapshot.velocity.magnitude();
+                    float prev_speed = last_measured_speed_;
+                    float dt = current_time - movement_history_.back().timestamp;
+
+                    if (dt > 0.005f && dt < 0.2f)  // Valid time delta
+                    {
+                        float speed_change = current_speed - prev_speed;
+
+                        // Acceleration: significant speed increase
+                        if (speed_change > 50.f && current_speed > 50.f)
+                        {
+                            float accel = speed_change / dt;
+                            // Sanity check: 500-50000 units/s² is reasonable
+                            if (accel > 500.f && accel < 50000.f)
+                            {
+                                // Rolling average with decay (newer samples weighted more)
+                                if (accel_sample_count_ == 0)
+                                    measured_acceleration_ = accel;
+                                else
+                                    measured_acceleration_ = measured_acceleration_ * 0.8f + accel * 0.2f;
+                                accel_sample_count_++;
+                            }
+                        }
+
+                        // Deceleration: significant speed decrease
+                        if (speed_change < -50.f && prev_speed > 50.f)
+                        {
+                            float decel = -speed_change / dt;
+                            // Sanity check
+                            if (decel > 500.f && decel < 50000.f)
+                            {
+                                if (decel_sample_count_ == 0)
+                                    measured_deceleration_ = decel;
+                                else
+                                    measured_deceleration_ = measured_deceleration_ * 0.8f + decel * 0.2f;
+                                decel_sample_count_++;
+                            }
+                        }
+                    }
+                    last_measured_speed_ = current_speed;
+                }
                 // ================================================================
 
                 // VELOCITY SANITY CAPPING: Prevent extreme values
@@ -2345,11 +2392,17 @@ namespace HybridPred
         }
         // else: spell arrives before they can react - minimal reachable region
 
+        // Use dynamic acceleration if tracker has measured it
+        float dynamic_accel = tracker.has_measured_physics() ?
+            tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
+
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             dodge_time,
-            effective_move_speed  // Use effective speed (0 if CC'd)
+            effective_move_speed,  // Use effective speed (0 if CC'd)
+            DEFAULT_TURN_RATE,
+            dynamic_accel
         );
 
         result.reachable_region = reachable_region;
@@ -2865,12 +2918,18 @@ namespace HybridPred
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
         }
 
+        // Use dynamic acceleration if tracker has measured it
+        float dynamic_accel = tracker.has_measured_physics() ?
+            tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
+
         // Use path-predicted position as center
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             dodge_time,
-            effective_move_speed  // Use effective speed (0 if CC'd)
+            effective_move_speed,  // Use effective speed (0 if CC'd)
+            DEFAULT_TURN_RATE,
+            dynamic_accel
         );
 
         result.reachable_region = reachable_region;
@@ -3243,11 +3302,17 @@ namespace HybridPred
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
         }
 
+        // Use dynamic acceleration if tracker has measured it
+        float dynamic_accel = tracker.has_measured_physics() ?
+            tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
+
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             dodge_time,
-            effective_move_speed  // Use effective speed (0 if CC'd)
+            effective_move_speed,  // Use effective speed (0 if CC'd)
+            DEFAULT_TURN_RATE,
+            dynamic_accel
         );
 
         result.reachable_region = reachable_region;
@@ -3358,11 +3423,17 @@ namespace HybridPred
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target);  // 0 if CC'd
 
+        // Use dynamic acceleration if tracker has measured it, otherwise fall back to defaults
+        float dynamic_accel = tracker.has_measured_physics() ?
+            tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
+
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             target->get_position(),
             target_velocity,
             arrival_time,
-            effective_move_speed  // Use effective speed (0 if CC'd)
+            effective_move_speed,  // Use effective speed (0 if CC'd)
+            DEFAULT_TURN_RATE,
+            dynamic_accel
         );
 
         result.reachable_region = reachable_region;

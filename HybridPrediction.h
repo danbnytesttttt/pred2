@@ -525,6 +525,13 @@ namespace HybridPred
         math::vector3 last_path_endpoint_;
         bool has_last_path_endpoint_ = false;
 
+        // Dynamic acceleration measurement (per-target)
+        float measured_acceleration_ = DEFAULT_ACCELERATION;   // Rolling average of observed acceleration
+        float measured_deceleration_ = DEFAULT_DECELERATION;   // Rolling average of observed deceleration
+        int accel_sample_count_ = 0;                           // Number of acceleration samples
+        int decel_sample_count_ = 0;                           // Number of deceleration samples
+        float last_measured_speed_ = 0.f;                      // Previous frame's speed for delta calculation
+
     public:
         TargetBehaviorTracker(game_object* target);
 
@@ -553,6 +560,11 @@ namespace HybridPred
 
         // Opportunistic casting - get or create window for spell slot
         OpportunityWindow& get_opportunity_window(int spell_slot) const;
+
+        // Dynamic acceleration getters (measured from actual enemy behavior)
+        float get_measured_acceleration() const { return measured_acceleration_; }
+        float get_measured_deceleration() const { return measured_deceleration_; }
+        bool has_measured_physics() const { return accel_sample_count_ >= 3 || decel_sample_count_ >= 3; }
 
     private:
         void update_dodge_pattern();
