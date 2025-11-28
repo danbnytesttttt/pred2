@@ -2251,8 +2251,8 @@ namespace HybridPred
                     time_confidence = 1.0f - std::min(potential_dodge_distance / dodge_threshold, 1.0f) * 0.5f;
                 }
 
-                // Additional penalty for long delay (>250ms to react)
-                if (time_after_dash > 0.25f)
+                // Additional penalty for long delay (>reaction time to respond)
+                if (time_after_dash > HUMAN_REACTION_TIME)
                 {
                     time_confidence *= 0.8f;
                 }
@@ -2260,9 +2260,9 @@ namespace HybridPred
                 confidence = time_confidence * edge_cases.dash.confidence_multiplier;
 
                 int ms_after = static_cast<int>(time_after_dash * 1000);
-                if (time_after_dash < 0.1f)
+                if (time_after_dash < MIN_REACTION_TIME)
                     reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (excellent)";
-                else if (time_after_dash < 0.25f)
+                else if (time_after_dash < HUMAN_REACTION_TIME)
                     reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (good)";
                 else
                     reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (they may dodge)";
