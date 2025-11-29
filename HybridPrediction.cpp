@@ -317,9 +317,13 @@ namespace HybridPred
                 float smooth_speed = smoothed_velocity_.magnitude();
 
                 // CASE 0: ANIMATION LOCKED - Anchor them in place
-                // Humans cannot slide while auto-attacking/casting. Force velocity to zero.
-                // This prevents "sliding prediction" where we aim in front of a standing target.
-                if (snapshot.is_auto_attacking || snapshot.is_casting || snapshot.is_cced)
+                // Force velocity to zero ONLY if they are actually stationary.
+                // SYNDRA/ORIANNA/VIKTOR FIX: Some champs can cast while moving!
+                // If we anchor a move-caster, we'll under-predict and shoot at their feet.
+                bool is_locked = (snapshot.is_auto_attacking || snapshot.is_casting || snapshot.is_cced);
+                bool is_move_casting = snapshot.is_casting && target_->is_moving();
+
+                if (is_locked && !is_move_casting)
                 {
                     smoothed_velocity_ = math::vector3(0, 0, 0);
                     snapshot.velocity = math::vector3(0, 0, 0);  // Override raw velocity too
@@ -3033,11 +3037,16 @@ namespace HybridPred
         math::vector3 direction = to_target / dist_to_target;  // Safe manual normalize
         math::vector3 capsule_start = source->get_position();
         float capsule_length = spell.range;
-        // Use effective radius = spell radius + target bounding radius
-        float capsule_radius = spell.radius + target->get_bounding_radius();
+
+        // HITBOX SAFETY MARGIN: Don't aim for pixel-perfect edge hits
+        // Network jitter and position sync errors make edge hits unreliable
+        // Shrink effective target radius by 10% to force "center mass" hits
+        float raw_target_radius = target->get_bounding_radius();
+        float effective_target_radius = raw_target_radius * 0.9f;
+        float capsule_radius = spell.radius + effective_target_radius;
 
         // For linear spells, find optimal direction using angular search
-        // Test multiple angles (±10°) around the predicted center to maximize hit probability
+        // Test multiple angles around the predicted center to maximize hit probability
         math::vector3 to_center = reachable_region.center - source->get_position();
         float dist_to_center = to_center.magnitude();
 
@@ -3051,9 +3060,11 @@ namespace HybridPred
             base_direction = direction;  // Fallback to target direction
         }
 
-        // Angular optimization: Test ±10° around base direction
-        constexpr int NUM_ANGLE_TESTS = 7;  // Test: -10°, -6.67°, -3.33°, 0°, +3.33°, +6.67°, +10°
-        constexpr float MAX_ANGLE_DEVIATION = 10.f * (PI / 180.f);  // ±10° in radians
+        // WIDE ANGULAR SEARCH: Test ±30° around base direction
+        // Old: ±10° was too narrow - missed hard jukes/strafes
+        // New: ±30° covers 90° turns at mid-range (30° at 1000 range = 500 units lateral)
+        constexpr int NUM_ANGLE_TESTS = 11;  // More samples for wider cone
+        constexpr float MAX_ANGLE_DEVIATION = 30.f * (PI / 180.f);  // ±30° in radians
 
         float best_hit_chance = 0.f;
         math::vector3 optimal_direction = base_direction;
