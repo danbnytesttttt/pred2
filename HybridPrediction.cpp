@@ -320,8 +320,20 @@ namespace HybridPred
                 // Force velocity to zero ONLY if they are actually stationary.
                 // SYNDRA/ORIANNA/VIKTOR FIX: Some champs can cast while moving!
                 // If we anchor a move-caster, we'll under-predict and shoot at their feet.
+                //
+                // ROBUST CHECK: Use path presence, not just is_moving()
+                // Velocity can dip to zero for 1 frame at cast start, but path persists.
+                bool has_move_path = false;
+                auto path = target_->get_path();
+                if (!path.empty())
+                {
+                    // Verify path goes beyond current position (not just a stop command)
+                    if (path.back().distance(snapshot.position) > 10.f)
+                        has_move_path = true;
+                }
+
                 bool is_locked = (snapshot.is_auto_attacking || snapshot.is_casting || snapshot.is_cced);
-                bool is_move_casting = snapshot.is_casting && target_->is_moving();
+                bool is_move_casting = snapshot.is_casting && (target_->is_moving() || has_move_path);
 
                 if (is_locked && !is_move_casting)
                 {
@@ -903,11 +915,45 @@ namespace HybridPred
         // Normalize variance by move_speed squared (scale-independent)
         float normalized_variance = (move_speed > 10.f) ? velocity_variance / (move_speed * move_speed) : 0.f;
 
+        // INSTANT JUKE DETECTION (PDF Staleness Fix)
+        // Variance is a lagging indicator - if target ran straight for 5s then hard-juked,
+        // low variance average would force long window for several frames, drowning out the juke.
+        // Fix: Check immediate history for sharp turns (>45°) and force short window instantly.
+        bool recent_hard_juke = false;
+        if (movement_history_.size() >= 3)
+        {
+            // Check last few samples for sharp direction changes
+            size_t check_count = std::min(movement_history_.size(), size_t(5));
+            for (size_t i = 1; i < check_count; ++i)
+            {
+                size_t idx = movement_history_.size() - i;
+                const auto& curr = movement_history_[idx];
+                const auto& prev = movement_history_[idx - 1];
+
+                // Only check if both samples have meaningful velocity
+                if (curr.velocity.magnitude() > 100.f && prev.velocity.magnitude() > 100.f)
+                {
+                    float curr_mag = curr.velocity.magnitude();
+                    float prev_mag = prev.velocity.magnitude();
+                    math::vector3 v1 = curr.velocity / curr_mag;
+                    math::vector3 v2 = prev.velocity / prev_mag;
+                    float dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+
+                    // dot < 0.707 means angle > 45 degrees
+                    if (dot < 0.707f)
+                    {
+                        recent_hard_juke = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         // Determine time-based history window
-        // High variance OR erratic juke timing = short memory
+        // High variance OR erratic juke timing OR recent hard juke = short memory
         // Low variance = long memory for trajectory stability
         float history_duration;
-        if (normalized_variance > 0.3f || dodge_pattern_.juke_interval_variance > 0.05f)
+        if (recent_hard_juke || normalized_variance > 0.3f || dodge_pattern_.juke_interval_variance > 0.05f)
             history_duration = 0.75f;   // Juking: 0.75s
         else if (normalized_variance < 0.1f)
             history_duration = 2.5f;    // Straight runner: 2.5s
