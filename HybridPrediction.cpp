@@ -2485,30 +2485,26 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for initial center position
-        // This follows actual waypoints instead of linear extrapolation
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
-        math::vector3 target_velocity = tracker.get_current_velocity();
-        float move_speed = target->get_move_speed();  // Stat value for historical lookups
-        float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
+
+        // FIX: REMOVE ARTIFICIAL PATH CAP (Trust event-driven sampling to catch turns)
+        // math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+
+        float move_speed = target->get_move_speed();
+        float effective_move_speed = get_effective_move_speed(target, arrival_time);
 
         // USE OBSERVED JUKE MAGNITUDE for reachable region
-        // This gives us actual observed dodge capability, not arbitrary factors
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        // Enemy reacts when they SEE cast animation, not when projectile launches
-        // Actual dodge time = arrival_time - reaction_time
         float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
-
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            // Use observed juke magnitude, capped by available time
             float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
         }
-        // else: spell arrives before they can react - minimal reachable region
 
         // Use dynamic acceleration if tracker has measured it
         float dynamic_accel = tracker.has_measured_physics() ?
@@ -2529,92 +2525,31 @@ namespace HybridPred
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
 
-        // Get current position for fusion calculations
-        math::vector3 current_pos = target->get_position();
-
+        // Center PDF on the Physics prediction
+        // This says: "Given their history of juking, where would they be RELATIVE to their current path?"
+        behavior_pdf.origin = path_predicted_pos;
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
         float confidence = compute_confidence_score(source, target, spell, tracker, edge_cases);
         result.confidence_score = confidence;
 
-        // Step 5: Find optimal cast position
-        // Intelligent fusion of path prediction and behavior PDF
-        //
-        // Key insight: these systems capture different things well:
-        // - Path prediction: forward distance (follows actual waypoints)
-        // - Behavior PDF: lateral deviation (jukes, patterns from velocity history)
-        //
-        // Strategy:
-        // - If they agree (close together): use PDF peak (more nuanced, captures behavior)
-        // - If they disagree: decompose - path for forward, PDF for lateral
-        math::vector3 optimal_cast_pos = path_predicted_pos;
+        // Step 5: Find optimal cast position using GRADIENT ASCENT
+        // FIX: Replaced "Disagreement Logic" with rigorous optimization
+        // This ensures the cast position is mathematically optimal for the fused probability,
+        // and physically contained within the reachable region.
+        // It prevents "wild" PDFs from pulling the aim point into impossible territory.
+        float effective_radius = spell.radius + target->get_bounding_radius();
 
-        if (behavior_pdf.total_probability > EPSILON)
-        {
-            // Find PDF peak (highest probability position)
-            math::vector3 pdf_peak = behavior_pdf.origin;
-            float best_prob = 0.f;
-
-            constexpr int SEARCH_RADIUS = 6;
-            float step = behavior_pdf.cell_size;
-
-            for (int i = -SEARCH_RADIUS; i <= SEARCH_RADIUS; ++i)
-            {
-                for (int j = -SEARCH_RADIUS; j <= SEARCH_RADIUS; ++j)
-                {
-                    math::vector3 test = behavior_pdf.origin;
-                    test.x += i * step;
-                    test.z += j * step;
-
-                    float prob = behavior_pdf.sample(test);
-
-                    if (prob > best_prob)
-                    {
-                        best_prob = prob;
-                        pdf_peak = test;
-                    }
-                }
-            }
-
-            // Compute movement direction
-            math::vector3 path_dir = (path_predicted_pos - current_pos);
-            float path_dist = path_dir.magnitude();
-
-            if (path_dist > 10.f)
-            {
-                path_dir = path_dir / path_dist;
-                math::vector3 path_perp(-path_dir.z, 0.f, path_dir.x);
-
-                // Measure disagreement between path prediction and PDF
-                math::vector3 offset = pdf_peak - path_predicted_pos;
-                float separation = offset.magnitude();
-
-                // Agreement threshold: proportional to travel distance
-                // Close predictions = high confidence, use PDF nuance
-                // Far predictions = disagreement, decompose into components
-                float agreement_threshold = std::min(path_dist * 0.15f, 50.f);
-
-                if (separation <= agreement_threshold)
-                {
-                    // Agreement: path and PDF predict similar positions
-                    // Trust PDF peak - it captures behavioral nuances (slight jukes, hesitation)
-                    optimal_cast_pos = pdf_peak;
-                }
-                else
-                {
-                    // Disagreement: significant difference between predictions
-                    // This usually means velocity extrapolation is lagging (undershooting)
-                    //
-                    // Decompose: forward from path (accurate), lateral from PDF (jukes)
-                    float lateral_offset = offset.dot(path_perp);
-                    optimal_cast_pos = path_predicted_pos + path_perp * lateral_offset;
-                }
-            }
-        }
+        math::vector3 optimal_cast_pos = find_optimal_cast_position(
+            reachable_region,
+            behavior_pdf,
+            source->get_position(),
+            effective_radius,
+            confidence
+        );
 
         // NAVMESH CLAMPING: Ensure cast position is on pathable terrain
-        // If predicted position is in a wall, find nearest pathable point
         if (g_sdk && g_sdk->nav_mesh)
         {
             if (!g_sdk->nav_mesh->is_pathable(optimal_cast_pos))
@@ -2641,7 +2576,7 @@ namespace HybridPred
                                 best_distance = dist;
                                 best_pos = test_pos;
                             }
-                            break;  // Found pathable point in this direction
+                            break;
                         }
                     }
                 }
@@ -2655,17 +2590,13 @@ namespace HybridPred
         float distance_to_cast = to_cast.magnitude();
         if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
         {
-            // Clamp to max range (use manual normalize to avoid crash)
+            // Clamp to max range
             optimal_cast_pos = source_pos + (to_cast / distance_to_cast) * spell.range;
         }
 
         result.cast_position = optimal_cast_pos;
 
-        // Step 6: Evaluate final hit chance at optimal position
-        // Use effective radius = spell radius + target bounding radius
-        // This accounts for edge-to-edge collision (spell edge touching target hitbox edge)
-        float effective_radius = spell.radius + target->get_bounding_radius();
-
+        // Step 6: Evaluate final hit chance
         float physics_prob = PhysicsPredictor::compute_physics_hit_probability(
             optimal_cast_pos,
             effective_radius,
@@ -2681,29 +2612,31 @@ namespace HybridPred
         result.physics_contribution = physics_prob;
         result.behavior_contribution = behavior_prob;
 
-        // Weighted geometric fusion (trust physics more when behavior samples are sparse)
+        // Weighted fusion
         size_t sample_count = tracker.get_history().size();
         float current_time = 0.f;
         if (g_sdk && g_sdk->clock_facade)
             current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
-        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed);
 
-        // Debug logging for 0 hit chance
-        if (result.hit_chance < 0.01f && g_sdk)
+        result.hit_chance = fuse_probabilities(
+            physics_prob, behavior_prob, confidence,
+            sample_count, time_since_update, move_speed
+        );
+
+        // Debug logging for 0 hit chance analysis
+        if (result.hit_chance < 0.01f && g_sdk && PredictionSettings::get().enable_debug_logging)
         {
             char debug_msg[512];
             snprintf(debug_msg, sizeof(debug_msg),
-                "[Danny.Prediction] CIRCULAR DEBUG: arrival=%.3f phys=%.3f behav=%.3f conf=%.3f samples=%zu reachable_r=%.1f speed=%.1f",
-                arrival_time, physics_prob, behavior_prob, confidence, sample_count, reachable_region.max_radius, move_speed);
+                "[Danny.Prediction] CIRCULAR FAIL: arr=%.2f phys=%.2f behav=%.2f conf=%.2f samp=%zu R=%.0f",
+                arrival_time, physics_prob, behavior_prob, confidence, sample_count, reachable_region.max_radius);
             g_sdk->log_console(debug_msg);
         }
 
-        // Clamp to [0, 1]
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
 
 #if HYBRID_PRED_ENABLE_REASONING
-        // Generate mathematical reasoning
         std::ostringstream reasoning;
         reasoning << "Hybrid Prediction Analysis:\n";
         reasoning << "  Arrival Time: " << arrival_time << "s\n";
@@ -2720,7 +2653,6 @@ namespace HybridPred
 
         result.is_valid = true;
 
-        // Update opportunistic casting signals
         update_opportunity_signals(result, source, target, spell, tracker);
 
         return result;
