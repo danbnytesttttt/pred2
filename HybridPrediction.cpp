@@ -3083,8 +3083,10 @@ namespace HybridPred
         float max_angle_deviation = deviation_degrees * (PI / 180.f);
 
         // Scale sample count with width to maintain angular density
-        // 10° -> 7 samples, 30° -> 11 samples
-        int num_angle_tests = 7 + static_cast<int>(juke_factor * 4.f);
+        // 10° -> 7 samples, 30° -> 15 samples
+        // At 15 samples over 60°, step size ≈ 4.3°, gap at 1000 range ≈ 75 units
+        // This keeps gaps smaller than typical hitbox diameter (130 units)
+        int num_angle_tests = 7 + static_cast<int>(juke_factor * 8.f);
 
         float best_hit_chance = 0.f;
         math::vector3 optimal_direction = base_direction;
