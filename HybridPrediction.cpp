@@ -3038,12 +3038,9 @@ namespace HybridPred
         math::vector3 capsule_start = source->get_position();
         float capsule_length = spell.range;
 
-        // HITBOX SAFETY MARGIN: Don't aim for pixel-perfect edge hits
-        // Network jitter and position sync errors make edge hits unreliable
-        // Shrink effective target radius by 10% to force "center mass" hits
-        float raw_target_radius = target->get_bounding_radius();
-        float effective_target_radius = raw_target_radius * 0.9f;
-        float capsule_radius = spell.radius + effective_target_radius;
+        // Use exact bounding radius - trust the geometry
+        // Shrinking by 10% would reduce hit area by ~19%, causing misses on valid edge hits
+        float capsule_radius = spell.radius + target->get_bounding_radius();
 
         // For linear spells, find optimal direction using angular search
         // Test multiple angles around the predicted center to maximize hit probability
@@ -3060,21 +3057,37 @@ namespace HybridPred
             base_direction = direction;  // Fallback to target direction
         }
 
-        // WIDE ANGULAR SEARCH: Test ±30° around base direction
-        // Old: ±10° was too narrow - missed hard jukes/strafes
-        // New: ±30° covers 90° turns at mid-range (30° at 1000 range = 500 units lateral)
-        constexpr int NUM_ANGLE_TESTS = 11;  // More samples for wider cone
-        constexpr float MAX_ANGLE_DEVIATION = 30.f * (PI / 180.f);  // ±30° in radians
+        // ADAPTIVE ANGULAR SEARCH: Width scales with target's juke behavior
+        // Runners (low juke) -> ±10° precision
+        // Jukers (high juke) -> ±30° coverage
+        const auto& pattern = tracker.get_dodge_pattern();
+
+        // Juke factor = sum of side dodge frequencies (0.0 to 1.0)
+        float juke_factor = pattern.left_dodge_frequency + pattern.right_dodge_frequency;
+
+        // Add variance penalty: erratic timing increases search width
+        if (pattern.juke_interval_variance > 0.1f)
+            juke_factor += 0.2f;
+
+        juke_factor = std::clamp(juke_factor, 0.f, 1.f);
+
+        // Base 10° + up to 20° extra based on behavior (10° to 30° range)
+        float deviation_degrees = 10.f + (juke_factor * 20.f);
+        float max_angle_deviation = deviation_degrees * (PI / 180.f);
+
+        // Scale sample count with width to maintain angular density
+        // 10° -> 7 samples, 30° -> 11 samples
+        int num_angle_tests = 7 + static_cast<int>(juke_factor * 4.f);
 
         float best_hit_chance = 0.f;
         math::vector3 optimal_direction = base_direction;
         float best_physics_prob = 0.f;
         float best_behavior_prob = 0.f;
 
-        for (int i = 0; i < NUM_ANGLE_TESTS; ++i)
+        for (int i = 0; i < num_angle_tests; ++i)
         {
-            // Calculate angle offset from -MAX_ANGLE_DEVIATION to +MAX_ANGLE_DEVIATION
-            float angle_offset = (i - NUM_ANGLE_TESTS / 2) * (2.f * MAX_ANGLE_DEVIATION / (NUM_ANGLE_TESTS - 1));
+            // Calculate angle offset from -max_angle_deviation to +max_angle_deviation
+            float angle_offset = (i - num_angle_tests / 2) * (2.f * max_angle_deviation / (num_angle_tests - 1));
 
             // Rotate base_direction around Y axis by angle_offset
             // Using 2D rotation in XZ plane (Y is up in League)
@@ -3104,8 +3117,8 @@ namespace HybridPred
             // Calculate perpendicular distance to spell line
             float perp_dist = (reachable_region.center - closest_point).magnitude();
 
-            // Debug: Log for center angle (i=3)
-            if (i == NUM_ANGLE_TESTS / 2 && PredictionSettings::get().enable_debug_logging && g_sdk)
+            // Debug: Log for center angle
+            if (i == num_angle_tests / 2 && PredictionSettings::get().enable_debug_logging && g_sdk)
             {
                 char dbg[512];
                 snprintf(dbg, sizeof(dbg),
