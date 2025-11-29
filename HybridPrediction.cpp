@@ -867,11 +867,14 @@ namespace HybridPred
             return pdf;
         }
 
-        // ADAPTIVE HISTORY WINDOW: Use fewer samples for juking targets, more for straight runners
-        // High variance (juking) = recent data matters most, use 15 samples (~0.75s)
-        // Low variance (straight) = use longer history for stability, use 50 samples (~2.5s)
-        int adaptive_sample_limit = 30;  // Default
+        // TIME-BASED HISTORY WINDOW (APM Trap Fix)
+        // Old: "Use last N samples" - Failed against spam-clickers (15 samples = 0.15s if 10 clicks/sec)
+        // New: "Use last X seconds" - Consistent regardless of click rate
+        //
+        // Juking/High Variance: 0.75s (short memory, recent behavior matters)
+        // Stable/Low Variance:  2.5s (long memory, capture full trajectory)
 
+        float velocity_variance = 0.f;
         if (movement_history_.size() >= 10)
         {
             // Calculate velocity variance from last 10 samples
@@ -887,40 +890,45 @@ namespace HybridPred
             mean_vx /= variance_samples;
             mean_vz /= variance_samples;
 
-            float variance = 0.f;
             for (int i = 0; i < variance_samples; ++i)
             {
                 const auto& snap = movement_history_[movement_history_.size() - 1 - i];
                 float dx = snap.velocity.x - mean_vx;
                 float dz = snap.velocity.z - mean_vz;
-                variance += dx * dx + dz * dz;
+                velocity_variance += dx * dx + dz * dz;
             }
-            variance /= variance_samples;
-
-            // Normalize variance by move_speed squared (so it's scale-independent)
-            float normalized_variance = (move_speed > 10.f) ? variance / (move_speed * move_speed) : 0.f;
-
-            // High variance (> 0.3) = juking, use short window
-            // Low variance (< 0.1) = running straight, use long window
-            if (normalized_variance > 0.3f)
-                adaptive_sample_limit = 15;   // Juking: ~0.75s of history
-            else if (normalized_variance < 0.1f)
-                adaptive_sample_limit = 50;   // Straight: ~2.5s of history
-            else
-                adaptive_sample_limit = 30;   // Mixed: default
+            velocity_variance /= variance_samples;
         }
+
+        // Normalize variance by move_speed squared (scale-independent)
+        float normalized_variance = (move_speed > 10.f) ? velocity_variance / (move_speed * move_speed) : 0.f;
+
+        // Determine time-based history window
+        // High variance OR erratic juke timing = short memory
+        // Low variance = long memory for trajectory stability
+        float history_duration;
+        if (normalized_variance > 0.3f || dodge_pattern_.juke_interval_variance > 0.05f)
+            history_duration = 0.75f;   // Juking: 0.75s
+        else if (normalized_variance < 0.1f)
+            history_duration = 2.5f;    // Straight runner: 2.5s
+        else
+            history_duration = 1.5f;    // Mixed: 1.5s
+
+        float min_timestamp = current_time - history_duration;
 
         // First pass: Compute weighted average of predicted positions
         // This centers the grid where samples will actually fall, not just where latest velocity predicts
         math::vector3 predicted_center{};
         float total_weight = 0.f;
-        int sample_count = 0;
         float current_weight = 1.0f;  // decay_rate^0 = 1.0
 
-        for (size_t i = 0; i < movement_history_.size() && sample_count < adaptive_sample_limit; ++i)
+        for (int i = static_cast<int>(movement_history_.size()) - 1; i >= 0; --i)
         {
-            size_t idx = movement_history_.size() - 1 - i;
-            const auto& snapshot = movement_history_[idx];
+            const auto& snapshot = movement_history_[i];
+
+            // TIME-BASED CUTOFF: Stop if sample is too old
+            if (snapshot.timestamp < min_timestamp)
+                break;
 
             // Exponential decay weighting (recent data more important)
             // Use multiplicative accumulation instead of std::pow for O(1) per iteration
@@ -945,7 +953,6 @@ namespace HybridPred
             // Accumulate for weighted average
             predicted_center = predicted_center + predicted_pos * weight;
             total_weight += weight;
-            sample_count++;
         }
 
         // Center grid at weighted average of all predictions
@@ -968,18 +975,19 @@ namespace HybridPred
 
         // Second pass: Add samples to PDF (now properly centered)
         total_weight = 0.f;
-        sample_count = 0;
         current_weight = 1.0f;  // Reset for second pass
 
-        for (size_t i = 0; i < movement_history_.size() && sample_count < adaptive_sample_limit; ++i)
+        for (int i = static_cast<int>(movement_history_.size()) - 1; i >= 0; --i)
         {
-            size_t idx = movement_history_.size() - 1 - i;
-            const auto& snapshot = movement_history_[idx];
+            const auto& snapshot = movement_history_[i];
+
+            // TIME-BASED CUTOFF: Stop if sample is too old
+            if (snapshot.timestamp < min_timestamp)
+                break;
 
             // Exponential decay weighting (recent data more important)
-            // Use multiplicative accumulation instead of std::pow for O(1) per iteration
             float weight = current_weight;
-            current_weight *= decay_rate;  // Prepare next weight
+            current_weight *= decay_rate;
 
             // FIX: Scale historical velocity to current move_speed (same as first pass)
             math::vector3 adjusted_velocity = snapshot.velocity;
@@ -995,7 +1003,6 @@ namespace HybridPred
             // Add to PDF with weight
             pdf.add_weighted_sample(predicted_pos, weight);
             total_weight += weight;
-            sample_count++;
         }
 
         // Apply dodge pattern bias ONLY if target has had time to react
