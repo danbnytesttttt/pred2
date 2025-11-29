@@ -590,7 +590,7 @@ namespace EdgeCases
         auto minions = g_sdk->object_manager->get_minions();
         for (auto* minion : minions)
         {
-            if (!minion || !minion->is_valid())
+            if (!minion || !minion->is_valid() || !minion->is_visible())
                 continue;
 
             // Skip wards (don't block skillshots)

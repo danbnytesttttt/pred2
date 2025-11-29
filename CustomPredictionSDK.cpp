@@ -1742,7 +1742,7 @@ bool CustomPredictionSDK::check_collision_simple(
             auto minions = g_sdk->object_manager->get_minions();
             for (auto* minion : minions)
             {
-                if (!minion || !minion->is_valid() || minion == target_obj) continue;
+                if (!minion || !minion->is_valid() || !minion->is_visible() || minion == target_obj) continue;
                 if (!is_collision_object(minion, spell_data)) continue;
                 if (minion->get_team_id() == spell_data.source->get_team_id()) continue;
 
