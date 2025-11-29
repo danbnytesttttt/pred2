@@ -3088,6 +3088,11 @@ namespace HybridPred
         // This keeps gaps smaller than typical hitbox diameter (130 units)
         int num_angle_tests = 7 + static_cast<int>(juke_factor * 8.f);
 
+        // Ensure odd number so there's always a center ray at angle 0
+        // Even numbers would straddle the center, missing the direct line to target
+        if (num_angle_tests % 2 == 0)
+            num_angle_tests++;
+
         float best_hit_chance = 0.f;
         math::vector3 optimal_direction = base_direction;
         float best_physics_prob = 0.f;
