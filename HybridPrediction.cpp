@@ -1465,6 +1465,67 @@ namespace HybridPred
     // PHYSICS PREDICTOR IMPLEMENTATION
     // =========================================================================
 
+    /**
+     * Clamp position to pathable terrain
+     * CRITICAL: Prevents predicting through walls
+     *
+     * If position is already pathable, returns it unchanged.
+     * Otherwise, searches in expanding radius for closest pathable position.
+     */
+    static math::vector3 clamp_to_pathable(const math::vector3& pos)
+    {
+        // No nav mesh available - return as-is (can't validate)
+        if (!g_sdk || !g_sdk->nav_mesh)
+            return pos;
+
+        // Make a copy since is_pathable takes non-const reference
+        math::vector3 pos_copy = pos;
+
+        // Already pathable - fast path
+        if (g_sdk->nav_mesh->is_pathable(pos_copy))
+            return pos;
+
+        // Position is in wall - search for closest pathable position
+        // Use spiral search pattern: check nearby positions in expanding rings
+        constexpr float SEARCH_STEP = 10.f;  // 10 unit increments
+        constexpr int MAX_RINGS = 15;        // Search up to 150 units away
+
+        math::vector3 best_pos = pos;
+        float best_distance = FLT_MAX;
+
+        for (int ring = 1; ring <= MAX_RINGS; ++ring)
+        {
+            float radius = ring * SEARCH_STEP;
+            int samples = ring * 8;  // More samples for larger rings
+
+            for (int i = 0; i < samples; ++i)
+            {
+                float angle = (2.0f * PI * i) / samples;
+                math::vector3 test_pos = pos;
+                test_pos.x += std::cos(angle) * radius;
+                test_pos.z += std::sin(angle) * radius;
+
+                if (g_sdk->nav_mesh->is_pathable(test_pos))
+                {
+                    float dist = (test_pos - pos).magnitude();
+                    if (dist < best_distance)
+                    {
+                        best_pos = test_pos;
+                        best_distance = dist;
+                    }
+                }
+            }
+
+            // Found pathable position in this ring - return it
+            if (best_distance < FLT_MAX)
+                return best_pos;
+        }
+
+        // Couldn't find pathable position - return original (better than nothing)
+        // This should be extremely rare (only if surrounded by walls on all sides)
+        return pos;
+    }
+
     ReachableRegion PhysicsPredictor::compute_reachable_region(
         const math::vector3& current_pos,
         const math::vector3& current_velocity,
@@ -1596,68 +1657,6 @@ namespace HybridPred
         }
 
         return region;
-    }
-
-    // =========================================================================
-    // TERRAIN VALIDATION HELPER
-    // =========================================================================
-
-    /**
-     * Clamp position to pathable terrain
-     * CRITICAL: Prevents predicting through walls
-     *
-     * If position is already pathable, returns it unchanged.
-     * Otherwise, searches in expanding radius for closest pathable position.
-     */
-    static math::vector3 clamp_to_pathable(const math::vector3& pos)
-    {
-        // No nav mesh available - return as-is (can't validate)
-        if (!g_sdk || !g_sdk->nav_mesh)
-            return pos;
-
-        // Already pathable - fast path
-        if (g_sdk->nav_mesh->is_pathable(pos))
-            return pos;
-
-        // Position is in wall - search for closest pathable position
-        // Use spiral search pattern: check nearby positions in expanding rings
-        constexpr float SEARCH_STEP = 10.f;  // 10 unit increments
-        constexpr int MAX_RINGS = 15;        // Search up to 150 units away
-
-        math::vector3 best_pos = pos;
-        float best_distance = FLT_MAX;
-
-        for (int ring = 1; ring <= MAX_RINGS; ++ring)
-        {
-            float radius = ring * SEARCH_STEP;
-            int samples = ring * 8;  // More samples for larger rings
-
-            for (int i = 0; i < samples; ++i)
-            {
-                float angle = (2.0f * PI * i) / samples;
-                math::vector3 test_pos = pos;
-                test_pos.x += std::cos(angle) * radius;
-                test_pos.z += std::sin(angle) * radius;
-
-                if (g_sdk->nav_mesh->is_pathable(test_pos))
-                {
-                    float dist = (test_pos - pos).magnitude();
-                    if (dist < best_distance)
-                    {
-                        best_pos = test_pos;
-                        best_distance = dist;
-                    }
-                }
-            }
-
-            // Found pathable position in this ring - return it
-            if (best_distance < FLT_MAX)
-                return best_pos;
-        }
-
-        // Couldn't find pathable position - return original (better than nothing)
-        // This should be extremely rare (only if surrounded by walls on all sides)
-        return pos;
     }
 
     math::vector3 PhysicsPredictor::predict_linear_position(
