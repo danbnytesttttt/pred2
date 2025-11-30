@@ -3508,7 +3508,8 @@ namespace HybridPred
         );
 
         // Step 2: Build reachable region (physics)
-        math::vector3 target_velocity = tracker.get_current_velocity();
+        // FIX: Use path-following prediction like circular/linear for consistency
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
@@ -3516,9 +3517,11 @@ namespace HybridPred
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
 
+        // FIX: Pass zero velocity to avoid drift overshoot (same as circular/linear)
+        // Path prediction already handles movement; drift would double-compensate
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_position(),
-            target_velocity,
+            path_predicted_pos,
+            math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
             arrival_time,
             effective_move_speed,  // Use effective speed (0 if CC'd)
             DEFAULT_TURN_RATE,
@@ -3527,10 +3530,12 @@ namespace HybridPred
 
         result.reachable_region = reachable_region;
 
-        // Step 3: Build behavior PDF
+        // Step 3: Build behavior PDF and align with path prediction
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
 
+        // FIX: Center PDF on path prediction for consistency with circular/linear
+        behavior_pdf.origin = path_predicted_pos;
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
