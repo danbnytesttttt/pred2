@@ -407,10 +407,10 @@ namespace HybridPred
             return move_speed * 0.3f;
         }
 
-        DodgePattern() : left_dodge_frequency(0.5f), right_dodge_frequency(0.5f),
-            forward_frequency(0.5f), backward_frequency(0.5f),
+        DodgePattern() : left_dodge_frequency(0.05f), right_dodge_frequency(0.05f),
+            forward_frequency(0.9f), backward_frequency(0.0f),
             juke_interval_mean(0.5f), juke_interval_variance(0.1f),
-            linear_continuation_prob(0.6f), reaction_delay(200.f),
+            linear_continuation_prob(0.95f), reaction_delay(200.f),
             pattern_confidence(0.f), predicted_next_direction{}, has_pattern(false),
             last_pattern_update_time(0.f), pattern_trust{}, last_predicted_juke(0),
             awaiting_juke_result(false), average_juke_magnitude(0.f) {
