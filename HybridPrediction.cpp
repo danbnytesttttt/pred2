@@ -1488,7 +1488,8 @@ namespace HybridPred
         // Position is in wall - search for closest pathable position
         // Use spiral search pattern: check nearby positions in expanding rings
         constexpr float SEARCH_STEP = 10.f;  // 10 unit increments
-        constexpr int MAX_RINGS = 15;        // Search up to 150 units away
+        constexpr int MAX_RINGS = 8;         // Search up to 80 units (reduced from 15 for performance)
+        constexpr float GOOD_ENOUGH_DIST = 20.f;  // Early exit if we find position within 20 units
 
         math::vector3 best_pos = pos;
         float best_distance = FLT_MAX;
@@ -1512,6 +1513,10 @@ namespace HybridPred
                     {
                         best_pos = test_pos;
                         best_distance = dist;
+
+                        // PERFORMANCE: Early exit if we found a close enough position
+                        if (dist < GOOD_ENOUGH_DIST)
+                            return best_pos;
                     }
                 }
             }
@@ -2561,8 +2566,10 @@ namespace HybridPred
         );
 
         // Refine arrival time iteratively (converges in 2-3 iterations)
+        // PERFORMANCE: Early exit if converged (< 1ms change)
         for (int iteration = 0; iteration < 3; ++iteration)
         {
+            float prev_arrival = arrival_time;
             math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
             arrival_time = PhysicsPredictor::compute_arrival_time(
                 source_pos,
@@ -2570,6 +2577,10 @@ namespace HybridPred
                 spell.projectile_speed,
                 spell.delay
             );
+
+            // Early exit if converged (change < 1ms)
+            if (std::abs(arrival_time - prev_arrival) < 0.001f)
+                break;
         }
 
         // Step 2: Build reachable region (physics)
@@ -2603,6 +2614,11 @@ namespace HybridPred
                 float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
+
+                // SAFETY: Ensure minimum dodge time (don't reduce below 0.05s)
+                // Even at very close range, targets can still make small movements
+                constexpr float MIN_DODGE_TIME = 0.05f;
+                dodge_time = std::max(dodge_time, MIN_DODGE_TIME);
             }
         }
 
@@ -3051,8 +3067,10 @@ namespace HybridPred
         );
 
         // Refine arrival time iteratively (converges in 2-3 iterations)
+        // PERFORMANCE: Early exit if converged (< 1ms change)
         for (int iteration = 0; iteration < 3; ++iteration)
         {
+            float prev_arrival = arrival_time;
             math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
             arrival_time = PhysicsPredictor::compute_arrival_time(
                 source_pos,
@@ -3060,6 +3078,10 @@ namespace HybridPred
                 spell.projectile_speed,
                 spell.delay
             );
+
+            // Early exit if converged (change < 1ms)
+            if (std::abs(arrival_time - prev_arrival) < 0.001f)
+                break;
         }
 
         // Step 2: Build reachable region (physics)
@@ -3090,6 +3112,11 @@ namespace HybridPred
                 float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
+
+                // SAFETY: Ensure minimum dodge time (don't reduce below 0.05s)
+                // Even at very close range, targets can still make small movements
+                constexpr float MIN_DODGE_TIME = 0.05f;
+                dodge_time = std::max(dodge_time, MIN_DODGE_TIME);
             }
         }
 
@@ -3487,8 +3514,10 @@ namespace HybridPred
         );
 
         // Refine arrival time iteratively (converges in 2-3 iterations)
+        // PERFORMANCE: Early exit if converged (< 1ms change)
         for (int iteration = 0; iteration < 3; ++iteration)
         {
+            float prev_arrival = arrival_time;
             math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
             arrival_time = PhysicsPredictor::compute_arrival_time(
                 source_pos,
@@ -3496,6 +3525,10 @@ namespace HybridPred
                 spell.projectile_speed,
                 spell.delay
             );
+
+            // Early exit if converged (change < 1ms)
+            if (std::abs(arrival_time - prev_arrival) < 0.001f)
+                break;
         }
 
         // Step 2: Build reachable region (physics)
@@ -3526,6 +3559,11 @@ namespace HybridPred
                 float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
+
+                // SAFETY: Ensure minimum dodge time (don't reduce below 0.05s)
+                // Even at very close range, targets can still make small movements
+                constexpr float MIN_DODGE_TIME = 0.05f;
+                dodge_time = std::max(dodge_time, MIN_DODGE_TIME);
             }
         }
 
@@ -3648,8 +3686,10 @@ namespace HybridPred
         );
 
         // Refine arrival time iteratively (converges in 2-3 iterations)
+        // PERFORMANCE: Early exit if converged (< 1ms change)
         for (int iteration = 0; iteration < 3; ++iteration)
         {
+            float prev_arrival = arrival_time;
             math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
             arrival_time = PhysicsPredictor::compute_arrival_time(
                 source_pos,
@@ -3657,6 +3697,10 @@ namespace HybridPred
                 spell.projectile_speed,
                 spell.delay
             );
+
+            // Early exit if converged (change < 1ms)
+            if (std::abs(arrival_time - prev_arrival) < 0.001f)
+                break;
         }
 
         // Step 2: Build reachable region (physics)
