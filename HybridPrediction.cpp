@@ -1493,16 +1493,9 @@ namespace HybridPred
         float non_reactive_time = std::min(prediction_time, reaction_time);
 
         // FIX: Only apply drift if target is ACTIVELY moving
-        // If they've stopped (velocity near-zero, no path), drift = 0 (they stay put)
+        // If they've stopped (velocity near-zero), drift = 0 (they stay put)
         // This prevents overshooting when targets tap 'S' or reach destination
         bool is_actively_moving = current_velocity.magnitude() > 50.f;  // ~50 units/s threshold
-        if (target && target->is_valid())
-        {
-            auto path = target->get_path();
-            if (path.empty() || path.size() == 1)
-                is_actively_moving = false;  // No path or single point = stopped
-        }
-
         math::vector3 drift_offset = is_actively_moving ? (current_velocity * non_reactive_time) : math::vector3{};
         region.center = current_pos + drift_offset;
         region.velocity = current_velocity;  // Store for momentum weighting
