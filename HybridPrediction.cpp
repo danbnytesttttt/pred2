@@ -2703,7 +2703,6 @@ namespace HybridPred
         }
 
         // RANGE CLAMPING: Ensure cast position is within spell range
-        math::vector3 source_pos = source->get_position();
         math::vector3 to_cast = optimal_cast_pos - source_pos;
         float distance_to_cast = to_cast.magnitude();
         if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
