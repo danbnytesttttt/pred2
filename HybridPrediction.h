@@ -267,13 +267,13 @@ namespace HybridPred
 
         // HIGH-PHYSICS BOOST: When physics is very confident, trust it more (but not exclusively)
         // Physics is MATH-based (geometry), Behavior is PATTERN-based (player tendencies)
-        // Reduced cap from 0.95 to 0.75 to respect behavior patterns (e.g., always dodges left)
-        // Even with high physics confidence, a 75/25 split allows behavior to influence aim
+        // Cap at 80% to respect behavior while still favoring good geometry
+        // 80/20 split: behavior still influences (20%) but doesn't override obvious shots
         if (physics_prob > 0.85f)
         {
-            // Scale boost: 85% → +0.0, 90% → +0.075, 95%+ → +0.15
-            float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.15f;
-            physics_weight = std::min(physics_weight + high_physics_boost, 0.75f);  // Capped at 75% (was 95%)
+            // Scale boost: 85% → +0.0, 90% → +0.10, 95%+ → +0.20
+            float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.20f;
+            physics_weight = std::min(physics_weight + high_physics_boost, 0.80f);  // Capped at 80% (was 95%, then 75%)
         }
 
         // CLOSE-RANGE BOOST: At point-blank, trust physics heavily (path prediction is precise)
