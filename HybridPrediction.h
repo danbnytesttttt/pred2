@@ -70,7 +70,7 @@ namespace HybridPred
     constexpr float DEFAULT_DECELERATION = 2000.0f; // units/s² (standard, tested)
 
     // Human reaction time parameters (CRITICAL for realistic predictions)
-    constexpr float HUMAN_REACTION_TIME = 0.25f;    // Average human reaction time (250ms)
+    constexpr float HUMAN_REACTION_TIME = 0.15f;    // Skilled player reaction time (150ms, was 250ms)
     constexpr float MIN_REACTION_TIME = 0.15f;      // Fast reactions (pros, expecting the spell)
     constexpr float MAX_REACTION_TIME = 0.35f;      // Slow reactions (distracted, teamfight)
 
@@ -265,16 +265,15 @@ namespace HybridPred
             physics_weight = std::min(physics_weight + staleness_penalty, 0.8f);
         }
 
-        // HIGH-PHYSICS BOOST: When physics is very confident, trust it even more
-        // Physics is MATH-based (always correct about geometric constraints)
-        // Behavior is PATTERN-based (could be wrong: noise, wrong context, etc.)
-        // If physics says "geometrically hard to dodge" (>85%), don't let potentially
-        // noisy behavior reduce it significantly
+        // HIGH-PHYSICS BOOST: When physics is very confident, trust it more (but not exclusively)
+        // Physics is MATH-based (geometry), Behavior is PATTERN-based (player tendencies)
+        // Reduced cap from 0.95 to 0.75 to respect behavior patterns (e.g., always dodges left)
+        // Even with high physics confidence, a 75/25 split allows behavior to influence aim
         if (physics_prob > 0.85f)
         {
-            // Scale boost: 85% → +0.0, 90% → +0.10, 95%+ → +0.20
-            float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.20f;
-            physics_weight = std::min(physics_weight + high_physics_boost, 0.95f);
+            // Scale boost: 85% → +0.0, 90% → +0.075, 95%+ → +0.15
+            float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.15f;
+            physics_weight = std::min(physics_weight + high_physics_boost, 0.75f);  // Capped at 75% (was 95%)
         }
 
         // Use weighted LINEAR interpolation

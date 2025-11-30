@@ -1953,9 +1953,9 @@ namespace HybridPred
 
         // SIGMOID: Balanced parameters (adjusted for 60/40 physics fusion)
         // MIDPOINT=0.50 is mathematically neutral: need half the time = 50% chance
-        // Combined with 60% physics weight, this avoids double-conservative behavior
-        // STEEPNESS=25 creates clear transition without being too harsh
-        constexpr float SIGMOID_STEEPNESS = 25.f;   // Sharp transition
+        // STEEPNESS reduced from 25 to 15 for more realistic probability spread
+        // Old: 0.4s slack (0.6 ratio) → 92% | New: 0.4s slack → ~73%
+        constexpr float SIGMOID_STEEPNESS = 15.f;   // Moderate transition (was 25)
         constexpr float SIGMOID_MIDPOINT = 0.50f;   // Neutral: 50% time = 50% chance
 
         // Clamp exponent to prevent overflow/underflow
