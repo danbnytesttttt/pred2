@@ -1971,19 +1971,9 @@ namespace HybridPred
         const math::vector3& source_pos,
         const math::vector3& target_pos,
         float projectile_speed,
-        float cast_delay,
-        float source_radius,
-        float target_radius)
+        float cast_delay)
     {
-        float center_distance = (target_pos - source_pos).magnitude();
-
-        // CRITICAL FIX: Account for bounding radii
-        // Skillshots originate from caster's edge and hit at target's edge
-        // Without this: Overestimate travel time at close range → predict too far ahead → miss
-        float effective_distance = center_distance - source_radius - target_radius;
-
-        // Clamp to zero: if overlapping hitboxes, projectile hits instantly
-        effective_distance = std::max(0.f, effective_distance);
+        float distance = (target_pos - source_pos).magnitude();
 
         // Instant spell: No projectile travel time, no latency compensation
         // Instant spells (Annie W, Darius Q) feel "slippery" with latency leading
@@ -2005,7 +1995,7 @@ namespace HybridPred
             ping_compensation = (ping_ms / 2.f / 1000.f) + 0.033f;
         }
 
-        return cast_delay + (effective_distance / projectile_speed) + ping_compensation;
+        return cast_delay + (distance / projectile_speed) + ping_compensation;
     }
 
     float PhysicsPredictor::circle_circle_intersection_area(
@@ -2568,16 +2558,11 @@ namespace HybridPred
         // Problem: Initial calculation uses current distance, but target moves → changes distance
         // Solution: Iterate to converge on true intercept time (where projectile meets target)
         math::vector3 source_pos = source->get_position();
-        float source_radius = source->get_bounding_radius();
-        float target_radius = target->get_bounding_radius();
-
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
             target->get_position(),
             spell.projectile_speed,
-            spell.delay,
-            source_radius,
-            target_radius
+            spell.delay
         );
 
         // Refine arrival time iteratively (converges in 2-3 iterations)
@@ -2590,9 +2575,7 @@ namespace HybridPred
                 source_pos,
                 predicted_pos,
                 spell.projectile_speed,
-                spell.delay,
-                source_radius,
-                target_radius
+                spell.delay
             );
 
             // Early exit if converged (change < 1ms)
