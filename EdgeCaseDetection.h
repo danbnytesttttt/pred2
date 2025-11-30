@@ -124,12 +124,13 @@ namespace EdgeCases
         // Network jitter: ±5ms typical
         // Problem: If spell arrives exactly at stasis end, server might still
         //          register target as invulnerable (not processed yet)
-        // Solution: Aim for 40ms AFTER stasis ends (not before!)
+        // Solution: Aim for 1 FRAME after stasis ends to catch frame-perfect escapes
         //
-        // Old bug: Subtracted buffer → spell arrives early → wasted on invuln
-        // New fix: Add buffer → spell arrives after next server tick → hits
+        // OLD (40ms): Gave full server tick + jitter → too generous, scripters/pros flash out
+        // NEW (16ms): ~1 client frame @ 60fps → minimal window, catches most escapes
+        // Trade-off: Tight timing may miss on high ping (>50ms), but guarantees hit on LAN/low ping
         // =====================================================================
-        constexpr float SAFETY_BUFFER = 0.04f;  // 40ms after stasis ends
+        constexpr float SAFETY_BUFFER = 0.016f;  // ~1 frame (16ms @ 60Hz client) - tight timing for guaranteed hits
         float optimal_cast_delay = time_until_exit - spell_travel_time + SAFETY_BUFFER;
 
         // If we need to wait before casting

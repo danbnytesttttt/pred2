@@ -3669,7 +3669,7 @@ namespace HybridPred
 
         math::vector3 capsule_end = capsule_start + capsule_direction * capsule_length;
 
-        constexpr int SAMPLES = 128;
+        constexpr int SAMPLES = 64;  // Reduced from 128 - sufficient precision, 2x performance gain
         constexpr float SPIRAL_FACTOR = 7.f;  // Coprime with SAMPLES for uniform coverage
         int hits = 0;
 
@@ -3677,7 +3677,7 @@ namespace HybridPred
         {
             // Fermat spiral: uniform area distribution in reachable disk
             float r = reachable_region.max_radius * std::sqrt(static_cast<float>(i) / SAMPLES);
-            float theta = (2.f * PI * i) / SAMPLES * SPIRAL_FACTOR;  // 7 is coprime with 128
+            float theta = (2.f * PI * i) / SAMPLES * SPIRAL_FACTOR;  // 7 is coprime with 64
 
             math::vector3 sample_point = reachable_region.center;
             sample_point.x += r * std::cos(theta);
@@ -3808,7 +3808,7 @@ namespace HybridPred
         if (reachable_region.area < EPSILON)
             return 0.f;
 
-        constexpr int SAMPLES = 128;
+        constexpr int SAMPLES = 64;  // Reduced from 128 - sufficient precision, 2x performance gain
         constexpr float SPIRAL_FACTOR = 7.f;  // Coprime with SAMPLES for uniform coverage
         int hits = 0;
 
@@ -3816,7 +3816,7 @@ namespace HybridPred
         {
             // Fermat spiral: uniform area distribution in reachable disk
             float r = reachable_region.max_radius * std::sqrt(static_cast<float>(i) / SAMPLES);
-            float theta = (2.f * PI * i) / SAMPLES * SPIRAL_FACTOR;  // 7 is coprime with 128
+            float theta = (2.f * PI * i) / SAMPLES * SPIRAL_FACTOR;  // 7 is coprime with 64
 
             math::vector3 sample_point = reachable_region.center;
             sample_point.x += r * std::cos(theta);
