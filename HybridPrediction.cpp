@@ -2738,7 +2738,7 @@ namespace HybridPred
 
         result.hit_chance = fuse_probabilities(
             physics_prob, behavior_prob, confidence,
-            sample_count, time_since_update, move_speed
+            sample_count, time_since_update, move_speed, current_distance
         );
 
         // Debug logging for 0 hit chance analysis
@@ -3817,7 +3817,7 @@ namespace HybridPred
         if (g_sdk && g_sdk->clock_facade)
             current_time = g_sdk->clock_facade->get_game_time();
         float time_since_update = current_time - tracker.get_last_update_time();
-        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed);
+        result.hit_chance = fuse_probabilities(physics_prob, behavior_prob, confidence, sample_count, time_since_update, move_speed, current_distance);
         result.hit_chance = std::clamp(result.hit_chance, 0.f, 1.f);
 
 #if HYBRID_PRED_ENABLE_REASONING

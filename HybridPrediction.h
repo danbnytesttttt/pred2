@@ -70,7 +70,7 @@ namespace HybridPred
     constexpr float DEFAULT_DECELERATION = 2000.0f; // units/s² (standard, tested)
 
     // Human reaction time parameters (CRITICAL for realistic predictions)
-    constexpr float HUMAN_REACTION_TIME = 0.15f;    // Skilled player reaction time (150ms, was 250ms)
+    constexpr float HUMAN_REACTION_TIME = 0.20f;    // Balanced reaction time (200ms - pros are ~150ms, avg ~250ms)
     constexpr float MIN_REACTION_TIME = 0.15f;      // Fast reactions (pros, expecting the spell)
     constexpr float MAX_REACTION_TIME = 0.35f;      // Slow reactions (distracted, teamfight)
 
@@ -197,7 +197,7 @@ namespace HybridPred
      * SPECIAL CASE: When physics = 1.0 (physically impossible to dodge),
      * return guaranteed hit regardless of behavior (flash/dash handled by edge cases)
      */
-    inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f, float move_speed = 350.f)
+    inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f, float move_speed = 350.f, float distance = 1000.f)
     {
         // CRITICAL: Guaranteed hit override
         // If physics says escape is physically impossible (>= 99%), guarantee the hit
@@ -274,6 +274,16 @@ namespace HybridPred
             // Scale boost: 85% → +0.0, 90% → +0.075, 95%+ → +0.15
             float high_physics_boost = std::min((physics_prob - 0.85f) / 0.10f, 1.0f) * 0.15f;
             physics_weight = std::min(physics_weight + high_physics_boost, 0.75f);  // Capped at 75% (was 95%)
+        }
+
+        // CLOSE-RANGE BOOST: At point-blank, trust physics heavily (path prediction is precise)
+        // Narrow skillshots (Pyke Q: 70u radius) need tight aim - behavior can pull wide
+        // <200u: boost physics to 85% | 200-400u: gradual reduction | >400u: no boost
+        if (distance < 400.f)
+        {
+            float close_range_factor = std::max(0.f, (400.f - distance) / 200.f);  // 1.0 at 0u, 0.0 at 400u
+            float close_range_boost = close_range_factor * 0.25f;  // Up to +25% physics weight
+            physics_weight = std::min(physics_weight + close_range_boost, 0.90f);  // Cap at 90% for point-blank
         }
 
         // Use weighted LINEAR interpolation
