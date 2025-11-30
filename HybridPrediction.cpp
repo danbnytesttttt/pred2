@@ -2593,6 +2593,17 @@ namespace HybridPred
         {
             float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
+
+            // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
+            // At close range (arrival < 0.5s), targets can't execute full jukes
+            // They barely finish reacting before spell lands
+            if (arrival_time < 0.5f)
+            {
+                // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
+                float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
+                close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
+                dodge_time *= close_range_scale;
+            }
         }
 
         // Use dynamic acceleration if tracker has measured it
@@ -3069,6 +3080,17 @@ namespace HybridPred
         {
             float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
+
+            // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
+            // At close range (arrival < 0.5s), targets can't execute full jukes
+            // They barely finish reacting before spell lands
+            if (arrival_time < 0.5f)
+            {
+                // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
+                float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
+                close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
+                dodge_time *= close_range_scale;
+            }
         }
 
         // Use dynamic acceleration if tracker has measured it
@@ -3494,6 +3516,17 @@ namespace HybridPred
         {
             float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
+
+            // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
+            // At close range (arrival < 0.5s), targets can't execute full jukes
+            // They barely finish reacting before spell lands
+            if (arrival_time < 0.5f)
+            {
+                // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
+                float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
+                close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
+                dodge_time *= close_range_scale;
+            }
         }
 
         // Use dynamic acceleration if tracker has measured it
