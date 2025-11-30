@@ -2587,8 +2587,9 @@ namespace HybridPred
         // FIX: Use path-following prediction for initial center position
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
 
-        // FIX: REMOVE ARTIFICIAL PATH CAP (Trust event-driven sampling to catch turns)
-        // math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+        // POINT-BLANK DETECTION: At very close range, different rules apply
+        float current_distance = (target->get_position() - source_pos).magnitude();
+        bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         float move_speed = target->get_move_speed();
         float effective_move_speed = get_effective_move_speed(target, arrival_time);
@@ -2615,10 +2616,11 @@ namespace HybridPred
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
 
-                // SAFETY: Ensure minimum dodge time (don't reduce below 0.05s)
-                // Even at very close range, targets can still make small movements
-                constexpr float MIN_DODGE_TIME = 0.05f;
-                dodge_time = std::max(dodge_time, MIN_DODGE_TIME);
+                // POINT-BLANK OVERRIDE: At <200 units, minimal dodge time for narrow skillshots
+                // Narrow skillshots (Pyke Q: 140 width, Thresh Q: 140 width) need pinpoint accuracy
+                // At 400 MS: 0.01s = 4 unit radius (vs 0.05s = 20 unit radius)
+                float min_dodge = is_point_blank ? 0.01f : 0.05f;
+                dodge_time = std::max(dodge_time, min_dodge);
             }
         }
 
@@ -3087,6 +3089,11 @@ namespace HybridPred
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+
+        // POINT-BLANK DETECTION: At very close range, different rules apply
+        float current_distance = (target->get_position() - source_pos).magnitude();
+        bool is_point_blank = current_distance < 200.f;  // Within 200 units
+
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
@@ -3113,10 +3120,11 @@ namespace HybridPred
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
 
-                // SAFETY: Ensure minimum dodge time (don't reduce below 0.05s)
-                // Even at very close range, targets can still make small movements
-                constexpr float MIN_DODGE_TIME = 0.05f;
-                dodge_time = std::max(dodge_time, MIN_DODGE_TIME);
+                // POINT-BLANK OVERRIDE: At <200 units, minimal dodge time for narrow skillshots
+                // Narrow skillshots (Pyke Q: 140 width, Thresh Q: 140 width) need pinpoint accuracy
+                // At 400 MS: 0.01s = 4 unit radius (vs 0.05s = 20 unit radius)
+                float min_dodge = is_point_blank ? 0.01f : 0.05f;
+                dodge_time = std::max(dodge_time, min_dodge);
             }
         }
 
@@ -3534,6 +3542,11 @@ namespace HybridPred
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+
+        // POINT-BLANK DETECTION: At very close range, different rules apply
+        float current_distance = (target->get_position() - source_pos).magnitude();
+        bool is_point_blank = current_distance < 200.f;  // Within 200 units
+
         math::vector3 target_velocity = tracker.get_current_velocity();
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
@@ -3560,10 +3573,11 @@ namespace HybridPred
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
 
-                // SAFETY: Ensure minimum dodge time (don't reduce below 0.05s)
-                // Even at very close range, targets can still make small movements
-                constexpr float MIN_DODGE_TIME = 0.05f;
-                dodge_time = std::max(dodge_time, MIN_DODGE_TIME);
+                // POINT-BLANK OVERRIDE: At <200 units, minimal dodge time for narrow skillshots
+                // Narrow skillshots (Pyke Q: 140 width, Thresh Q: 140 width) need pinpoint accuracy
+                // At 400 MS: 0.01s = 4 unit radius (vs 0.05s = 20 unit radius)
+                float min_dodge = is_point_blank ? 0.01f : 0.05f;
+                dodge_time = std::max(dodge_time, min_dodge);
             }
         }
 
@@ -3706,6 +3720,11 @@ namespace HybridPred
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction like circular/linear for consistency
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+
+        // POINT-BLANK DETECTION: At very close range, different rules apply
+        float current_distance = (target->get_position() - source_pos).magnitude();
+        bool is_point_blank = current_distance < 200.f;  // Within 200 units
+
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
