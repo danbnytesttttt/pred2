@@ -695,12 +695,15 @@ namespace HybridPred
 
         /**
          * Compute time for projectile to reach target
+         * Optional: source_radius and target_radius account for hitbox edges (default 0 = disabled)
          */
         static float compute_arrival_time(
             const math::vector3& source_pos,
             const math::vector3& target_pos,
             float projectile_speed,
-            float cast_delay
+            float cast_delay,
+            float source_radius = 0.f,
+            float target_radius = 0.f
         );
 
     private:
