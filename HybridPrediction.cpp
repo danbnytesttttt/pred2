@@ -2548,13 +2548,29 @@ namespace HybridPred
             return result;
         }
 
-        // Step 1: Compute arrival time
+        // Step 1: Compute arrival time with iterative intercept refinement
+        // CRITICAL FIX: Arrival time must account for target movement during flight
+        // Problem: Initial calculation uses current distance, but target moves → changes distance
+        // Solution: Iterate to converge on true intercept time (where projectile meets target)
+        math::vector3 source_pos = source->get_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
-            source->get_position(),
+            source_pos,
             target->get_position(),
             spell.projectile_speed,
             spell.delay
         );
+
+        // Refine arrival time iteratively (converges in 2-3 iterations)
+        for (int iteration = 0; iteration < 3; ++iteration)
+        {
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            arrival_time = PhysicsPredictor::compute_arrival_time(
+                source_pos,
+                predicted_pos,
+                spell.projectile_speed,
+                spell.delay
+            );
+        }
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for initial center position
@@ -3013,13 +3029,27 @@ namespace HybridPred
             return result;
         }
 
-        // Step 1: Compute arrival time
+        // Step 1: Compute arrival time with iterative intercept refinement
+        // CRITICAL FIX: Arrival time must account for target movement during flight
+        math::vector3 source_pos = source->get_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
-            source->get_position(),
+            source_pos,
             target->get_position(),
             spell.projectile_speed,
             spell.delay
         );
+
+        // Refine arrival time iteratively (converges in 2-3 iterations)
+        for (int iteration = 0; iteration < 3; ++iteration)
+        {
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            arrival_time = PhysicsPredictor::compute_arrival_time(
+                source_pos,
+                predicted_pos,
+                spell.projectile_speed,
+                spell.delay
+            );
+        }
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
@@ -3424,13 +3454,27 @@ namespace HybridPred
             return result;
         }
 
-        // Step 1: Compute arrival time
+        // Step 1: Compute arrival time with iterative intercept refinement
+        // CRITICAL FIX: Arrival time must account for target movement during flight
+        math::vector3 source_pos = source->get_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
-            source->get_position(),
+            source_pos,
             target->get_position(),
             spell.projectile_speed,
             spell.delay
         );
+
+        // Refine arrival time iteratively (converges in 2-3 iterations)
+        for (int iteration = 0; iteration < 3; ++iteration)
+        {
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            arrival_time = PhysicsPredictor::compute_arrival_time(
+                source_pos,
+                predicted_pos,
+                spell.projectile_speed,
+                spell.delay
+            );
+        }
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
@@ -3560,13 +3604,27 @@ namespace HybridPred
             return result;
         }
 
-        // Step 1: Compute arrival time (instant for most cone spells)
+        // Step 1: Compute arrival time with iterative intercept refinement
+        // CRITICAL FIX: Arrival time must account for target movement during flight
+        math::vector3 source_pos = source->get_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
-            source->get_position(),
+            source_pos,
             target->get_position(),
             spell.projectile_speed,
             spell.delay
         );
+
+        // Refine arrival time iteratively (converges in 2-3 iterations)
+        for (int iteration = 0; iteration < 3; ++iteration)
+        {
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            arrival_time = PhysicsPredictor::compute_arrival_time(
+                source_pos,
+                predicted_pos,
+                spell.projectile_speed,
+                spell.delay
+            );
+        }
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction like circular/linear for consistency
