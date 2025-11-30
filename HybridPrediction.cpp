@@ -1497,7 +1497,10 @@ namespace HybridPred
         // This prevents overshooting when targets tap 'S' or reach destination
         bool is_actively_moving = current_velocity.magnitude() > 50.f;  // ~50 units/s threshold
         math::vector3 drift_offset = is_actively_moving ? (current_velocity * non_reactive_time) : math::vector3{};
-        region.center = current_pos + drift_offset;
+        math::vector3 center_pos = current_pos + drift_offset;
+
+        // FIX: Clamp to pathable terrain (drift might push into walls)
+        region.center = clamp_to_pathable(center_pos);
         region.velocity = current_velocity;  // Store for momentum weighting
 
         // CRITICAL FIX: Subtract reaction time from prediction time
@@ -1595,6 +1598,68 @@ namespace HybridPred
         return region;
     }
 
+    // =========================================================================
+    // TERRAIN VALIDATION HELPER
+    // =========================================================================
+
+    /**
+     * Clamp position to pathable terrain
+     * CRITICAL: Prevents predicting through walls
+     *
+     * If position is already pathable, returns it unchanged.
+     * Otherwise, searches in expanding radius for closest pathable position.
+     */
+    static math::vector3 clamp_to_pathable(const math::vector3& pos)
+    {
+        // No nav mesh available - return as-is (can't validate)
+        if (!g_sdk || !g_sdk->nav_mesh)
+            return pos;
+
+        // Already pathable - fast path
+        if (g_sdk->nav_mesh->is_pathable(pos))
+            return pos;
+
+        // Position is in wall - search for closest pathable position
+        // Use spiral search pattern: check nearby positions in expanding rings
+        constexpr float SEARCH_STEP = 10.f;  // 10 unit increments
+        constexpr int MAX_RINGS = 15;        // Search up to 150 units away
+
+        math::vector3 best_pos = pos;
+        float best_distance = FLT_MAX;
+
+        for (int ring = 1; ring <= MAX_RINGS; ++ring)
+        {
+            float radius = ring * SEARCH_STEP;
+            int samples = ring * 8;  // More samples for larger rings
+
+            for (int i = 0; i < samples; ++i)
+            {
+                float angle = (2.0f * PI * i) / samples;
+                math::vector3 test_pos = pos;
+                test_pos.x += std::cos(angle) * radius;
+                test_pos.z += std::sin(angle) * radius;
+
+                if (g_sdk->nav_mesh->is_pathable(test_pos))
+                {
+                    float dist = (test_pos - pos).magnitude();
+                    if (dist < best_distance)
+                    {
+                        best_pos = test_pos;
+                        best_distance = dist;
+                    }
+                }
+            }
+
+            // Found pathable position in this ring - return it
+            if (best_distance < FLT_MAX)
+                return best_pos;
+        }
+
+        // Couldn't find pathable position - return original (better than nothing)
+        // This should be extremely rare (only if surrounded by walls on all sides)
+        return pos;
+    }
+
     math::vector3 PhysicsPredictor::predict_linear_position(
         const math::vector3& current_pos,
         const math::vector3& current_velocity,
@@ -1655,7 +1720,10 @@ namespace HybridPred
             {
                 // Target will be on this segment
                 math::vector3 direction = segment_diff / segment_length;
-                return segment_start + direction * remaining;
+                math::vector3 predicted_pos = segment_start + direction * remaining;
+
+                // FIX: Clamp to pathable terrain (prevents predicting through walls)
+                return clamp_to_pathable(predicted_pos);
             }
 
             traveled += segment_length;
@@ -1663,7 +1731,8 @@ namespace HybridPred
 
         // Traveled past all waypoints - target STOPS at final destination
         // Do NOT extrapolate past their click point
-        return path.back();
+        // FIX: Clamp to pathable terrain (path endpoint might be in wall due to latency/bugs)
+        return clamp_to_pathable(path.back());
     }
 
     float PhysicsPredictor::compute_physics_hit_probability(
