@@ -69,6 +69,17 @@ namespace Prediction
 
             g_menu->add_checkbox("telemetry", "Enable Telemetry", true, [](bool value) {
                 PredictionSettings::get().enable_telemetry = value;
+
+                // Reinitialize telemetry with the new setting
+                if (g_sdk && g_sdk->object_manager)
+                {
+                    game_object* local_player = g_sdk->object_manager->get_local_player();
+                    if (local_player)
+                    {
+                        std::string champion_name = local_player->get_char_name();
+                        PredictionTelemetry::TelemetryLogger::initialize(champion_name, value);
+                    }
+                }
                 });
 
             g_menu->add_checkbox("visuals", "Draw Predictions", false, [](bool value) {
@@ -92,6 +103,20 @@ namespace Prediction
             g_menu->add_checkbox("dash_pred", "Dash Endpoint Prediction", true, [](bool value) {
                 PredictionSettings::get().enable_dash_prediction = value;
                 });
+        }
+
+        // Initialize telemetry system with local player's champion name
+        if (g_sdk && g_sdk->object_manager)
+        {
+            game_object* local_player = g_sdk->object_manager->get_local_player();
+            if (local_player)
+            {
+                std::string champion_name = local_player->get_char_name();
+                PredictionTelemetry::TelemetryLogger::initialize(
+                    champion_name,
+                    PredictionSettings::get().enable_telemetry
+                );
+            }
         }
 
         if (PredictionSettings::get().enable_debug_logging)
