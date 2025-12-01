@@ -2599,7 +2599,17 @@ namespace HybridPred
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        // FIX: On spells with cast delays, enemies see the animation and start reacting EARLY
+        // They don't wait for projectile to appear - they see the wind-up
+        // So effective reaction time is just perception time (~50ms) not full reaction (200ms)
+        float effective_reaction_time = HUMAN_REACTION_TIME;
+        if (spell.delay > 0.1f)  // Spells with noticeable cast animation (Jhin W, Xerath Q, etc.)
+        {
+            // Enemy sees animation immediately, only needs 50ms to perceive "he's casting"
+            effective_reaction_time = 0.05f;
+        }
+
+        float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
@@ -2612,7 +2622,7 @@ namespace HybridPred
             if (arrival_time < 0.5f)
             {
                 // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
-                float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
+                float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
 
@@ -3102,7 +3112,17 @@ namespace HybridPred
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        // FIX: On spells with cast delays, enemies see the animation and start reacting EARLY
+        // They don't wait for projectile to appear - they see the wind-up
+        // So effective reaction time is just perception time (~50ms) not full reaction (200ms)
+        float effective_reaction_time = HUMAN_REACTION_TIME;
+        if (spell.delay > 0.1f)  // Spells with noticeable cast animation (Jhin W, Xerath Q, etc.)
+        {
+            // Enemy sees animation immediately, only needs 50ms to perceive "he's casting"
+            effective_reaction_time = 0.05f;
+        }
+
+        float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
@@ -3115,7 +3135,7 @@ namespace HybridPred
             if (arrival_time < 0.5f)
             {
                 // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
-                float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
+                float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
 
@@ -3284,7 +3304,7 @@ namespace HybridPred
                 capsule_radius,           // Spell hitbox radius
                 move_speed,               // Target move speed
                 arrival_time,             // Time until spell arrives
-                HUMAN_REACTION_TIME       // 250ms reaction time
+                effective_reaction_time   // Adjusted for cast animation visibility
             );
 
             // FIX: Boost physics for stationary targets (with duration check)
@@ -3351,7 +3371,8 @@ namespace HybridPred
                 confidence,
                 sample_count,
                 time_since_update,
-                move_speed
+                move_speed,
+                current_distance  // Pass distance for close-range physics boost
             );
 
             // Track best configuration
@@ -3555,7 +3576,17 @@ namespace HybridPred
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        float max_dodge_time = arrival_time - HUMAN_REACTION_TIME;
+        // FIX: On spells with cast delays, enemies see the animation and start reacting EARLY
+        // They don't wait for projectile to appear - they see the wind-up
+        // So effective reaction time is just perception time (~50ms) not full reaction (200ms)
+        float effective_reaction_time = HUMAN_REACTION_TIME;
+        if (spell.delay > 0.1f)  // Spells with noticeable cast animation (Jhin W, Xerath Q, etc.)
+        {
+            // Enemy sees animation immediately, only needs 50ms to perceive "he's casting"
+            effective_reaction_time = 0.05f;
+        }
+
+        float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
@@ -3568,7 +3599,7 @@ namespace HybridPred
             if (arrival_time < 0.5f)
             {
                 // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
-                float close_range_scale = (arrival_time - HUMAN_REACTION_TIME) / (0.5f - HUMAN_REACTION_TIME);
+                float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
                 dodge_time *= close_range_scale;
 
@@ -4237,9 +4268,10 @@ namespace HybridPred
             );
 
             // Compute Hit Chance
+            float distance_to_target = (potential_first - source_pos).magnitude();
             float test_hit_chance = fuse_probabilities(
                 physics_prob, behavior_prob, confidence,
-                sample_count, time_since_update, target_speed
+                sample_count, time_since_update, target_speed, distance_to_target
             );
 
             // Bonus: If aligned with movement, slight boost (caught in stride)
