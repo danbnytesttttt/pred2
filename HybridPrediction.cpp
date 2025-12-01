@@ -3406,36 +3406,16 @@ namespace HybridPred
             }
         }
 
-        // LINEAR AIM FIX: Use the optimal direction from angular optimization
-        // Old code used reachable_region.center which ignored the angle we found
-        // New code: Project along optimal_direction to the correct distance
+        // LINEAR AIM FIX: Aim at predicted center position, not along angled direction
+        // The angular optimization finds the best ANGLE for hit detection, but we should
+        // still aim at the CENTER of where they'll be (reachable_region.center).
+        // Aiming along optimal_direction can cause 500+ unit lateral misses at range!
         //
-        // Calculate the distance to aim: project target center onto optimal direction
-        math::vector3 to_center_vec = reachable_region.center - capsule_start;
-        float project_distance = to_center_vec.x * optimal_direction.x +
-                                  to_center_vec.y * optimal_direction.y +
-                                  to_center_vec.z * optimal_direction.z;
-
-        // Clamp to spell range
-        project_distance = std::clamp(project_distance, 0.f, spell.range);
-
-        // Cast position is along the optimal direction at the projected distance
-        result.cast_position = capsule_start + optimal_direction * project_distance;
-
-        // SAFETY: If projected distance is too small, fall back to center (avoid aiming at feet)
-        if (project_distance < 50.f && dist_to_center > 50.f)
-        {
-            // Fallback to center-based aiming
-            result.cast_position = reachable_region.center;
-
-            // RANGE CLAMPING for fallback
-            math::vector3 to_cast = result.cast_position - capsule_start;
-            float distance_to_cast = to_cast.magnitude();
-            if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
-            {
-                result.cast_position = capsule_start + (to_cast / distance_to_cast) * spell.range;
-            }
-        }
+        // OLD BUG: result.cast_position = capsule_start + optimal_direction * project_distance
+        // This aimed along an angled line, causing massive wide misses when behavior was wrong
+        //
+        // NEW: Aim directly at the predicted center position
+        result.cast_position = reachable_region.center;
 
         // Use best probabilities found
         float physics_prob = best_physics_prob;
