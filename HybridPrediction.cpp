@@ -185,7 +185,8 @@ namespace HybridPred
 
         // Create snapshot
         MovementSnapshot snapshot;
-        snapshot.position = target_->get_position();
+        // FIX: Use server position for accurate tracking (client position lags behind)
+        snapshot.position = target_->get_server_position();
         snapshot.timestamp = current_time;
 
         snapshot.is_auto_attacking = is_auto_attacking(target_);
@@ -1679,7 +1680,10 @@ namespace HybridPred
         if (!target || !target->is_valid())
             return math::vector3{};
 
-        math::vector3 position = target->get_position();
+        // FIX: Use server position to avoid latency/interpolation lag
+        // Client position can be 30-100ms behind server, causing "ghost movements"
+        // Server position is the authoritative position for hit detection
+        math::vector3 position = target->get_server_position();
 
         // CC CHECK: Immobilized targets can't follow their path
         // Return current position for stuns, snares, etc. (but allow knockbacks to follow forced movement)
@@ -2588,7 +2592,8 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
-        float current_distance = (target->get_position() - source_pos).magnitude();
+        // Use server position for accurate distance (client position lags)
+        float current_distance = (target->get_server_position() - source_pos).magnitude();
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         float move_speed = target->get_move_speed();
@@ -3069,9 +3074,11 @@ namespace HybridPred
         // Step 1: Compute arrival time with iterative intercept refinement
         // CRITICAL FIX: Arrival time must account for target movement during flight
         math::vector3 source_pos = source->get_position();
+        // FIX: Use server position for target to avoid latency lag (30-100ms behind)
+        math::vector3 target_pos = target->get_server_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
-            target->get_position(),
+            target_pos,
             spell.projectile_speed,
             spell.delay
         );
@@ -3099,7 +3106,8 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
-        float current_distance = (target->get_position() - source_pos).magnitude();
+        // Use server position for accurate distance (client position lags)
+        float current_distance = (target->get_server_position() - source_pos).magnitude();
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         math::vector3 target_velocity = tracker.get_current_velocity();
@@ -3185,7 +3193,8 @@ namespace HybridPred
 
         // Step 5: Compute capsule parameters
         // Linear spell = capsule from source toward target
-        math::vector3 to_target = target->get_position() - source->get_position();
+        // Use server position for accurate aim direction (client position lags)
+        math::vector3 to_target = target->get_server_position() - source->get_position();
         float dist_to_target = to_target.magnitude();
 
         constexpr float MIN_SAFE_DISTANCE = 1.0f;  // Minimum safe distance for normalization
@@ -3532,9 +3541,11 @@ namespace HybridPred
         // Step 1: Compute arrival time with iterative intercept refinement
         // CRITICAL FIX: Arrival time must account for target movement during flight
         math::vector3 source_pos = source->get_position();
+        // FIX: Use server position for target to avoid latency lag (30-100ms behind)
+        math::vector3 target_pos = target->get_server_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
-            target->get_position(),
+            target_pos,
             spell.projectile_speed,
             spell.delay
         );
@@ -3562,7 +3573,8 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
-        float current_distance = (target->get_position() - source_pos).magnitude();
+        // Use server position for accurate distance (client position lags)
+        float current_distance = (target->get_server_position() - source_pos).magnitude();
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         math::vector3 target_velocity = tracker.get_current_velocity();
@@ -3719,9 +3731,11 @@ namespace HybridPred
         // Step 1: Compute arrival time with iterative intercept refinement
         // CRITICAL FIX: Arrival time must account for target movement during flight
         math::vector3 source_pos = source->get_position();
+        // FIX: Use server position for target to avoid latency lag (30-100ms behind)
+        math::vector3 target_pos = target->get_server_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
-            target->get_position(),
+            target_pos,
             spell.projectile_speed,
             spell.delay
         );
@@ -3749,7 +3763,8 @@ namespace HybridPred
         math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
-        float current_distance = (target->get_position() - source_pos).magnitude();
+        // Use server position for accurate distance (client position lags)
+        float current_distance = (target->get_server_position() - source_pos).magnitude();
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
