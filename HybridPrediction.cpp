@@ -1687,12 +1687,14 @@ namespace HybridPred
 
         // CC CHECK: Immobilized targets can't follow their path
         // Return current position for stuns, snares, etc. (but allow knockbacks to follow forced movement)
+        // FIX: Added knockup - was missing, causing prediction to think knocked-up targets can move
         if (target->has_buff_of_type(buff_type::stun) ||
             target->has_buff_of_type(buff_type::snare) ||
             target->has_buff_of_type(buff_type::charm) ||
             target->has_buff_of_type(buff_type::fear) ||
             target->has_buff_of_type(buff_type::taunt) ||
-            target->has_buff_of_type(buff_type::suppression))
+            target->has_buff_of_type(buff_type::suppression) ||
+            target->has_buff_of_type(buff_type::knockup))
         {
             return position;  // CC'd - stay at current position
         }
