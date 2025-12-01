@@ -79,7 +79,8 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
         // Find best target within spell range (use target_selector priority order)
         for (auto* hero : candidates)
         {
-            float distance = hero->get_position().distance(source_pos);
+            // FIX: Use server position for accurate distance in target selection
+            float distance = hero->get_server_position().distance(source_pos);
             float effective_range = spell_data.range + hero->get_bounding_radius();
 
             if (distance <= effective_range)
@@ -100,8 +101,9 @@ pred_sdk::pred_data CustomPredictionSDK::targetted(pred_sdk::spell_data spell_da
         game_object* target = best_target;
 
         // For targeted spells, prediction is trivial
-        result.cast_position = target->get_position();
-        result.predicted_position = target->get_position();
+        // FIX: Use server position for accurate targeting
+        result.cast_position = target->get_server_position();
+        result.predicted_position = target->get_server_position();
         result.hitchance = pred_sdk::hitchance::very_high;
         result.target = target;
         result.is_valid = true;
@@ -277,7 +279,8 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         // CRITICAL: Check range BEFORE prediction to avoid wasting computation
         // Cache positions to prevent inconsistency from flash/dash
         math::vector3 source_pos = spell_data.source->get_position();
-        math::vector3 target_pos = obj->get_position();
+        // FIX: Use server position for accurate range check (client lags behind)
+        math::vector3 target_pos = obj->get_server_position();
         float distance_to_target = target_pos.distance(source_pos);
 
         // FIX: Use target bounding radius dynamically (Cho'Gath = 100+, Malphite = 80, etc.)
@@ -572,7 +575,8 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 event.confidence = hybrid_result.confidence_score;
                 event.physics_contribution = hybrid_result.physics_contribution;
                 event.behavior_contribution = hybrid_result.behavior_contribution;
-                event.distance = spell_data.source->get_position().distance(obj->get_position());
+                // FIX: Use server position for accurate telemetry distance
+                event.distance = spell_data.source->get_position().distance(obj->get_server_position());
                 event.computation_time_ms = computation_time_ms;
 
                 // Spell configuration data (for diagnosing misconfigured spells)
@@ -582,7 +586,8 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 event.spell_speed = spell_data.projectile_speed;
 
                 // Movement and prediction offset data
-                math::vector3 current_pos = obj->get_position();
+                // FIX: Use server position for accurate offset calculation
+                math::vector3 current_pos = obj->get_server_position();
                 math::vector3 predicted_pos = result.cast_position;
                 event.prediction_offset = predicted_pos.distance(current_pos);
                 event.target_velocity = obj->get_move_speed();
@@ -766,7 +771,8 @@ float CustomPredictionSDK::CustomPredictionUtils::get_spell_escape_time(
     if (!target || !target->is_valid() || !data.source || !data.source->is_valid())
         return 0.f;
 
-    float current_distance = target->get_position().distance(data.source->get_position());
+    // FIX: Use server position for accurate range calculation
+    float current_distance = target->get_server_position().distance(data.source->get_position());
     float spell_range = get_spell_range(data, target, data.source);
 
     if (current_distance >= spell_range)
@@ -923,7 +929,8 @@ game_object* CustomPredictionSDK::get_best_target(const pred_sdk::spell_data& sp
             continue;
 
         // Check range
-        float distance = hero->get_position().distance(spell_data.source->get_position());
+        // FIX: Use server position for accurate range check
+        float distance = hero->get_server_position().distance(spell_data.source->get_position());
         if (distance > search_range)
             continue;
 
@@ -1127,7 +1134,8 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_aoe_cluster(
             if (!hero->is_visible())
                 continue;
 
-            float dist = hero->get_position().distance(source_pos);
+            // FIX: Use server position for accurate distance filtering
+            float dist = hero->get_server_position().distance(source_pos);
             if (dist > spell_data.range + 200.f)
                 continue;
 
@@ -1328,7 +1336,8 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_linear_aoe(
             if (!hero->is_visible())
                 continue;
 
-            float dist = hero->get_position().distance(source_pos);
+            // FIX: Use server position for accurate distance filtering
+            float dist = hero->get_server_position().distance(source_pos);
             if (dist > spell_data.range + 200.f)
                 continue;
 
@@ -1556,7 +1565,8 @@ CustomPredictionSDK::aoe_pred_result CustomPredictionSDK::predict_cone_aoe(
             if (!hero->is_visible())
                 continue;
 
-            float dist = hero->get_position().distance(source_pos);
+            // FIX: Use server position for accurate distance filtering
+            float dist = hero->get_server_position().distance(source_pos);
             if (dist > cone_range + 200.f)
                 continue;
 
