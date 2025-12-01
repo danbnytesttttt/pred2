@@ -3778,10 +3778,11 @@ namespace HybridPred
 
         // FIX: Pass zero velocity to avoid drift overshoot (same as circular/linear)
         // Path prediction already handles movement; drift would double-compensate
+        // BUG FIX: Should use dodge_time not arrival_time (was giving 200ms extra dodge time!)
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
             path_predicted_pos,
             math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            arrival_time,
+            dodge_time,  // FIX: was arrival_time - caused reachable region to be too large!
             effective_move_speed,  // Use effective speed (0 if CC'd)
             DEFAULT_TURN_RATE,
             dynamic_accel
