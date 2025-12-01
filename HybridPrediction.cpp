@@ -2599,15 +2599,14 @@ namespace HybridPred
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        // FIX: On spells with cast delays, enemies see the animation and start reacting EARLY
-        // They don't wait for projectile to appear - they see the wind-up
-        // So effective reaction time is just perception time (~50ms) not full reaction (200ms)
-        float effective_reaction_time = HUMAN_REACTION_TIME;
-        if (spell.delay > 0.1f)  // Spells with noticeable cast animation (Jhin W, Xerath Q, etc.)
-        {
-            // Enemy sees animation immediately, only needs 50ms to perceive "he's casting"
-            effective_reaction_time = 0.05f;
-        }
+        // FIX: Enemies react DURING cast animation, using up their reaction time
+        // By the time projectile launches, they've already been reacting/moving
+        // So we only subtract the reaction time that's LEFT OVER after the delay
+        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
+        // Examples:
+        //   Instant cast (delay=0s):    0.20s - 0s = 0.20s reaction needed
+        //   Jhin W (delay=0.25s):       max(0.05s, 0.20s - 0.25s) = 0.05s left
+        //   Xerath Q (delay=0.75s):     max(0.05s, 0.20s - 0.75s) = 0.05s left (almost full time!)
 
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
@@ -3112,15 +3111,14 @@ namespace HybridPred
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        // FIX: On spells with cast delays, enemies see the animation and start reacting EARLY
-        // They don't wait for projectile to appear - they see the wind-up
-        // So effective reaction time is just perception time (~50ms) not full reaction (200ms)
-        float effective_reaction_time = HUMAN_REACTION_TIME;
-        if (spell.delay > 0.1f)  // Spells with noticeable cast animation (Jhin W, Xerath Q, etc.)
-        {
-            // Enemy sees animation immediately, only needs 50ms to perceive "he's casting"
-            effective_reaction_time = 0.05f;
-        }
+        // FIX: Enemies react DURING cast animation, using up their reaction time
+        // By the time projectile launches, they've already been reacting/moving
+        // So we only subtract the reaction time that's LEFT OVER after the delay
+        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
+        // Examples:
+        //   Instant cast (delay=0s):    0.20s - 0s = 0.20s reaction needed
+        //   Jhin W (delay=0.25s):       max(0.05s, 0.20s - 0.25s) = 0.05s left
+        //   Xerath Q (delay=0.75s):     max(0.05s, 0.20s - 0.75s) = 0.05s left (almost full time!)
 
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
@@ -3576,15 +3574,14 @@ namespace HybridPred
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
         // Calculate dodge time accounting for human reaction
-        // FIX: On spells with cast delays, enemies see the animation and start reacting EARLY
-        // They don't wait for projectile to appear - they see the wind-up
-        // So effective reaction time is just perception time (~50ms) not full reaction (200ms)
-        float effective_reaction_time = HUMAN_REACTION_TIME;
-        if (spell.delay > 0.1f)  // Spells with noticeable cast animation (Jhin W, Xerath Q, etc.)
-        {
-            // Enemy sees animation immediately, only needs 50ms to perceive "he's casting"
-            effective_reaction_time = 0.05f;
-        }
+        // FIX: Enemies react DURING cast animation, using up their reaction time
+        // By the time projectile launches, they've already been reacting/moving
+        // So we only subtract the reaction time that's LEFT OVER after the delay
+        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
+        // Examples:
+        //   Instant cast (delay=0s):    0.20s - 0s = 0.20s reaction needed
+        //   Jhin W (delay=0.25s):       max(0.05s, 0.20s - 0.25s) = 0.05s left
+        //   Xerath Q (delay=0.75s):     max(0.05s, 0.20s - 0.75s) = 0.05s left (almost full time!)
 
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
