@@ -3772,6 +3772,34 @@ namespace HybridPred
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
         float effective_move_speed = get_effective_move_speed(target, arrival_time);  // Scaled by free time
 
+        // Calculate dodge_time (missing from original cone implementation!)
+        math::vector3 target_velocity = tracker.get_current_velocity();
+        const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
+        float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
+
+        // Calculate dodge time accounting for human reaction
+        // FIX: Enemies react DURING cast animation, using up their reaction time
+        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
+        float max_dodge_time = arrival_time - effective_reaction_time;
+        float dodge_time = 0.f;
+        if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
+        {
+            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            dodge_time = std::min(observed_dodge_time, max_dodge_time);
+
+            // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
+            if (arrival_time < 0.5f)
+            {
+                float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
+                close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
+                dodge_time *= close_range_scale;
+
+                // POINT-BLANK OVERRIDE: At <200 units, minimal dodge time
+                float min_dodge = is_point_blank ? 0.01f : 0.05f;
+                dodge_time = std::max(dodge_time, min_dodge);
+            }
+        }
+
         // Use dynamic acceleration if tracker has measured it, otherwise fall back to defaults
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
