@@ -3045,7 +3045,21 @@ namespace HybridPred
             behavior_pdf
         );
 
-        return physics_prob * behavior_prob * confidence;
+        // FIX: Use weighted fusion instead of multiplication to prevent behavior dominance
+        // Old: physics_prob * behavior_prob * confidence (no physics cap!)
+        // New: fuse_probabilities with 80% physics cap to prevent wide misses
+        // When behavior is strongly biased to a side but wrong, physics cap prevents
+        // aiming too far off-center
+        float distance = (point - reachable_region.center).magnitude();
+        return fuse_probabilities(
+            physics_prob,
+            behavior_prob,
+            confidence,
+            32,  // Assume reasonable sample count for evaluation
+            0.f, // No staleness in optimization
+            350.f, // Average move speed
+            distance  // Distance from center (for close-range boost)
+        );
     }
 
     // =========================================================================
