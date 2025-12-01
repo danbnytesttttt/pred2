@@ -2564,9 +2564,11 @@ namespace HybridPred
         // Problem: Initial calculation uses current distance, but target moves → changes distance
         // Solution: Iterate to converge on true intercept time (where projectile meets target)
         math::vector3 source_pos = source->get_position();
+        // FIX: Use server position for target to avoid latency lag (30-100ms behind)
+        math::vector3 target_pos = target->get_server_position();
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
-            target->get_position(),
+            target_pos,
             spell.projectile_speed,
             spell.delay
         );
