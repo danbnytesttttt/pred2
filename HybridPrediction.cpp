@@ -2687,6 +2687,8 @@ namespace HybridPred
         math::vector3 source_pos = source->get_position();
         // FIX: Use server position for target to avoid latency lag (30-100ms behind)
         math::vector3 target_pos = target->get_server_position();
+        float initial_distance = (target_pos - source_pos).magnitude();
+
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
             target_pos,
@@ -2694,12 +2696,28 @@ namespace HybridPred
             spell.delay
         );
 
+        // DEBUG: Log initial arrival time calculation
+        if (g_sdk)
+        {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                "[ArrivalTime] Target=%s, initialDist=%.0f, projSpeed=%.0f, delay=%.3fs, initialArrival=%.3fs",
+                target->get_char_name().c_str(),
+                initial_distance,
+                spell.projectile_speed,
+                spell.delay,
+                arrival_time);
+            g_sdk->log_console(msg);
+        }
+
         // Refine arrival time iteratively (converges in 2-3 iterations)
         // PERFORMANCE: Early exit if converged (< 1ms change)
         for (int iteration = 0; iteration < 3; ++iteration)
         {
             float prev_arrival = arrival_time;
             math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            float predicted_distance = (predicted_pos - source_pos).magnitude();
+
             arrival_time = PhysicsPredictor::compute_arrival_time(
                 source_pos,
                 predicted_pos,
@@ -2707,9 +2725,29 @@ namespace HybridPred
                 spell.delay
             );
 
+            // DEBUG: Log refinement iteration
+            if (g_sdk)
+            {
+                char msg[512];
+                snprintf(msg, sizeof(msg),
+                    "  Iteration %d: predDist=%.0f, predPos=(%.0f,%.0f), newArrival=%.3fs, change=%.3fs",
+                    iteration + 1,
+                    predicted_distance,
+                    predicted_pos.x, predicted_pos.z,
+                    arrival_time,
+                    arrival_time - prev_arrival);
+                g_sdk->log_console(msg);
+            }
+
             // Early exit if converged (change < 1ms)
             if (std::abs(arrival_time - prev_arrival) < 0.001f)
+            {
+                if (g_sdk)
+                {
+                    g_sdk->log_console("  Converged!");
+                }
                 break;
+            }
         }
 
         // Step 2: Build reachable region (physics)
