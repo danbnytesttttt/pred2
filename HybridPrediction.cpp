@@ -1710,12 +1710,102 @@ namespace HybridPred
             return position;
 
         float distance_to_travel = move_speed * prediction_time;
-        float traveled = 0.f;
 
-        // Follow path waypoints
+        // CRITICAL FIX: Find which segment the target is actually on
+        // If we naively start from position -> path[1], we might create a backwards segment
+        // Example: position=(600,0), path[1]=(500,0) creates backwards segment!
+
+        // Find the closest segment to current position
+        size_t start_segment = 1;
+        float min_distance_to_segment = 99999.f;
+
         for (size_t i = 1; i < path.size(); ++i)
         {
-            math::vector3 segment_start = (i == 1) ? position : path[i - 1];
+            math::vector3 seg_start = (i == 1) ? path[0] : path[i - 1];
+            math::vector3 seg_end = path[i];
+
+            // Project current position onto this segment
+            math::vector3 seg_vec = seg_end - seg_start;
+            float seg_len_sq = seg_vec.dot(seg_vec);
+
+            if (seg_len_sq < 0.001f)
+                continue;
+
+            math::vector3 to_pos = position - seg_start;
+            float t = to_pos.dot(seg_vec) / seg_len_sq;
+            t = std::clamp(t, 0.f, 1.f);
+
+            math::vector3 closest_point = seg_start + seg_vec * t;
+            float dist = (position - closest_point).magnitude();
+
+            if (dist < min_distance_to_segment)
+            {
+                min_distance_to_segment = dist;
+                start_segment = i;
+            }
+        }
+
+        // Calculate how far along the current segment we are
+        float initial_traveled = 0.f;
+        if (start_segment > 1)
+        {
+            // We're past some waypoints - account for those segments
+            for (size_t i = 1; i < start_segment; ++i)
+            {
+                math::vector3 seg_start = (i == 1) ? path[0] : path[i - 1];
+                math::vector3 seg_end = path[i];
+                initial_traveled += (seg_end - seg_start).magnitude();
+            }
+        }
+
+        // Add distance from start of current segment to current position
+        math::vector3 current_seg_start = (start_segment == 1) ? path[0] : path[start_segment - 1];
+        math::vector3 current_seg_end = path[start_segment];
+        math::vector3 current_seg_vec = current_seg_end - current_seg_start;
+        float current_seg_len_sq = current_seg_vec.dot(current_seg_vec);
+
+        if (current_seg_len_sq > 0.001f)
+        {
+            math::vector3 to_pos = position - current_seg_start;
+            float t = to_pos.dot(current_seg_vec) / current_seg_len_sq;
+            t = std::clamp(t, 0.f, 1.f);
+            initial_traveled += std::sqrt(current_seg_len_sq) * t;
+        }
+
+        float traveled = initial_traveled;
+
+        // DEBUG: Log path prediction details
+        if (g_sdk && path.size() > 0)
+        {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                "[PathDebug] %s: predTime=%.2fs, moveSpeed=%.0f, distToTravel=%.0f, pathSize=%zu, startSeg=%zu, initialTraveled=%.0f",
+                target->get_char_name().c_str(),
+                prediction_time,
+                move_speed,
+                distance_to_travel,
+                path.size(),
+                start_segment,
+                initial_traveled);
+            g_sdk->log_console(msg);
+
+            // Log position and closest segment
+            snprintf(msg, sizeof(msg),
+                "  Current=(%.0f,%.0f), SegStart=(%.0f,%.0f), SegEnd=(%.0f,%.0f), distToSeg=%.0f",
+                position.x, position.z,
+                current_seg_start.x, current_seg_start.z,
+                current_seg_end.x, current_seg_end.z,
+                min_distance_to_segment);
+            g_sdk->log_console(msg);
+        }
+
+        // Calculate total distance target will have traveled when projectile arrives
+        float target_path_distance = initial_traveled + distance_to_travel;
+
+        // Follow path waypoints from current segment onwards
+        for (size_t i = start_segment; i < path.size(); ++i)
+        {
+            math::vector3 segment_start = (i == start_segment) ? position : path[i - 1];
             math::vector3 segment_end = path[i];
 
             math::vector3 segment_diff = segment_end - segment_start;
@@ -1724,16 +1814,33 @@ namespace HybridPred
             if (segment_length < 0.001f)
                 continue;
 
-            float remaining = distance_to_travel - traveled;
-
-            if (traveled + segment_length >= distance_to_travel)
+            // Check if target will arrive on this segment
+            if (traveled + segment_length >= target_path_distance)
             {
                 // Target will be on this segment
+                // Calculate how far along this segment they'll be
+                float distance_into_segment = target_path_distance - traveled;
                 math::vector3 direction = segment_diff / segment_length;
-                math::vector3 predicted_pos = segment_start + direction * remaining;
+                math::vector3 predicted_pos = segment_start + direction * distance_into_segment;
 
                 // FIX: Clamp to pathable terrain (prevents predicting through walls)
-                return clamp_to_pathable(predicted_pos);
+                math::vector3 clamped_pos = clamp_to_pathable(predicted_pos);
+
+                // DEBUG: Log prediction result
+                if (g_sdk)
+                {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "  Predicted on segment %zu: (%.0f,%.0f) -> (%.0f,%.0f), distIntoSeg=%.0f/%.0f, result=(%.0f,%.0f)",
+                        i,
+                        segment_start.x, segment_start.z,
+                        segment_end.x, segment_end.z,
+                        distance_into_segment, segment_length,
+                        clamped_pos.x, clamped_pos.z);
+                    g_sdk->log_console(msg);
+                }
+
+                return clamped_pos;
             }
 
             traveled += segment_length;
@@ -1742,7 +1849,21 @@ namespace HybridPred
         // Traveled past all waypoints - target STOPS at final destination
         // Do NOT extrapolate past their click point
         // FIX: Clamp to pathable terrain (path endpoint might be in wall due to latency/bugs)
-        return clamp_to_pathable(path.back());
+        math::vector3 final_pos = clamp_to_pathable(path.back());
+
+        // DEBUG: Log when target reaches destination
+        if (g_sdk)
+        {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                "  Reached final destination: (%.0f,%.0f), totalPathDist=%.0f, targetDist=%.0f",
+                final_pos.x, final_pos.z,
+                traveled,
+                target_path_distance);
+            g_sdk->log_console(msg);
+        }
+
+        return final_pos;
     }
 
     float PhysicsPredictor::compute_physics_hit_probability(
