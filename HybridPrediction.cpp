@@ -2102,27 +2102,27 @@ namespace HybridPred
     {
         float distance = (target_pos - source_pos).magnitude();
 
-        // Instant spell: No projectile travel time, no latency compensation
-        // Instant spells (Annie W, Darius Q) feel "slippery" with latency leading
+        // Instant spell: No projectile travel time
         if (projectile_speed < EPSILON || projectile_speed >= FLT_MAX / 2.f)
         {
-            return cast_delay;  // Just the windup, no compensation
+            return cast_delay;  // Just the windup
         }
 
-        // LATENCY COMPENSATION: Only for projectile spells
-        // ping: round-trip network latency (we use half for one-way)
-        // server_tick: 33ms (LoL runs at 30Hz server tick rate)
-        float ping_compensation = 0.f;
-        if (g_sdk && g_sdk->net_client)
-        {
-            float ping_ms = static_cast<float>(g_sdk->net_client->get_ping());
-            // Sanity bounds: reject garbage values
-            ping_ms = std::clamp(ping_ms, 10.f, 150.f);
-            // Use half ping (one-way) + one server tick
-            ping_compensation = (ping_ms / 2.f / 1000.f) + 0.033f;
-        }
+        // CRITICAL: NO ping compensation needed!
+        // We're using get_server_position() for targets, which is the authoritative
+        // server position. Server position is already ~ping/2 ahead of client position.
+        // Adding ping compensation on top would cause DOUBLE COMPENSATION, making us
+        // predict 100-150ms too far ahead.
+        //
+        // Timeline:
+        // - t=0: We cast (command sent to server)
+        // - t=delay: Projectile launches on our client
+        // - t=delay + travel: Projectile arrives
+        //
+        // Server position already accounts for network lag - it's where the target IS
+        // on the server right now, not where they appear on our screen.
 
-        return cast_delay + (distance / projectile_speed) + ping_compensation;
+        return cast_delay + (distance / projectile_speed);
     }
 
     float PhysicsPredictor::circle_circle_intersection_area(
