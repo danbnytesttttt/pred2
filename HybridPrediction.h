@@ -3,6 +3,7 @@
 #include "sdk.hpp"
 #include "StandalonePredictionSDK.h"  // MUST be included AFTER sdk.hpp for compatibility
 #include "EdgeCaseDetection.h"
+#include "PredictionTelemetry.h"
 #include <vector>
 #include <deque>
 #include <cmath>
@@ -513,7 +514,7 @@ namespace HybridPred
         math::vector3 first_cast_position; // First cast position for vector spells (Viktor E, Rumble R, Irelia E)
         float hit_chance;                // Combined hit probability [0,1]
         float physics_contribution;      // Physics component [0,1]
-        float behavior_contribution;     // Behavior component [0,1]
+        float behavior_contribution;     // Behavior contribution [0,1]
         float confidence_score;          // Confidence modifier [0,1]
 
         // Opportunistic casting signals (NEW)
@@ -525,6 +526,9 @@ namespace HybridPred
         ReachableRegion reachable_region;
         BehaviorPDF behavior_pdf;
         std::string reasoning;           // Mathematical explanation
+
+        // Detailed telemetry debug data (populated during prediction)
+        PredictionTelemetry::PredictionEvent telemetry_data;
 
         bool is_valid;
 

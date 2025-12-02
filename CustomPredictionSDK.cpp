@@ -557,6 +557,10 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             try
             {
                 PredictionTelemetry::PredictionEvent event;
+                // Start with detailed telemetry data from hybrid prediction
+                event = hybrid_result.telemetry_data;
+
+                // Add timestamp and basic info
                 event.timestamp = (g_sdk && g_sdk->clock_facade) ? g_sdk->clock_facade->get_game_time() : 0.f;
                 event.target_name = obj->get_char_name();
 

@@ -2685,6 +2685,7 @@ namespace HybridPred
         // Problem: Initial calculation uses current distance, but target moves → changes distance
         // Solution: Iterate to converge on true intercept time (where projectile meets target)
         math::vector3 source_pos = source->get_position();
+        math::vector3 target_client_pos = target->get_position();
         // FIX: Use server position for target to avoid latency lag (30-100ms behind)
         math::vector3 target_pos = target->get_server_position();
         float initial_distance = (target_pos - source_pos).magnitude();
@@ -2695,28 +2696,21 @@ namespace HybridPred
             spell.projectile_speed,
             spell.delay
         );
+        float initial_arrival_time = arrival_time;
 
-        // DEBUG: Log initial arrival time calculation
-        if (g_sdk)
-        {
-            char msg[512];
-            snprintf(msg, sizeof(msg),
-                "[ArrivalTime] Target=%s, initialDist=%.0f, projSpeed=%.0f, delay=%.3fs, initialArrival=%.3fs",
-                target->get_char_name().c_str(),
-                initial_distance,
-                spell.projectile_speed,
-                spell.delay,
-                arrival_time);
-            g_sdk->log_console(msg);
-        }
+        // Track refinement convergence
+        int refinement_iterations = 0;
+        bool arrival_converged = false;
+        math::vector3 final_predicted_pos = target_pos;
 
         // Refine arrival time iteratively (converges in 2-3 iterations)
         // PERFORMANCE: Early exit if converged (< 1ms change)
         for (int iteration = 0; iteration < 3; ++iteration)
         {
+            refinement_iterations = iteration + 1;
             float prev_arrival = arrival_time;
             math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
-            float predicted_distance = (predicted_pos - source_pos).magnitude();
+            final_predicted_pos = predicted_pos;
 
             arrival_time = PhysicsPredictor::compute_arrival_time(
                 source_pos,
@@ -2725,30 +2719,16 @@ namespace HybridPred
                 spell.delay
             );
 
-            // DEBUG: Log refinement iteration
-            if (g_sdk)
-            {
-                char msg[512];
-                snprintf(msg, sizeof(msg),
-                    "  Iteration %d: predDist=%.0f, predPos=(%.0f,%.0f), newArrival=%.3fs, change=%.3fs",
-                    iteration + 1,
-                    predicted_distance,
-                    predicted_pos.x, predicted_pos.z,
-                    arrival_time,
-                    arrival_time - prev_arrival);
-                g_sdk->log_console(msg);
-            }
-
             // Early exit if converged (change < 1ms)
             if (std::abs(arrival_time - prev_arrival) < 0.001f)
             {
-                if (g_sdk)
-                {
-                    g_sdk->log_console("  Converged!");
-                }
+                arrival_converged = true;
                 break;
             }
         }
+
+        float final_arrival_time = arrival_time;
+        float predicted_distance = (final_predicted_pos - source_pos).magnitude();
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for initial center position
@@ -2948,6 +2928,54 @@ namespace HybridPred
         result.is_valid = true;
 
         update_opportunity_signals(result, source, target, spell, tracker);
+
+        // ===================================================================
+        // POPULATE DETAILED TELEMETRY DEBUG DATA
+        // ===================================================================
+        result.telemetry_data.source_pos_x = source_pos.x;
+        result.telemetry_data.source_pos_z = source_pos.z;
+        result.telemetry_data.target_client_pos_x = target_client_pos.x;
+        result.telemetry_data.target_client_pos_z = target_client_pos.z;
+        result.telemetry_data.target_server_pos_x = target_pos.x;
+        result.telemetry_data.target_server_pos_z = target_pos.z;
+        result.telemetry_data.predicted_pos_x = path_predicted_pos.x;
+        result.telemetry_data.predicted_pos_z = path_predicted_pos.z;
+        result.telemetry_data.cast_pos_x = result.cast_position.x;
+        result.telemetry_data.cast_pos_z = result.cast_position.z;
+
+        // Arrival time data
+        result.telemetry_data.initial_distance = initial_distance;
+        result.telemetry_data.initial_arrival_time = initial_arrival_time;
+        result.telemetry_data.refinement_iterations = refinement_iterations;
+        result.telemetry_data.final_arrival_time = final_arrival_time;
+        result.telemetry_data.arrival_time_change = final_arrival_time - initial_arrival_time;
+        result.telemetry_data.arrival_converged = arrival_converged;
+        result.telemetry_data.predicted_distance = predicted_distance;
+
+        // Path prediction data
+        auto target_path = target->get_path();
+        result.telemetry_data.path_segment_count = static_cast<int>(target_path.size());
+        result.telemetry_data.path_segment_used = 0;  // Circular doesn't expose this easily
+        result.telemetry_data.path_distance_traveled = 0.f;  // Would need to track in predict_on_path
+        result.telemetry_data.path_distance_total = 0.f;
+        result.telemetry_data.path_segment_progress = 0.f;
+        result.telemetry_data.distance_from_path = (target_pos - (target_path.size() > 0 ? target_path[0] : target_pos)).magnitude();
+
+        // Dodge & reachable region data
+        result.telemetry_data.dodge_time = dodge_time;
+        result.telemetry_data.effective_reaction_time = effective_reaction_time;
+        result.telemetry_data.reachable_radius = reachable_region.max_radius;
+        result.telemetry_data.reachable_center_x = reachable_region.center.x;
+        result.telemetry_data.reachable_center_z = reachable_region.center.z;
+        result.telemetry_data.effective_move_speed = effective_move_speed;
+
+        // Outcome tracking (will be filled in later if we track outcomes)
+        result.telemetry_data.outcome_recorded = false;
+        result.telemetry_data.was_hit = false;
+        result.telemetry_data.actual_pos_x = 0.f;
+        result.telemetry_data.actual_pos_z = 0.f;
+        result.telemetry_data.prediction_error = 0.f;
+        result.telemetry_data.time_to_outcome = 0.f;
 
         return result;
     }

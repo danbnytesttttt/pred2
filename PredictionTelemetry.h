@@ -50,6 +50,61 @@ namespace PredictionTelemetry
         float target_velocity = 0.f;         // Target's movement speed
         float prediction_offset = 0.f;       // Distance between current and predicted position
         bool target_is_moving = false;       // Whether target was moving during prediction
+
+        // =====================================================================
+        // DETAILED DEBUG DATA - Position Tracking
+        // =====================================================================
+        float source_pos_x = 0.f;            // Our position X (client)
+        float source_pos_z = 0.f;            // Our position Z (client)
+        float target_client_pos_x = 0.f;     // Target position X (client view)
+        float target_client_pos_z = 0.f;     // Target position Z (client view)
+        float target_server_pos_x = 0.f;     // Target position X (server authoritative)
+        float target_server_pos_z = 0.f;     // Target position Z (server authoritative)
+        float predicted_pos_x = 0.f;         // Where we predicted they'd be X
+        float predicted_pos_z = 0.f;         // Where we predicted they'd be Z
+        float cast_pos_x = 0.f;              // Where we aimed the spell X
+        float cast_pos_z = 0.f;              // Where we aimed the spell Z
+
+        // =====================================================================
+        // DETAILED DEBUG DATA - Arrival Time Calculation
+        // =====================================================================
+        float initial_distance = 0.f;        // Initial distance to target
+        float initial_arrival_time = 0.f;    // First arrival time estimate
+        int refinement_iterations = 0;       // How many iterations to converge
+        float final_arrival_time = 0.f;      // Final arrival time after refinement
+        float arrival_time_change = 0.f;     // Total change from initial to final
+        bool arrival_converged = false;      // Whether iterative refinement converged
+        float predicted_distance = 0.f;      // Final distance to predicted position
+
+        // =====================================================================
+        // DETAILED DEBUG DATA - Path Prediction
+        // =====================================================================
+        int path_segment_count = 0;          // Number of waypoints in path
+        int path_segment_used = 0;           // Which segment prediction landed on
+        float path_distance_traveled = 0.f;  // How far along path target already was
+        float path_distance_total = 0.f;     // Total path distance to predicted position
+        float path_segment_progress = 0.f;   // Progress along the segment (0-1)
+        float distance_from_path = 0.f;      // How far current position is from path
+
+        // =====================================================================
+        // DETAILED DEBUG DATA - Dodge & Reachable Region
+        // =====================================================================
+        float dodge_time = 0.f;              // Time target has to dodge
+        float effective_reaction_time = 0.f; // Reaction time after accounting for cast delay
+        float reachable_radius = 0.f;        // Max dodge distance (physics)
+        float reachable_center_x = 0.f;      // Reachable region center X
+        float reachable_center_z = 0.f;      // Reachable region center Z
+        float effective_move_speed = 0.f;    // Target's movement speed (with slows/haste)
+
+        // =====================================================================
+        // DETAILED DEBUG DATA - Outcome Tracking (for miss analysis)
+        // =====================================================================
+        bool outcome_recorded = false;       // Whether we tracked the actual outcome
+        bool was_hit = false;                // Did the spell hit?
+        float actual_pos_x = 0.f;            // Where target actually was at arrival X
+        float actual_pos_z = 0.f;            // Where target actually was at arrival Z
+        float prediction_error = 0.f;        // Distance between predicted and actual position
+        float time_to_outcome = 0.f;         // Time from cast to outcome
     };
 
     struct SessionStats
