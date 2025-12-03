@@ -2985,9 +2985,18 @@ namespace HybridPred
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
 
+        // REACTION-GATE OVERRIDE: If undodgeable, force PDF to pure physics
+        // When arrival_time < reaction_time, behavior patterns are irrelevant.
+        // They physically cannot execute any dodge - trust linear extrapolation 100%.
+        bool is_undodgeable = arrival_time < effective_reaction_time;
+        if (is_undodgeable)
+        {
+            behavior_pdf.lateral_sigma = 0.f;  // No lateral variance - can't juke
+            behavior_pdf.forward_sigma = 0.f;  // No forward variance - can't speed change
+        }
+
         // Center PDF on path prediction at full arrival time
         // NOTE: pdf.origin is the MEAN (expected position at arrival), not an anchor point
-        // path_predicted_pos already calculated as predict_on_path(target, arrival_time)
         behavior_pdf.origin = path_predicted_pos;
         result.behavior_pdf = behavior_pdf;
 
@@ -3697,6 +3706,14 @@ namespace HybridPred
         // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // REACTION-GATE OVERRIDE: If undodgeable, force PDF to pure physics
+        bool is_undodgeable = arrival_time < effective_reaction_time;
+        if (is_undodgeable)
+        {
+            behavior_pdf.lateral_sigma = 0.f;
+            behavior_pdf.forward_sigma = 0.f;
+        }
         behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
@@ -4218,6 +4235,14 @@ namespace HybridPred
         // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // REACTION-GATE OVERRIDE: If undodgeable, force PDF to pure physics
+        bool is_undodgeable = arrival_time < effective_reaction_time;
+        if (is_undodgeable)
+        {
+            behavior_pdf.lateral_sigma = 0.f;
+            behavior_pdf.forward_sigma = 0.f;
+        }
         behavior_pdf.origin = path_predicted_pos;
 
         result.behavior_pdf = behavior_pdf;
@@ -4471,6 +4496,14 @@ namespace HybridPred
         // Step 3: Build behavior PDF and align with path prediction
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
+
+        // REACTION-GATE OVERRIDE: If undodgeable, force PDF to pure physics
+        bool is_undodgeable = arrival_time < effective_reaction_time;
+        if (is_undodgeable)
+        {
+            behavior_pdf.lateral_sigma = 0.f;
+            behavior_pdf.forward_sigma = 0.f;
+        }
 
         // Center PDF on path prediction at full arrival time
         behavior_pdf.origin = path_predicted_pos;
