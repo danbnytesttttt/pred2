@@ -348,14 +348,25 @@ namespace HybridPred
                 {
                     smoothed_velocity_ = math::vector3(0, 0, 0);
                 }
-                // CASE 2: STOPPED - Snap to zero immediately (fixes "drift" when target stops)
+                // CASE 2: STOPPED - Use 2-frame buffer to prevent 1-frame stop exploits
+                // High-skill players tap 'S' for 1 frame to fake jukes. Requiring 2 frames
+                // (100ms) filters out single-frame stops while still detecting real stops quickly.
                 else if (raw_speed < 10.f)
                 {
-                    smoothed_velocity_ = math::vector3(0, 0, 0);
+                    zero_velocity_frames_++;
+                    if (zero_velocity_frames_ >= 2)
+                    {
+                        // Confirmed stop (2+ frames) - snap to zero
+                        smoothed_velocity_ = math::vector3(0, 0, 0);
+                    }
+                    // else: First frame of stop - keep decaying, don't snap instantly
                 }
                 // CASE 3: SHARP TURN - Snap to new direction (angle > 60 degrees)
                 else if (raw_speed > 100.f && smooth_speed > 100.f)
                 {
+                    // Reset stop counter when moving
+                    zero_velocity_frames_ = 0;
+
                     // Check angle between new raw velocity and old smoothed velocity
                     float dot = snapshot.velocity.normalized().dot(smoothed_velocity_.normalized());
 
@@ -375,6 +386,8 @@ namespace HybridPred
                 }
                 else
                 {
+                    // Low speed movement - reset stop counter
+                    zero_velocity_frames_ = 0;
                     smoothed_velocity_ = snapshot.velocity;
                 }
                 snapshot.velocity = smoothed_velocity_;  // Commit to snapshot
@@ -3002,15 +3015,17 @@ namespace HybridPred
             if (!g_sdk->nav_mesh->is_pathable(optimal_cast_pos))
             {
                 // Search in a small radius for pathable position
+                // PERFORMANCE: Reduced from 150 to 75 units (predictions rarely off-path by >75)
                 constexpr float SEARCH_STEP = 25.f;
                 constexpr int SEARCH_DIRECTIONS = 8;
+                constexpr float MAX_SEARCH_DIST = 75.f;
                 float best_distance = FLT_MAX;
                 math::vector3 best_pos = optimal_cast_pos;
 
                 for (int i = 0; i < SEARCH_DIRECTIONS; ++i)
                 {
                     float angle = (2.f * PI * i) / SEARCH_DIRECTIONS;
-                    for (float dist = SEARCH_STEP; dist <= 150.f; dist += SEARCH_STEP)
+                    for (float dist = SEARCH_STEP; dist <= MAX_SEARCH_DIST; dist += SEARCH_STEP)
                     {
                         math::vector3 test_pos = optimal_cast_pos;
                         test_pos.x += std::cos(angle) * dist;

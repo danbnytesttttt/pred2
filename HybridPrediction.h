@@ -580,6 +580,7 @@ namespace HybridPred
 
         // Smoothed velocity to reduce jitter from spam clicking
         math::vector3 smoothed_velocity_;
+        int zero_velocity_frames_ = 0;  // Counter for stop command buffer (prevent 1-frame stop exploits)
 
         // Event-driven sampling: Track last path endpoint to detect new clicks
         math::vector3 last_path_endpoint_;
