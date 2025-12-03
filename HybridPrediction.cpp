@@ -2961,17 +2961,22 @@ namespace HybridPred
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
 
-        // CRITICAL FIX: "Double Drift" bug - pass CURRENT position, not future
-        // OLD: path_predicted_pos (future) caused region to overshoot
-        // NEW: target->get_server_position() (current) + velocity for proper drift
+        // SPLIT-PATH APPROACH: Calculate position at reaction time
+        // During reaction time, target follows their clicked path (not dodging yet)
+        // This handles curved paths correctly (linear velocity extrapolation doesn't)
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+
+        // Build reachable region FROM the reaction position
+        // Zero velocity because path-following during reaction time is already handled above
+        // Only need to calculate dodge possibilities from the reaction point
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_server_position(),  // Start NOW
-            tracker.get_current_velocity(),  // Velocity for drift
-            arrival_time,  // Full time window
+            pos_at_reaction,  // Start at reaction position (after path following)
+            math::vector3(0, 0, 0),  // Zero velocity (drift already accounted for)
+            arrival_time - effective_reaction_time,  // Remaining time to dodge
             effective_move_speed,
             DEFAULT_TURN_RATE,
             dynamic_accel,
-            effective_reaction_time  // Drift/dodge split
+            0.0f  // No more reaction drift needed (already at reaction point)
         );
 
         result.reachable_region = reachable_region;
@@ -2982,7 +2987,7 @@ namespace HybridPred
 
         // Center PDF on path prediction at full arrival time
         // NOTE: pdf.origin is the MEAN (expected position at arrival), not an anchor point
-        // build_pdf_from_history already projects forward correctly for arrival_time
+        // path_predicted_pos already calculated as predict_on_path(target, arrival_time)
         behavior_pdf.origin = path_predicted_pos;
         result.behavior_pdf = behavior_pdf;
 
@@ -3669,18 +3674,22 @@ namespace HybridPred
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
 
-        // Use path-predicted position as center
-        // CRITICAL FIX: "Double Drift" bug - pass CURRENT position, not future
-        // OLD: path_predicted_pos (future) caused region to overshoot
-        // NEW: target->get_server_position() (current) + velocity for proper drift
+        // SPLIT-PATH APPROACH: Calculate position at reaction time
+        // During reaction time, target follows their clicked path (not dodging yet)
+        // This handles curved paths correctly (linear velocity extrapolation doesn't)
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+
+        // Build reachable region FROM the reaction position
+        // Zero velocity because path-following during reaction time is already handled above
+        // Only need to calculate dodge possibilities from the reaction point
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_server_position(),  // Start NOW
-            tracker.get_current_velocity(),  // Velocity for drift
-            arrival_time,  // Full time window
+            pos_at_reaction,  // Start at reaction position (after path following)
+            math::vector3(0, 0, 0),  // Zero velocity (drift already accounted for)
+            arrival_time - effective_reaction_time,  // Remaining time to dodge
             effective_move_speed,
             DEFAULT_TURN_RATE,
             dynamic_accel,
-            effective_reaction_time  // Drift/dodge split
+            0.0f  // No more reaction drift needed (already at reaction point)
         );
 
         result.reachable_region = reachable_region;
@@ -4186,17 +4195,22 @@ namespace HybridPred
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
 
-        // CRITICAL FIX: "Double Drift" bug - pass CURRENT position, not future
-        // OLD: path_predicted_pos (future) caused region to overshoot
-        // NEW: target->get_server_position() (current) + velocity for proper drift
+        // SPLIT-PATH APPROACH: Calculate position at reaction time
+        // During reaction time, target follows their clicked path (not dodging yet)
+        // This handles curved paths correctly (linear velocity extrapolation doesn't)
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+
+        // Build reachable region FROM the reaction position
+        // Zero velocity because path-following during reaction time is already handled above
+        // Only need to calculate dodge possibilities from the reaction point
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_server_position(),  // Start NOW
-            tracker.get_current_velocity(),  // Velocity for drift
-            arrival_time,  // Full time window
+            pos_at_reaction,  // Start at reaction position (after path following)
+            math::vector3(0, 0, 0),  // Zero velocity (drift already accounted for)
+            arrival_time - effective_reaction_time,  // Remaining time to dodge
             effective_move_speed,
             DEFAULT_TURN_RATE,
             dynamic_accel,
-            effective_reaction_time  // Drift/dodge split
+            0.0f  // No more reaction drift needed (already at reaction point)
         );
 
         result.reachable_region = reachable_region;
@@ -4434,18 +4448,22 @@ namespace HybridPred
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
 
-        // DOUBLE DRIFT FIX: Use current position + velocity, matching circular/linear/targeted
-        // OLD BUG: Used path_predicted_pos (future) + zero velocity, causing reachable region
-        // to be centered at arrival position, then compute_reachable_region added drift AGAIN
-        // NEW FIX: Start from current position, let compute_reachable_region handle all movement
+        // SPLIT-PATH APPROACH: Calculate position at reaction time
+        // During reaction time, target follows their clicked path (not dodging yet)
+        // This handles curved paths correctly (linear velocity extrapolation doesn't)
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+
+        // Build reachable region FROM the reaction position
+        // Zero velocity because path-following during reaction time is already handled above
+        // Only need to calculate dodge possibilities from the reaction point
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            target->get_server_position(),   // Start from NOW (not future)
-            tracker.get_current_velocity(),  // Velocity for drift calculation
-            arrival_time,  // Full time window
+            pos_at_reaction,  // Start at reaction position (after path following)
+            math::vector3(0, 0, 0),  // Zero velocity (drift already accounted for)
+            arrival_time - effective_reaction_time,  // Remaining time to dodge
             effective_move_speed,
             DEFAULT_TURN_RATE,
             dynamic_accel,
-            effective_reaction_time  // Drift/dodge split
+            0.0f  // No more reaction drift needed (already at reaction point)
         );
 
         result.reachable_region = reachable_region;
