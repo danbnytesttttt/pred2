@@ -2994,13 +2994,22 @@ namespace HybridPred
         bool is_undodgeable = arrival_time < effective_reaction_time;
         if (is_undodgeable)
         {
-            behavior_pdf.lateral_sigma = 0.f;  // No lateral variance - can't juke
-            behavior_pdf.forward_sigma = 0.f;  // No forward variance - can't speed change
+            // Clear PDF grid and concentrate all probability at arrival position
+            // This removes any lateral/forward variance from behavior prediction
+            for (int i = 0; i < BehaviorPDF::GRID_SIZE; ++i)
+                for (int j = 0; j < BehaviorPDF::GRID_SIZE; ++j)
+                    behavior_pdf.pdf_grid[i][j] = 0.f;
+            behavior_pdf.total_probability = 0.f;
         }
 
         // Center PDF on path prediction at full arrival time
-        // NOTE: pdf.origin is the MEAN (expected position at arrival), not an anchor point
         behavior_pdf.origin = path_predicted_pos;
+
+        // For undodgeable case, add single concentrated sample at origin
+        if (is_undodgeable)
+        {
+            behavior_pdf.add_weighted_sample(path_predicted_pos, 1.0f);
+        }
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
@@ -3714,10 +3723,14 @@ namespace HybridPred
         bool is_undodgeable = arrival_time < effective_reaction_time;
         if (is_undodgeable)
         {
-            behavior_pdf.lateral_sigma = 0.f;
-            behavior_pdf.forward_sigma = 0.f;
+            for (int i = 0; i < BehaviorPDF::GRID_SIZE; ++i)
+                for (int j = 0; j < BehaviorPDF::GRID_SIZE; ++j)
+                    behavior_pdf.pdf_grid[i][j] = 0.f;
+            behavior_pdf.total_probability = 0.f;
         }
         behavior_pdf.origin = path_predicted_pos;
+        if (is_undodgeable)
+            behavior_pdf.add_weighted_sample(path_predicted_pos, 1.0f);
 
         result.behavior_pdf = behavior_pdf;
 
@@ -4243,10 +4256,14 @@ namespace HybridPred
         bool is_undodgeable = arrival_time < effective_reaction_time;
         if (is_undodgeable)
         {
-            behavior_pdf.lateral_sigma = 0.f;
-            behavior_pdf.forward_sigma = 0.f;
+            for (int i = 0; i < BehaviorPDF::GRID_SIZE; ++i)
+                for (int j = 0; j < BehaviorPDF::GRID_SIZE; ++j)
+                    behavior_pdf.pdf_grid[i][j] = 0.f;
+            behavior_pdf.total_probability = 0.f;
         }
         behavior_pdf.origin = path_predicted_pos;
+        if (is_undodgeable)
+            behavior_pdf.add_weighted_sample(path_predicted_pos, 1.0f);
 
         result.behavior_pdf = behavior_pdf;
 
@@ -4504,12 +4521,16 @@ namespace HybridPred
         bool is_undodgeable = arrival_time < effective_reaction_time;
         if (is_undodgeable)
         {
-            behavior_pdf.lateral_sigma = 0.f;
-            behavior_pdf.forward_sigma = 0.f;
+            for (int i = 0; i < BehaviorPDF::GRID_SIZE; ++i)
+                for (int j = 0; j < BehaviorPDF::GRID_SIZE; ++j)
+                    behavior_pdf.pdf_grid[i][j] = 0.f;
+            behavior_pdf.total_probability = 0.f;
         }
 
         // Center PDF on path prediction at full arrival time
         behavior_pdf.origin = path_predicted_pos;
+        if (is_undodgeable)
+            behavior_pdf.add_weighted_sample(path_predicted_pos, 1.0f);
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
