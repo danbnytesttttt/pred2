@@ -2980,9 +2980,13 @@ namespace HybridPred
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
 
-        // Center PDF on the Physics prediction
-        // This says: "Given their history of juking, where would they be RELATIVE to their current path?"
-        behavior_pdf.origin = path_predicted_pos;
+        // Center PDF on path prediction, but capped at reaction time
+        // Rationale: Targets can only follow their clicked path for reaction_time before they start reacting
+        // After that, they can change direction and dodge - so behavior PDF should be centered where
+        // they'll be when they START reacting (not where they'll be at spell arrival)
+        float behavior_predict_time = std::min(arrival_time, effective_reaction_time);
+        math::vector3 behavior_center = PhysicsPredictor::predict_on_path(target, behavior_predict_time);
+        behavior_pdf.origin = behavior_center;
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
@@ -3687,7 +3691,11 @@ namespace HybridPred
         // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
-        behavior_pdf.origin = path_predicted_pos;
+
+        // Center PDF on path prediction, capped at reaction time (see circular prediction for rationale)
+        float behavior_predict_time = std::min(arrival_time, effective_reaction_time);
+        math::vector3 behavior_center = PhysicsPredictor::predict_on_path(target, behavior_predict_time);
+        behavior_pdf.origin = behavior_center;
 
         result.behavior_pdf = behavior_pdf;
 
@@ -4203,7 +4211,11 @@ namespace HybridPred
         // Step 3: Build behavior PDF
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
-        behavior_pdf.origin = path_predicted_pos;
+
+        // Center PDF on path prediction, capped at reaction time (see circular prediction for rationale)
+        float behavior_predict_time = std::min(arrival_time, effective_reaction_time);
+        math::vector3 behavior_center = PhysicsPredictor::predict_on_path(target, behavior_predict_time);
+        behavior_pdf.origin = behavior_center;
 
         result.behavior_pdf = behavior_pdf;
 
@@ -4451,8 +4463,10 @@ namespace HybridPred
         BehaviorPDF behavior_pdf = BehaviorPredictor::build_pdf_from_history(tracker, arrival_time, move_speed);
         BehaviorPredictor::apply_contextual_factors(behavior_pdf, tracker, target);
 
-        // FIX: Center PDF on path prediction for consistency with circular/linear
-        behavior_pdf.origin = path_predicted_pos;
+        // Center PDF on path prediction, capped at reaction time (see circular prediction for rationale)
+        float behavior_predict_time = std::min(arrival_time, effective_reaction_time);
+        math::vector3 behavior_center = PhysicsPredictor::predict_on_path(target, behavior_predict_time);
+        behavior_pdf.origin = behavior_center;
         result.behavior_pdf = behavior_pdf;
 
         // Step 4: Compute confidence score
