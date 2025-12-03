@@ -521,9 +521,10 @@ namespace HybridPred
             }
         }
 
-        // Build juke sequence from recent direction changes
+        // EVENT-BASED JUKE SEQUENCE: Only record state transitions, not every sample
+        // This allows 8 sequence slots to capture multiple full juke cycles (0.6-1.0s each)
+        // instead of just 0.4s of raw samples
         std::vector<int> old_sequence = dodge_pattern_.juke_sequence;  // Save for comparison
-        dodge_pattern_.juke_sequence.clear();
         constexpr size_t MAX_SEQUENCE_LENGTH = 8;
 
         // Track juke events for magnitude measurement
@@ -532,9 +533,11 @@ namespace HybridPred
         math::vector3 juke_ref_dir{};  // Direction before juke started
         bool tracking_juke = false;
 
-        for (size_t i = movement_history_.size() > MAX_SEQUENCE_LENGTH + 1 ?
-            movement_history_.size() - MAX_SEQUENCE_LENGTH : 1;
-            i < movement_history_.size(); ++i)
+        // Process recent movement history to detect state transitions
+        // Note: We check ALL recent history (not just 8 samples) to properly detect transitions
+        size_t start_idx = movement_history_.size() > 40 ? movement_history_.size() - 40 : 1;
+
+        for (size_t i = start_idx; i < movement_history_.size(); ++i)
         {
             const auto& prev = movement_history_[i - 1];
             const auto& curr = movement_history_[i];
@@ -597,14 +600,32 @@ namespace HybridPred
                 tracking_juke = false;
             }
 
-            // UPDATE N-GRAM TRANSITIONS: Record transition from previous move to current
-            if (!dodge_pattern_.juke_sequence.empty())
+            // EVENT-BASED RECORDING: Only add to sequence when state actually CHANGES
+            // This prevents filling the sequence with repeated samples of the same move
+            if (current_move != 0 && current_move != dodge_pattern_.last_recorded_move)
             {
-                int prev_move = dodge_pattern_.juke_sequence.back();
-                dodge_pattern_.ngram_transitions[prev_move][current_move]++;
-            }
+                // Update n-gram transitions BEFORE adding new move
+                if (!dodge_pattern_.juke_sequence.empty())
+                {
+                    int prev_move = dodge_pattern_.juke_sequence.back();
+                    dodge_pattern_.ngram_transitions[prev_move][current_move]++;
+                }
 
-            dodge_pattern_.juke_sequence.push_back(current_move);
+                // Record the state transition
+                dodge_pattern_.juke_sequence.push_back(current_move);
+                dodge_pattern_.last_recorded_move = current_move;
+
+                // Maintain size limit (8 state transitions, not time-based)
+                if (dodge_pattern_.juke_sequence.size() > MAX_SEQUENCE_LENGTH)
+                {
+                    dodge_pattern_.juke_sequence.erase(dodge_pattern_.juke_sequence.begin());
+                }
+            }
+            else if (current_move == 0 && dodge_pattern_.last_recorded_move != 0)
+            {
+                // Transition back to straight - record it
+                dodge_pattern_.last_recorded_move = 0;
+            }
         }
 
         // BAYESIAN TRUST UPDATE: Check if our pattern prediction was correct
@@ -803,6 +824,34 @@ namespace HybridPred
         else
         {
             average_turn_angle_ = 0.f;
+        }
+
+        // HARD JUKE DETECTION: Check for sharp turns (>45°) in recent history
+        // Used for confidence fast-track - bypass sample count penalty
+        recent_hard_juke_ = false;
+        if (movement_history_.size() >= 3)
+        {
+            size_t check_count = std::min(movement_history_.size(), size_t(5));
+            for (size_t i = 1; i < check_count; ++i)
+            {
+                size_t idx = movement_history_.size() - i;
+                const auto& curr = movement_history_[idx];
+                const auto& prev = movement_history_[idx - 1];
+
+                if (curr.velocity.magnitude() > 100.f && prev.velocity.magnitude() > 100.f)
+                {
+                    math::vector3 v1 = curr.velocity.normalized();
+                    math::vector3 v2 = prev.velocity.normalized();
+                    float dot = v1.dot(v2);
+
+                    // dot < 0.707 means angle > 45 degrees (sharp turn)
+                    if (dot < 0.707f)
+                    {
+                        recent_hard_juke_ = true;
+                        break;
+                    }
+                }
+            }
         }
 
         // Compute juke interval statistics
@@ -3177,10 +3226,22 @@ namespace HybridPred
         confidence /= mobility_penalty;
 
         // Sample size factor - more data = more confidence
+        // FAST-TRACK: If target made a recent sharp turn (>45°), bypass most of the penalty
+        // Sharp turns give us high-quality data about their behavior even with few samples
         const auto& history = tracker.get_history();
         if (history.size() < MIN_SAMPLES_FOR_BEHAVIOR)
         {
-            confidence *= static_cast<float>(history.size()) / MIN_SAMPLES_FOR_BEHAVIOR;
+            if (tracker.has_recent_hard_juke())
+            {
+                // Sharp turn detected - minimal penalty (95% confidence with early data)
+                // We know they're actively dodging, which is valuable information
+                confidence *= 0.95f;
+            }
+            else
+            {
+                // Standard ramp-up: need more samples to trust behavior
+                confidence *= static_cast<float>(history.size()) / MIN_SAMPLES_FOR_BEHAVIOR;
+            }
         }
 
         // Animation lock boost - target is locked in animation

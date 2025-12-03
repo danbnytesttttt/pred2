@@ -364,6 +364,7 @@ namespace HybridPred
 
         // Pattern repetition detection
         std::vector<int> juke_sequence;          // Last 8 direction changes: -1=left, 0=straight, 1=right
+        int last_recorded_move;                  // Last move that was recorded to sequence (for event-based filtering)
         float pattern_confidence;                // [0,1] Confidence in detected pattern
         math::vector3 predicted_next_direction;  // Unit vector of predicted next move
         bool has_pattern;                        // True if repeating pattern detected
@@ -423,7 +424,7 @@ namespace HybridPred
             linear_continuation_prob(0.95f), reaction_delay(200.f),
             pattern_confidence(0.f), predicted_next_direction{}, has_pattern(false),
             last_pattern_update_time(0.f), pattern_trust{}, last_predicted_juke(0),
-            awaiting_juke_result(false), average_juke_magnitude(0.f) {
+            awaiting_juke_result(false), average_juke_magnitude(0.f), last_recorded_move(0) {
         }
     };
 
@@ -562,6 +563,7 @@ namespace HybridPred
         // Average turn angle tracking (lightweight juke detection)
         std::deque<float> recent_turn_angles_;  // Last 6-8 turn angles
         float average_turn_angle_ = 0.f;        // Running average for quick confidence checks
+        bool recent_hard_juke_ = false;         // True if sharp turn (>45°) detected in last 5 samples
 
         // Auto-attack tracking
         float last_aa_time_;
@@ -620,6 +622,9 @@ namespace HybridPred
         // Get average turn angle (lightweight juke detection)
         // Low angle (< 15°) = running straight, High angle (> 60°) = dancing/juking
         float get_average_turn_angle() const { return average_turn_angle_; }
+
+        // Check if target made a recent sharp turn (for confidence fast-track)
+        bool has_recent_hard_juke() const { return recent_hard_juke_; }
 
         // Opportunistic casting - get or create window for spell slot
         OpportunityWindow& get_opportunity_window(int spell_slot) const;
