@@ -3319,20 +3319,22 @@ namespace HybridPred
         float confidence)
     {
         // Grid search over reachable region
-        constexpr int GRID_SEARCH_SIZE = 16;
+        // FIX: Use configurable resolution instead of hardcoded value
+        // Default: 8x8 = 64 samples (balanced), User can increase to 16x16 = 256 (high quality)
+        int grid_size = PredictionSettings::get().grid_search_resolution;
         float best_score = -1.f;
         math::vector3 best_position = reachable_region.center;
 
         float search_radius = reachable_region.max_radius;
-        float step = search_radius * 2.f / GRID_SEARCH_SIZE;
+        float step = search_radius * 2.f / grid_size;
 
-        for (int i = 0; i < GRID_SEARCH_SIZE; ++i)
+        for (int i = 0; i < grid_size; ++i)
         {
-            for (int j = 0; j < GRID_SEARCH_SIZE; ++j)
+            for (int j = 0; j < grid_size; ++j)
             {
                 math::vector3 test_pos = reachable_region.center;
-                test_pos.x += (i - GRID_SEARCH_SIZE / 2) * step;
-                test_pos.z += (j - GRID_SEARCH_SIZE / 2) * step;
+                test_pos.x += (i - grid_size / 2) * step;
+                test_pos.z += (j - grid_size / 2) * step;
 
                 float score = evaluate_hit_chance_at_point(
                     test_pos,

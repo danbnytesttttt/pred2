@@ -287,9 +287,19 @@ namespace HybridPred
             physics_weight = std::min(physics_weight + close_range_boost, 0.90f);  // Cap at 90% for point-blank
         }
 
-        // Use weighted LINEAR interpolation
-        // Physics is the foundation, behavior adjusts within those constraints
-        float fused = physics_weight * physics_prob + (1.0f - physics_weight) * behavior_prob;
+        // PHYSICS AS HARD CONSTRAINT (VETO LOGIC):
+        // If physics says a position is impossible (0.0), the result must be 0.0
+        // Physics acts as a constraint (geometry), Behavior refines within valid region
+        //
+        // OLD BUG: Linear interpolation allowed behavior to "save" impossible predictions
+        //   Example: physics=0.0, behavior=0.9 → 0.6*0.0 + 0.4*0.9 = 0.36 (WRONG!)
+        //
+        // NEW: Physics multiplies the weighted behavior contribution
+        //   Formula: fused = physics × (physics_weight + (1-physics_weight) × behavior)
+        //   Example: physics=0.0, behavior=0.9 → 0.0 × (0.6 + 0.4*0.9) = 0.0 (CORRECT!)
+        //   Example: physics=1.0, behavior=0.5 → 1.0 × (0.6 + 0.4*0.5) = 0.8 (balanced)
+        //   Example: physics=0.5, behavior=0.8 → 0.5 × (0.6 + 0.4*0.8) = 0.46 (smooth)
+        float fused = physics_prob * (physics_weight + (1.0f - physics_weight) * behavior_prob);
 
         // Apply confidence as a multiplier
         // Lower safety floor to allow proper penalization from edge cases
