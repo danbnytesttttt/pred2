@@ -13,6 +13,15 @@ std::string MyHeroNamePredCore;
 // Menu category pointer
 menu_category* g_menu = nullptr;
 
+// Global map to store hit chance per target (for display)
+std::unordered_map<uint32_t, float> g_hit_chance_map;
+
+// Helper function to update hit chance for display (called from prediction code)
+void update_hit_chance_display(uint32_t target_id, float hit_chance)
+{
+    g_hit_chance_map[target_id] = hit_chance;
+}
+
 // Update callback function
 void __fastcall on_update()
 {
@@ -37,6 +46,50 @@ void __fastcall on_draw()
         if (PredictionSettings::get().enable_visuals)
         {
             PredictionVisuals::draw_continuous_prediction(current_time);
+        }
+
+        // Draw hit chance % below enemy feet
+        if (PredictionSettings::get().enable_hit_chance_display && g_sdk->object_manager)
+        {
+            auto enemies = g_sdk->object_manager->get_enemy_heroes();
+            for (auto* enemy : enemies)
+            {
+                if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                    continue;
+
+                // Check if we have a hit chance for this enemy
+                uint32_t enemy_id = enemy->get_network_id();
+                auto it = g_hit_chance_map.find(enemy_id);
+                if (it != g_hit_chance_map.end())
+                {
+                    float hit_chance = it->second;
+
+                    // Get enemy position (below feet)
+                    math::vector3 enemy_pos = enemy->get_position();
+                    enemy_pos.y -= 50.f;  // Slightly below feet
+
+                    // Convert to screen space
+                    math::vector2 screen_pos = g_sdk->renderer->world_to_screen(enemy_pos);
+
+                    // Format text
+                    char text_buffer[32];
+                    snprintf(text_buffer, sizeof(text_buffer), "%.0f%%", hit_chance * 100.f);
+
+                    // Choose color based on hit chance
+                    uint32_t color;
+                    if (hit_chance >= 0.75f)
+                        color = 0xFF00FF00;  // Green (high)
+                    else if (hit_chance >= 0.5f)
+                        color = 0xFFFFFF00;  // Yellow (medium)
+                    else if (hit_chance >= 0.25f)
+                        color = 0xFFFF8800;  // Orange (low)
+                    else
+                        color = 0xFFFF0000;  // Red (very low)
+
+                    // Draw text centered
+                    g_sdk->renderer->add_text(text_buffer, 14.f, screen_pos, 0x01, color);  // 0x01 = centered
+                }
+            }
         }
     }
     catch (...) { /* Prevent any crash from draw callback */ }
@@ -84,6 +137,10 @@ namespace Prediction
 
             g_menu->add_checkbox("visuals", "Draw Predictions", false, [](bool value) {
                 PredictionSettings::get().enable_visuals = value;
+                });
+
+            g_menu->add_checkbox("hit_chance_display", "Show Hit Chance %", false, [](bool value) {
+                PredictionSettings::get().enable_hit_chance_display = value;
                 });
 
             g_menu->add_checkbox("physics_measure", "Measure Physics (Calibration)", false, [](bool value) {

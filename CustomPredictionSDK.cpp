@@ -10,6 +10,9 @@
 #include <sstream>
 #include <chrono>
 
+// Extern function to update hit chance display (defined in DannyPredPlugin.cpp)
+extern void update_hit_chance_display(uint32_t target_id, float hit_chance);
+
 // =============================================================================
 // TARGETED SPELL PREDICTION
 // =============================================================================
@@ -822,6 +825,12 @@ pred_sdk::pred_data CustomPredictionSDK::convert_to_pred_data(
             spell_data.projectile_speed,
             spell_data.delay
         );
+    }
+
+    // Update hit chance display (if enabled)
+    if (target && target->is_valid() && PredictionSettings::get().enable_hit_chance_display)
+    {
+        update_hit_chance_display(target->get_network_id(), hybrid_result.hit_chance);
     }
 
     return result;
