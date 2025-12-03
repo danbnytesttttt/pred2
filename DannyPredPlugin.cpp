@@ -51,10 +51,18 @@ void __fastcall on_draw()
         // Draw hit chance % below enemy feet
         if (PredictionSettings::get().enable_hit_chance_display && g_sdk->object_manager)
         {
-            auto enemies = g_sdk->object_manager->get_enemy_heroes();
-            for (auto* enemy : enemies)
+            auto* local_player = g_sdk->object_manager->get_local_player();
+            if (!local_player) return;
+
+            int local_team = local_player->get_team_id();
+            auto heroes = g_sdk->object_manager->get_heroes();
+            for (auto* enemy : heroes)
             {
                 if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                    continue;
+
+                // Skip allies - only show hit chance for enemies
+                if (enemy->get_team_id() == local_team)
                     continue;
 
                 // Check if we have a hit chance for this enemy

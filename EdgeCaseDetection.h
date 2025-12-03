@@ -58,7 +58,8 @@ namespace EdgeCases
 
         auto check_buff = [&](const std::string& name, const std::string& type)
         {
-            auto buff = target->get_buff_by_name(name);
+            std::string buff_name = name;  // Make mutable copy for API
+            auto buff = target->get_buff_by_name(buff_name);
             if (buff && buff->is_active())
             {
                 float end = buff->get_end_time();
