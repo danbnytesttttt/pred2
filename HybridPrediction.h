@@ -639,6 +639,27 @@ namespace HybridPred
     // PHYSICS PREDICTION ENGINE
     // =========================================================================
 
+    // =========================================================================
+    // MULTI-TARGET AOE OPTIMIZATION
+    // =========================================================================
+
+    /**
+     * Circle for Welzl's algorithm (Minimum Enclosing Circle)
+     */
+    struct Circle
+    {
+        math::vector3 center;
+        float radius;
+
+        Circle() : center{}, radius(0.f) {}
+        Circle(const math::vector3& c, float r) : center(c), radius(r) {}
+
+        bool contains(const math::vector3& point) const
+        {
+            return (point - center).magnitude() <= radius + 0.01f;  // Small epsilon for float precision
+        }
+    };
+
     /**
      * Pure kinematic prediction (deterministic)
      */
@@ -724,7 +745,27 @@ namespace HybridPred
             float cast_delay
         );
 
+        /**
+         * Find Minimum Enclosing Circle (MEC) for multi-target AOE
+         * Uses Welzl's algorithm - O(n) expected time
+         *
+         * Returns optimal circle that hits the most targets with smallest radius
+         * Perfect for instant AOE spells (Malphite R, Annie R, Orianna R)
+         */
+        static Circle compute_minimum_enclosing_circle(
+            const std::vector<math::vector3>& points
+        );
+
     private:
+        // Welzl's algorithm helpers
+        static Circle welzl_recursive(
+            std::vector<math::vector3>& points,
+            std::vector<math::vector3> boundary,
+            size_t n
+        );
+
+        static Circle make_circle_from_2_points(const math::vector3& p1, const math::vector3& p2);
+        static Circle make_circle_from_3_points(const math::vector3& p1, const math::vector3& p2, const math::vector3& p3);
         static float circle_circle_intersection_area(
             const math::vector3& c1, float r1,
             const math::vector3& c2, float r2
@@ -839,6 +880,24 @@ namespace HybridPred
             const math::vector3& source_pos,
             float projectile_radius,
             float confidence
+        );
+
+        /**
+         * Find optimal AOE position to hit multiple targets
+         * Uses Minimum Enclosing Circle (Welzl's algorithm) for fast AOE spells
+         * Ideal for instant or fast AOE (< 0.25s delay): Malphite R, Annie R, Orianna R, etc.
+         *
+         * @param source The casting champion
+         * @param targets All potential targets to consider
+         * @param spell Spell data (for range/radius)
+         * @param max_range Maximum cast range
+         * @return Optimal cast position (may be zero vector if no valid position found)
+         */
+        static math::vector3 find_multi_target_aoe_position(
+            game_object* source,
+            const std::vector<game_object*>& targets,
+            const pred_sdk::spell_data& spell,
+            float max_range
         );
 
     private:

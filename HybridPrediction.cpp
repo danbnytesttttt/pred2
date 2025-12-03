@@ -2149,6 +2149,101 @@ namespace HybridPred
         return cast_delay + (distance / projectile_speed);
     }
 
+    // =========================================================================
+    // MINIMUM ENCLOSING CIRCLE (Welzl's Algorithm) for Multi-Target AOE
+    // =========================================================================
+
+    Circle PhysicsPredictor::make_circle_from_2_points(const math::vector3& p1, const math::vector3& p2)
+    {
+        math::vector3 center = (p1 + p2) * 0.5f;
+        float radius = (p2 - p1).magnitude() * 0.5f;
+        return Circle(center, radius);
+    }
+
+    Circle PhysicsPredictor::make_circle_from_3_points(const math::vector3& p1, const math::vector3& p2, const math::vector3& p3)
+    {
+        // Use circumcircle formula for 2D points (ignore Y coordinate)
+        float ax = p1.x, az = p1.z;
+        float bx = p2.x, bz = p2.z;
+        float cx = p3.x, cz = p3.z;
+
+        float d = 2.f * (ax * (bz - cz) + bx * (cz - az) + cx * (az - bz));
+
+        if (std::abs(d) < 0.001f)
+        {
+            // Points are collinear - return circle from two farthest points
+            float dist12 = (p2 - p1).magnitude();
+            float dist13 = (p3 - p1).magnitude();
+            float dist23 = (p3 - p2).magnitude();
+
+            if (dist12 >= dist13 && dist12 >= dist23)
+                return make_circle_from_2_points(p1, p2);
+            else if (dist13 >= dist23)
+                return make_circle_from_2_points(p1, p3);
+            else
+                return make_circle_from_2_points(p2, p3);
+        }
+
+        float ux = ((ax * ax + az * az) * (bz - cz) + (bx * bx + bz * bz) * (cz - az) + (cx * cx + cz * cz) * (az - bz)) / d;
+        float uz = ((ax * ax + az * az) * (cx - bx) + (bx * bx + bz * bz) * (ax - cx) + (cx * cx + cz * cz) * (bx - ax)) / d;
+
+        math::vector3 center(ux, p1.y, uz);  // Use Y from first point
+        float radius = (p1 - center).magnitude();
+
+        return Circle(center, radius);
+    }
+
+    Circle PhysicsPredictor::welzl_recursive(
+        std::vector<math::vector3>& points,
+        std::vector<math::vector3> boundary,
+        size_t n)
+    {
+        // Base cases
+        if (n == 0 || boundary.size() == 3)
+        {
+            if (boundary.size() == 0)
+                return Circle();
+            else if (boundary.size() == 1)
+                return Circle(boundary[0], 0.f);
+            else if (boundary.size() == 2)
+                return make_circle_from_2_points(boundary[0], boundary[1]);
+            else
+                return make_circle_from_3_points(boundary[0], boundary[1], boundary[2]);
+        }
+
+        // Pick a random point
+        size_t idx = n - 1;
+        math::vector3 p = points[idx];
+
+        // Recursive call without p
+        Circle circle = welzl_recursive(points, boundary, n - 1);
+
+        // If p is inside circle, return it
+        if (circle.contains(p))
+            return circle;
+
+        // Otherwise, p must be on the boundary
+        boundary.push_back(p);
+        return welzl_recursive(points, boundary, n - 1);
+    }
+
+    Circle PhysicsPredictor::compute_minimum_enclosing_circle(const std::vector<math::vector3>& points)
+    {
+        if (points.empty())
+            return Circle();
+
+        if (points.size() == 1)
+            return Circle(points[0], 0.f);
+
+        // Make a mutable copy for Welzl's algorithm
+        std::vector<math::vector3> points_copy = points;
+
+        // Randomize for expected O(n) time (avoid worst case)
+        std::random_shuffle(points_copy.begin(), points_copy.end());
+
+        return welzl_recursive(points_copy, std::vector<math::vector3>(), points_copy.size());
+    }
+
     float PhysicsPredictor::circle_circle_intersection_area(
         const math::vector3& c1, float r1,
         const math::vector3& c2, float r2)
@@ -3222,6 +3317,107 @@ namespace HybridPred
                     projectile_radius,
                     confidence
                 );
+            }
+        }
+
+        return best_position;
+    }
+
+    math::vector3 HybridFusionEngine::find_multi_target_aoe_position(
+        game_object* source,
+        const std::vector<game_object*>& targets,
+        const pred_sdk::spell_data& spell,
+        float max_range)
+    {
+        if (!source || targets.empty())
+        {
+            return math::vector3{};
+        }
+
+        math::vector3 source_pos = source->get_position();
+        float spell_radius = spell.projectile_radius;
+
+        // Collect valid target positions (server positions for accuracy)
+        std::vector<math::vector3> target_positions;
+        target_positions.reserve(targets.size());
+
+        for (game_object* target : targets)
+        {
+            if (!target || !target->is_valid() || target->is_dead())
+                continue;
+
+            // Use server position for accuracy
+            math::vector3 target_pos = target->get_server_position();
+            float distance = (target_pos - source_pos).magnitude();
+
+            // Only consider targets within range
+            if (distance <= max_range)
+            {
+                target_positions.push_back(target_pos);
+            }
+        }
+
+        // Need at least 1 target
+        if (target_positions.empty())
+        {
+            return math::vector3{};
+        }
+
+        // For single target, just return their position
+        if (target_positions.size() == 1)
+        {
+            return target_positions[0];
+        }
+
+        // Use MEC algorithm to find optimal AOE center
+        PhysicsPredictor::Circle mec = PhysicsPredictor::compute_minimum_enclosing_circle(target_positions);
+
+        // Verify the MEC center is within cast range
+        float center_distance = (mec.center - source_pos).magnitude();
+
+        if (center_distance <= max_range)
+        {
+            // Check if all targets are within the spell radius
+            bool all_hit = true;
+            for (const auto& pos : target_positions)
+            {
+                float dist_from_center = (pos - mec.center).magnitude();
+                if (dist_from_center > spell_radius)
+                {
+                    all_hit = false;
+                    break;
+                }
+            }
+
+            // If MEC works perfectly, use it
+            if (all_hit)
+            {
+                return mec.center;
+            }
+        }
+
+        // Fallback: If MEC center is out of range or doesn't hit all targets,
+        // find the position that maximizes hit count within range
+        math::vector3 best_position = target_positions[0];
+        int best_hit_count = 0;
+
+        for (const auto& candidate_pos : target_positions)
+        {
+            // Count how many targets would be hit if we cast at this position
+            int hit_count = 0;
+            for (const auto& target_pos : target_positions)
+            {
+                float dist = (target_pos - candidate_pos).magnitude();
+                if (dist <= spell_radius)
+                {
+                    hit_count++;
+                }
+            }
+
+            if (hit_count > best_hit_count)
+            {
+                best_hit_count = hit_count;
+                best_position = candidate_pos;
             }
         }
 
