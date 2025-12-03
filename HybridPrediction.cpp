@@ -1958,9 +1958,14 @@ namespace HybridPred
         float projectile_radius,
         const ReachableRegion& reachable_region)
     {
-        // CRITICAL: Check for zero area - target cannot dodge
+        // CRITICAL FIX: Check for zero area - target cannot dodge (CC'd/instant spell)
+        // Hit probability is BINARY: 1.0 if cast position is within spell radius, 0.0 otherwise
+        // BUG FIX: Previously returned 1.0 for ANY cast position, even miles away!
         if (reachable_region.area < EPSILON)
-            return 1.0f;  // No dodge time = guaranteed hit
+        {
+            float dist = (cast_position - reachable_region.center).magnitude();
+            return (dist <= projectile_radius) ? 1.0f : 0.0f;
+        }
 
         // Distance from cast position to predicted target center
         math::vector3 to_cast = cast_position - reachable_region.center;
