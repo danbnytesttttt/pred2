@@ -143,10 +143,6 @@ namespace Prediction
                 PredictionSettings::get().enable_hit_chance_display = value;
                 });
 
-            g_menu->add_checkbox("physics_measure", "Measure Physics (Calibration)", false, [](bool value) {
-                PredictionSettings::get().enable_physics_measurement = value;
-                });
-
             g_menu->add_hotkey("output_telemetry", "Output Telemetry Report", 0, false, false, [](std::string*, bool pressed) {
                 if (pressed && g_sdk)
                 {

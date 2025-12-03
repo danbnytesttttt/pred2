@@ -39,7 +39,6 @@ namespace PredictionSettings
         bool enable_telemetry = true;       // Log predictions to file for analysis
         bool enable_visuals = false;        // Draw prediction indicators (disabled by default)
         bool enable_hit_chance_display = false;  // Show hit chance % below enemy feet
-        bool enable_physics_measurement = false;  // Measure acceleration/deceleration (for calibration)
 
         // Edge case toggles
         bool enable_dash_prediction = true;  // Predict at dash endpoints
