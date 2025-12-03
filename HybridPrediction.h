@@ -559,6 +559,10 @@ namespace HybridPred
         std::vector<float> direction_change_times_;
         std::vector<float> direction_change_angles_;
 
+        // Average turn angle tracking (lightweight juke detection)
+        std::deque<float> recent_turn_angles_;  // Last 6-8 turn angles
+        float average_turn_angle_ = 0.f;        // Running average for quick confidence checks
+
         // Auto-attack tracking
         float last_aa_time_;
         std::vector<float> post_aa_movement_delays_;
@@ -612,6 +616,10 @@ namespace HybridPred
 
         // Get last update time (for staleness detection)
         float get_last_update_time() const { return last_update_time_; }
+
+        // Get average turn angle (lightweight juke detection)
+        // Low angle (< 15°) = running straight, High angle (> 60°) = dancing/juking
+        float get_average_turn_angle() const { return average_turn_angle_; }
 
         // Opportunistic casting - get or create window for spell slot
         OpportunityWindow& get_opportunity_window(int spell_slot) const;

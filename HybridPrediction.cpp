@@ -757,7 +757,11 @@ namespace HybridPred
         direction_change_angles_.clear();
 
         if (movement_history_.size() < 3)
+        {
+            // Not enough data - reset average
+            average_turn_angle_ = 0.f;
             return;
+        }
 
         for (size_t i = 2; i < movement_history_.size(); ++i)
         {
@@ -773,12 +777,32 @@ namespace HybridPred
             math::vector3 curr_dir = curr.velocity.normalized();
 
             float angle = std::acos(std::clamp(prev_dir.dot(curr_dir), -1.f, 1.f));
+            float angle_degrees = angle * (180.f / PI);
 
+            // Track ALL turn angles for average (not just significant ones > 30°)
+            recent_turn_angles_.push_back(angle_degrees);
+            if (recent_turn_angles_.size() > 8)  // Keep last 8 angles
+                recent_turn_angles_.pop_front();
+
+            // Also track significant changes (> 30°) for existing logic
             if (angle > 0.5f) // ~30 degrees
             {
                 direction_change_times_.push_back(curr.timestamp);
                 direction_change_angles_.push_back(angle);
             }
+        }
+
+        // Calculate running average turn angle (lightweight juke detection)
+        if (!recent_turn_angles_.empty())
+        {
+            float sum = 0.f;
+            for (float angle : recent_turn_angles_)
+                sum += angle;
+            average_turn_angle_ = sum / recent_turn_angles_.size();
+        }
+        else
+        {
+            average_turn_angle_ = 0.f;
         }
 
         // Compute juke interval statistics
@@ -3089,43 +3113,34 @@ namespace HybridPred
             }
         }
 
-        // Straight-line movement boost - modest increase for predictable movement
-        // Check if target has been moving in consistent direction
-        if (history.size() >= 6)
+        // AVERAGE TURN ANGLE - Lightweight juke detection (O(1) vs O(n) loop)
+        // Low angle = running straight (predictable)
+        // High angle = dancing/juking (unpredictable)
+        float avg_turn_angle = tracker.get_average_turn_angle();
+
+        if (avg_turn_angle < 15.f)
         {
-            bool is_straight = true;
-            math::vector3 base_vel = history.back().velocity;
-            float base_speed = base_vel.magnitude();
-
-            if (base_speed > 50.f)
-            {
-                math::vector3 base_dir = base_vel / base_speed;
-
-                for (size_t i = history.size() - 6; i < history.size() - 1; ++i)
-                {
-                    float speed = history[i].velocity.magnitude();
-                    if (speed < 50.f)
-                    {
-                        is_straight = false;
-                        break;
-                    }
-
-                    math::vector3 dir = history[i].velocity / speed;
-                    float dot = base_dir.x * dir.x + base_dir.z * dir.z;
-                    if (dot < 0.95f)  // ~18 degrees tolerance
-                    {
-                        is_straight = false;
-                        break;
-                    }
-                }
-
-                if (is_straight)
-                {
-                    // Modest boost for straight-line movement
-                    confidence *= 1.08f;
-                }
-            }
+            // Running nearly straight - boost confidence
+            // < 15° = very predictable movement (kiting, fleeing, chasing)
+            confidence *= 1.12f;
         }
+        else if (avg_turn_angle < 30.f)
+        {
+            // Slightly curved but still predictable
+            confidence *= 1.05f;
+        }
+        else if (avg_turn_angle > 60.f)
+        {
+            // Dancing/juking heavily - penalize confidence
+            // > 60° = unpredictable sharp turns (dodging skillshots)
+            confidence *= 0.85f;
+        }
+        else if (avg_turn_angle > 45.f)
+        {
+            // Moderate juking
+            confidence *= 0.92f;
+        }
+        // 30-45° range = neutral, no modifier
 
         return std::clamp(confidence, 0.1f, 1.0f);
     }
