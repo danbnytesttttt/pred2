@@ -52,53 +52,48 @@ namespace EdgeCases
         if (!target || !target->is_valid())
             return info;
 
-        // Check Zhonya's Hourglass
-        std::string zhonyas_buff = "zhonyasringshield";
-        auto zhonyas = target->get_buff_by_name(zhonyas_buff);
-        if (zhonyas && zhonyas->is_active())
-        {
-            info.is_in_stasis = true;
-            info.end_time = zhonyas->get_end_time();
-            info.exit_position = target->get_position();
-            info.stasis_type = "zhonyas";
-            return info;
-        }
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
 
-        // Check Guardian Angel
-        std::string ga_buff = "willrevive";
-        auto ga = target->get_buff_by_name(ga_buff);
-        if (ga && ga->is_active())
+        auto check_buff = [&](const std::string& name, const std::string& type)
         {
-            info.is_in_stasis = true;
-            info.end_time = ga->get_end_time();
-            info.exit_position = target->get_position();
-            info.stasis_type = "guardian_angel";
-            return info;
-        }
+            auto buff = target->get_buff_by_name(name);
+            if (buff && buff->is_active())
+            {
+                float end = buff->get_end_time();
+                float duration_left = end - current_time;
 
-        // Check Bard R
-        std::string bard_buff = "bardrstasis";
-        auto bard_r = target->get_buff_by_name(bard_buff);
-        if (bard_r && bard_r->is_active())
-        {
-            info.is_in_stasis = true;
-            info.end_time = bard_r->get_end_time();
-            info.exit_position = target->get_position();
-            info.stasis_type = "bard_r";
-            return info;
-        }
+                // CRITICAL FIX: Ignore "permanent" buffs (like GA ready state)
+                // Real stasis is short (< 4s). If duration is huge, it's an item/passive indicator.
+                if (duration_left > 0.f && duration_left < 5.0f)
+                {
+                    info.is_in_stasis = true;
+                    info.end_time = end;
+                    info.exit_position = target->get_position();
+                    info.stasis_type = type;
+                    return true;
+                }
+            }
+            return false;
+        };
 
-        // Check Lissandra R (self-cast)
-        std::string liss_buff = "lissandrarstasis";
-        auto liss_r = target->get_buff_by_name(liss_buff);
-        if (liss_r && liss_r->is_active())
-        {
-            info.is_in_stasis = true;
-            info.end_time = liss_r->get_end_time();
-            info.exit_position = target->get_position();
-            info.stasis_type = "lissandra_r";
-            return info;
-        }
+        // Zhonya's Hourglass (Standard)
+        if (check_buff("zhonyasringshield", "zhonyas")) return info;
+
+        // Guardian Angel (Reviving)
+        // Note: "willrevive" is often the 'ready' buff. The actual reviving buff
+        // implies stasis. We strictly filter by duration < 5s to be safe.
+        if (check_buff("willrevive", "guardian_angel")) return info;
+
+        // Bard R
+        if (check_buff("bardrstasis", "bard_r")) return info;
+
+        // Lissandra R (Self)
+        if (check_buff("lissandrarstasis", "lissandra_r")) return info;
+
+        // Zac Passive (Reviving states often use stasis logic)
+        if (check_buff("zacrebirthready", "zac_passive")) return info;
 
         return info;
     }
