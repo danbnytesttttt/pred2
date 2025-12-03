@@ -683,7 +683,9 @@ namespace HybridPred
                         math::vector3 vel_dir = latest.velocity / vel_mag;
                         // Perpendicular: 90° rotation in XZ plane
                         math::vector3 perpendicular(-vel_dir.z, 0.f, vel_dir.x);
-                        dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(-last_juke);
+                        // FIX: Direction = perpendicular * (-juke_value)
+                        // predicted_juke = -last_juke, so direction = perpendicular * last_juke
+                        dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(last_juke);
 
                         // Track prediction for Bayesian trust update
                         dodge_pattern_.last_predicted_juke = -last_juke;  // Opposite of last
@@ -733,7 +735,8 @@ namespace HybridPred
                             {
                                 math::vector3 vel_dir = latest.velocity / vel_mag;
                                 math::vector3 perpendicular(-vel_dir.z, 0.f, vel_dir.x);
-                                dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(next_in_sequence);
+                                // FIX: Direction = perpendicular * (-juke_value)
+                                dodge_pattern_.predicted_next_direction = perpendicular * static_cast<float>(-next_in_sequence);
 
                                 // Track prediction for Bayesian trust update
                                 dodge_pattern_.last_predicted_juke = next_in_sequence;
