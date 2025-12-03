@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cfloat>
 #include <algorithm>
+#include <random>
 #include <sstream>
 
 // Reasoning string generation (expensive - disable for production)
@@ -2288,7 +2289,10 @@ namespace HybridPred
         std::vector<math::vector3> points_copy = points;
 
         // Randomize for expected O(n) time (avoid worst case)
-        std::random_shuffle(points_copy.begin(), points_copy.end());
+        // Use static RNG to avoid reinitialization overhead
+        static std::random_device rd;
+        static std::mt19937 rng(rd());
+        std::shuffle(points_copy.begin(), points_copy.end(), rng);
 
         return welzl_recursive(points_copy, std::vector<math::vector3>(), points_copy.size());
     }
@@ -3396,7 +3400,7 @@ namespace HybridPred
         }
 
         math::vector3 source_pos = source->get_position();
-        float spell_radius = spell.projectile_radius;
+        float spell_radius = spell.radius;
 
         // Collect valid target positions (server positions for accuracy)
         std::vector<math::vector3> target_positions;
@@ -3431,7 +3435,7 @@ namespace HybridPred
         }
 
         // Use MEC algorithm to find optimal AOE center
-        PhysicsPredictor::Circle mec = PhysicsPredictor::compute_minimum_enclosing_circle(target_positions);
+        Circle mec = PhysicsPredictor::compute_minimum_enclosing_circle(target_positions);
 
         // Verify the MEC center is within cast range
         float center_distance = (mec.center - source_pos).magnitude();
