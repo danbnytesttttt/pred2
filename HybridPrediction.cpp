@@ -4445,16 +4445,18 @@ namespace HybridPred
         float dynamic_accel = tracker.has_measured_physics() ?
             tracker.get_measured_acceleration() : DEFAULT_ACCELERATION;
 
-        // FIX: Pass zero velocity to avoid drift overshoot (same as circular/linear)
-        // Path prediction already handles movement; drift would double-compensate
-        // BUG FIX: Should use dodge_time not arrival_time (was giving 200ms extra dodge time!)
+        // DOUBLE DRIFT FIX: Use current position + velocity, matching circular/linear/targeted
+        // OLD BUG: Used path_predicted_pos (future) + zero velocity, causing reachable region
+        // to be centered at arrival position, then compute_reachable_region added drift AGAIN
+        // NEW FIX: Start from current position, let compute_reachable_region handle all movement
         ReachableRegion reachable_region = PhysicsPredictor::compute_reachable_region(
-            path_predicted_pos,
-            math::vector3(0, 0, 0),  // Zero velocity since path prediction handles movement
-            dodge_time,  // FIX: was arrival_time - caused reachable region to be too large!
-            effective_move_speed,  // Use effective speed (0 if CC'd)
+            target->get_server_position(),   // Start from NOW (not future)
+            tracker.get_current_velocity(),  // Velocity for drift calculation
+            arrival_time,  // Full time window
+            effective_move_speed,
             DEFAULT_TURN_RATE,
-            dynamic_accel
+            dynamic_accel,
+            effective_reaction_time  // Drift/dodge split
         );
 
         result.reachable_region = reachable_region;
