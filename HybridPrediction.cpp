@@ -217,40 +217,7 @@ namespace HybridPred
             {
                 snapshot.velocity = compute_velocity(movement_history_.back(), snapshot);
 
-                // ================================================================
-                // PHYSICS MEASUREMENT: Determine real acceleration/deceleration
-                // Enable with enable_physics_measurement setting (separate from debug)
-                // ================================================================
-                if (PredictionSettings::get().enable_physics_measurement && g_sdk)
-                {
-                    float current_speed = snapshot.velocity.magnitude();
-                    float prev_speed = movement_history_.back().velocity.magnitude();
-                    float dt = current_time - movement_history_.back().timestamp;
-
-                    // Detect "Start from Standstill" (0 -> Moving)
-                    // Clean signal for measuring base acceleration
-                    if (prev_speed < 10.f && current_speed > 100.f && dt > 0.001f)
-                    {
-                        float accel = (current_speed - prev_speed) / dt;
-                        char log_msg[256];
-                        snprintf(log_msg, sizeof(log_msg),
-                            "[PHYSICS] ACCEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
-                            prev_speed, current_speed, dt, accel);
-                        g_sdk->log_console(log_msg);
-                    }
-
-                    // Detect "Stop from Sprint" (Moving -> 0)
-                    // Measures deceleration (braking)
-                    if (prev_speed > 300.f && current_speed < 50.f && dt > 0.001f)
-                    {
-                        float decel = (prev_speed - current_speed) / dt;
-                        char log_msg[256];
-                        snprintf(log_msg, sizeof(log_msg),
-                            "[PHYSICS] DECEL: %.0f -> %.0f in %.3fs = %.0f units/s^2",
-                            prev_speed, current_speed, dt, decel);
-                        g_sdk->log_console(log_msg);
-                    }
-                }
+                // Physics measurement code removed - calibration phase complete
 
                 // ================================================================
                 // DYNAMIC PHYSICS: Always measure acceleration/deceleration
@@ -5118,11 +5085,7 @@ namespace HybridPred
 
             last_update_time_ = current_time;
 
-            // Also measure self physics if physics measurement enabled
-            if (PredictionSettings::get().enable_physics_measurement)
-            {
-                measure_self_physics();
-            }
+            // Self physics measurement removed - calibration phase complete
         } // End master try
         catch (...) { /* Prevent any crash from update */ }
     }
