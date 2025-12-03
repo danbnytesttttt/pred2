@@ -2879,7 +2879,7 @@ namespace HybridPred
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            float observed_dodge_time = observed_magnitude / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
 
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
@@ -3566,7 +3566,7 @@ namespace HybridPred
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            float observed_dodge_time = observed_magnitude / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
 
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
@@ -4079,7 +4079,7 @@ namespace HybridPred
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            float observed_dodge_time = observed_magnitude / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
 
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
@@ -4328,7 +4328,7 @@ namespace HybridPred
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)
         {
-            float observed_dodge_time = (observed_magnitude * 1.2f) / effective_move_speed;
+            float observed_dodge_time = observed_magnitude / effective_move_speed;
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
 
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
