@@ -2708,23 +2708,42 @@ namespace HybridPred
                 }
                 else
                 {
-                    // ITERATIVE INTERCEPT: Refine estimate for accurate mid-dash hit
-                    // Problem: spell_travel_time is to dash_end, not mid-dash point
-                    // Solution: Iterate once to get better intercept estimate
+                    // ITERATIVE INTERCEPT: Solve for true geometric intercept point
+                    // Find progress p where: spell_arrival_time(p) == target_arrival_time(p)
+                    // This requires iteration because spell distance depends on intercept position
+                    //
+                    // OLD BUG: Used ratio spell_travel_time / dash_arrival_time, but these have
+                    // different starting points (my pos vs target pos), making ratio meaningless
+                    // NEW: Proper iterative solver that converges to true intercept geometry
 
-                    // Initial estimate using endpoint ratio
-                    float progress = spell_travel_time / edge_cases.dash.dash_arrival_time;
-                    math::vector3 intercept_pos = dash_start + dash_vector * progress;
+                    float progress = 0.5f;  // Start with midpoint guess
 
-                    // Refine: calculate actual travel time to estimated intercept
-                    float dist_to_intercept = (intercept_pos - source->get_position()).magnitude();
-                    float refined_travel_time = spell.delay;
-                    if (spell.projectile_speed > 0.f)
-                        refined_travel_time += dist_to_intercept / spell.projectile_speed;
+                    // Iterate to find true intercept (3 iterations sufficient for convergence)
+                    for (int iter = 0; iter < 3; ++iter)
+                    {
+                        // Calculate intercept position at current progress estimate
+                        math::vector3 intercept_pos = dash_start + dash_vector * progress;
 
-                    // Recalculate progress with refined time
-                    progress = refined_travel_time / edge_cases.dash.dash_arrival_time;
-                    progress = std::clamp(progress, 0.1f, 0.95f);  // Stay within dash
+                        // Time for spell to reach this intercept position
+                        float dist_to_intercept = (intercept_pos - source->get_position()).magnitude();
+                        float spell_time = spell.delay;
+                        if (spell.projectile_speed > 0.f)
+                            spell_time += dist_to_intercept / spell.projectile_speed;
+
+                        // Time for target to reach this intercept position
+                        float target_time = progress * edge_cases.dash.dash_arrival_time;
+
+                        // Adjust progress based on time difference
+                        // If spell arrives late (spell_time > target_time), aim earlier (decrease progress)
+                        // If spell arrives early (spell_time < target_time), aim later (increase progress)
+                        float time_error = spell_time - target_time;
+                        if (edge_cases.dash.dash_arrival_time > 0.f)
+                        {
+                            float adjustment = -time_error / edge_cases.dash.dash_arrival_time;
+                            progress = progress + adjustment * 0.5f;  // Damped for stability
+                            progress = std::clamp(progress, 0.1f, 0.95f);  // Stay within dash
+                        }
+                    }
 
                     cast_position = dash_start + dash_vector * progress;
 

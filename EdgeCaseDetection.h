@@ -133,7 +133,8 @@ namespace EdgeCases
             return optimal_cast_delay;  // Wait this long before casting
 
         // If we can cast now (spell will arrive after stasis + buffer)
-        if (optimal_cast_delay >= -0.1f && optimal_cast_delay < 0.f)
+        // FIXED: Include == 0 case (was causing false "impossible" when timing was exactly 0)
+        if (optimal_cast_delay >= -0.1f && optimal_cast_delay <= 0.f)
             return 0.f;  // Cast immediately
 
         // If stasis already ended, normal prediction
