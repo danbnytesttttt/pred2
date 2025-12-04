@@ -189,6 +189,54 @@ namespace HybridPred
     }
 
     /**
+     * Calculate effective reaction time accounting for Fog of War
+     *
+     * FOW GEOMETRY FIX:
+     * - Visible cast: Enemy sees animation, starts reacting during windup
+     *   effective_reaction = max(0.05, REACTION_TIME - cast_delay)
+     * - Hidden cast (FOW): Enemy can't see animation, only reacts to missile
+     *   effective_reaction = REACTION_TIME (full reaction time)
+     *
+     * This affects the reachable region calculation - hidden casts give enemies
+     * less time to dodge, making our prediction more accurate.
+     *
+     * @param source Our champion (to check if we're in FOW)
+     * @param target Enemy champion (to get their team ID)
+     * @param cast_delay Spell cast delay/windup time
+     * @return Effective reaction time in seconds
+     */
+    inline float get_effective_reaction_time(game_object* source, game_object* target, float cast_delay)
+    {
+        // Default: assume enemy can see us (visible cast)
+        bool is_hidden_from_enemy = false;
+
+        if (g_sdk && g_sdk->nav_mesh && source && target)
+        {
+            int enemy_team = target->get_team_id();
+            math::vector3 source_pos = source->get_position();
+
+            // Check if we're in fog of war for the enemy team
+            // This covers: brush (unwarded), behind walls, any fog condition
+            is_hidden_from_enemy = g_sdk->nav_mesh->is_in_fow_for_team(source_pos, enemy_team);
+        }
+
+        if (is_hidden_from_enemy)
+        {
+            // HIDDEN CAST: Enemy can't see our animation
+            // They only react when the projectile/effect appears (t = cast_delay)
+            // Full reaction time applies AFTER the spell launches
+            return HUMAN_REACTION_TIME;
+        }
+        else
+        {
+            // VISIBLE CAST: Enemy sees our animation, starts reacting immediately
+            // Their reaction time is consumed DURING our cast delay
+            // Example: 0.25s delay, 0.20s reaction → only 0.05s reaction left
+            return std::max(0.05f, HUMAN_REACTION_TIME - cast_delay);
+        }
+    }
+
+    /**
      * Fuse physics and behavior probabilities using weighted geometric mean
      * When behavior data is sparse, trust physics more. When abundant, blend equally.
      *

@@ -2355,21 +2355,32 @@ namespace HybridPred
             return cast_delay;  // Just the windup
         }
 
-        // CRITICAL: NO ping compensation needed!
-        // We're using get_server_position() for targets, which is the authoritative
-        // server position. Server position is already ~ping/2 ahead of client position.
-        // Adding ping compensation on top would cause DOUBLE COMPENSATION, making us
-        // predict 100-150ms too far ahead.
+        // PING COMPENSATION (Zero-Ping Fallacy Fix):
+        // Timeline of a spell cast:
+        // - t=0 (client): We press cast button, command packet sent
+        // - t=ping/2 (server): Server receives our cast command, windup starts
+        // - t=ping/2+delay (server): Projectile launches
+        // - t=ping/2+delay+travel (server): Projectile arrives
         //
-        // Timeline:
-        // - t=0: We cast (command sent to server)
-        // - t=delay: Projectile launches on our client
-        // - t=delay + travel: Projectile arrives
+        // get_server_position() is where they are NOW on the server (t=0).
+        // But our spell doesn't START until t=ping/2, by which time they've moved.
         //
-        // Server position already accounts for network lag - it's where the target IS
-        // on the server right now, not where they appear on our screen.
+        // We add ping/2 to account for the one-way packet travel time.
+        // This is the time between "we decide to cast" and "server starts our cast".
+        float ping_delay = 0.f;
+        if (g_sdk && g_sdk->net_client)
+        {
+            // Ping is round-trip in ms, divide by 2 for one-way, convert to seconds
+            float ping_ms = g_sdk->net_client->get_ping();
+            ping_delay = ping_ms / 2000.f;
 
-        return cast_delay + (distance / projectile_speed);
+            // Clamp to reasonable range (5ms - 150ms one-way)
+            // Very low ping: still some processing delay
+            // Very high ping: cap to avoid wild predictions
+            ping_delay = std::clamp(ping_delay, 0.005f, 0.15f);
+        }
+
+        return ping_delay + cast_delay + (distance / projectile_speed);
     }
 
     // =========================================================================
@@ -3119,15 +3130,10 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time accounting for human reaction
-        // FIX: Enemies react DURING cast animation, using up their reaction time
-        // By the time projectile launches, they've already been reacting/moving
-        // So we only subtract the reaction time that's LEFT OVER after the delay
-        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
-        // Examples:
-        //   Instant cast (delay=0s):    0.20s - 0s = 0.20s reaction needed
-        //   Jhin W (delay=0.25s):       max(0.05s, 0.20s - 0.25s) = 0.05s left
-        //   Xerath Q (delay=0.75s):     max(0.05s, 0.20s - 0.75s) = 0.05s left (almost full time!)
+        // Calculate effective reaction time accounting for FOW and cast delay
+        // FOW FIX: If we're hidden, enemies can't see our animation - they get full reaction time
+        // VISIBLE: Enemies react DURING cast animation, consuming reaction time
+        float effective_reaction_time = get_effective_reaction_time(source, target, spell.delay);
 
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
@@ -3859,15 +3865,10 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time accounting for human reaction
-        // FIX: Enemies react DURING cast animation, using up their reaction time
-        // By the time projectile launches, they've already been reacting/moving
-        // So we only subtract the reaction time that's LEFT OVER after the delay
-        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
-        // Examples:
-        //   Instant cast (delay=0s):    0.20s - 0s = 0.20s reaction needed
-        //   Jhin W (delay=0.25s):       max(0.05s, 0.20s - 0.25s) = 0.05s left
-        //   Xerath Q (delay=0.75s):     max(0.05s, 0.20s - 0.75s) = 0.05s left (almost full time!)
+        // Calculate effective reaction time accounting for FOW and cast delay
+        // FOW FIX: If we're hidden, enemies can't see our animation - they get full reaction time
+        // VISIBLE: Enemies react DURING cast animation, consuming reaction time
+        float effective_reaction_time = get_effective_reaction_time(source, target, spell.delay);
 
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
@@ -4401,15 +4402,10 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time accounting for human reaction
-        // FIX: Enemies react DURING cast animation, using up their reaction time
-        // By the time projectile launches, they've already been reacting/moving
-        // So we only subtract the reaction time that's LEFT OVER after the delay
-        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
-        // Examples:
-        //   Instant cast (delay=0s):    0.20s - 0s = 0.20s reaction needed
-        //   Jhin W (delay=0.25s):       max(0.05s, 0.20s - 0.25s) = 0.05s left
-        //   Xerath Q (delay=0.75s):     max(0.05s, 0.20s - 0.75s) = 0.05s left (almost full time!)
+        // Calculate effective reaction time accounting for FOW and cast delay
+        // FOW FIX: If we're hidden, enemies can't see our animation - they get full reaction time
+        // VISIBLE: Enemies react DURING cast animation, consuming reaction time
+        float effective_reaction_time = get_effective_reaction_time(source, target, spell.delay);
 
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
