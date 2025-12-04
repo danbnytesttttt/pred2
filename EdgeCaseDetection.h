@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sdk.hpp"
+#include "hp_sdk.hpp"  // Health prediction for ghost minion check
 #include "StandalonePredictionSDK.h"  // MUST be included AFTER sdk.hpp for compatibility
 #include "PredictionSettings.h"
 #include <vector>
@@ -732,23 +733,6 @@ namespace EdgeCases
             if (!minion || !minion->is_valid() || !minion->is_visible())
                 continue;
 
-            // GHOST MINION FIX: Skip nearly-dead minions
-            // Low HP minions will likely die to lane damage before our projectile arrives
-            // This prevents "holding fire" for minions that are about to die anyway
-            //
-            // Heuristic: Skip if HP < 15% (typical last-hit threshold)
-            // More accurate would be full health prediction, but this works for most cases
-            float current_hp = minion->get_hp();
-            float max_hp = minion->get_max_hp();
-            float health_percent = (max_hp > 0.f) ? (current_hp / max_hp) * 100.f : 100.f;
-            if (health_percent < 15.f)
-                continue;
-
-            // Also skip minions being attacked by towers (will die very fast)
-            // Check if minion is taking significant damage (tower shots are ~100+ damage)
-            if (health_percent < 30.f && current_hp < 150.f)
-                continue;
-
             // Skip wards (don't block skillshots)
             std::string name = minion->get_char_name();
             if (name.find("Ward") != std::string::npos ||
@@ -765,9 +749,34 @@ namespace EdgeCases
             if (distance_along_path < 0.f || distance_along_path > distance_to_target)
                 continue;
 
-            // FIX: Predict minion position when spell arrives
-            // Estimate travel time to minion position (assume ~1200 projectile speed if not specified)
+            // Calculate travel time to minion position (assume ~1200 projectile speed if not specified)
             float travel_time = distance_along_path / 1200.f;
+
+            // GHOST MINION FIX: Skip minions that will be DEAD when our projectile arrives
+            // This is more accurate than simple HP% thresholds
+            //
+            // Priority 1: Use health prediction SDK if available (tracks incoming damage)
+            // Priority 2: Fall back to conservative heuristic
+            if (sdk::health_prediction)
+            {
+                // Predicted HP at arrival time - accounts for tower shots, ally autos, etc.
+                float predicted_hp = sdk::health_prediction->get_predicted_health(minion, travel_time);
+                if (predicted_hp <= 0.f)
+                    continue;  // Minion will be dead, skip it
+            }
+            else
+            {
+                // Fallback: Conservative heuristic when HP prediction unavailable
+                // Only skip if VERY low HP (about to die from any source)
+                float current_hp = minion->get_hp();
+                float max_hp = minion->get_max_hp();
+                float health_percent = (max_hp > 0.f) ? (current_hp / max_hp) * 100.f : 100.f;
+
+                // Only skip if minion is basically dead (< 5% HP) AND travel time is long enough
+                // This is conservative to avoid shooting through minions that survive
+                if (health_percent < 5.f && travel_time > 0.15f)
+                    continue;
+            }
 
             if (minion->is_moving() && travel_time > 0.05f)
             {
