@@ -2764,9 +2764,9 @@ namespace HybridPred
             }
 
             // Perfect timing! Cast now for guaranteed hit on stasis exit
-            // But first check if in range
+            // But first check if in range (2D - High Ground Fix)
             math::vector3 to_stasis = edge_cases.stasis.exit_position - source->get_position();
-            if (to_stasis.magnitude() > spell.range)
+            if (magnitude_2d(to_stasis) > spell.range)
             {
                 result.is_valid = false;
                 result.reasoning = "Stasis target out of range";
@@ -2806,9 +2806,9 @@ namespace HybridPred
                 return result;
             }
 
-            // Check if in range
+            // Check if in range (2D - High Ground Fix)
             math::vector3 to_channel = edge_cases.channel.position - source->get_position();
-            if (to_channel.magnitude() > spell.range)
+            if (magnitude_2d(to_channel) > spell.range)
             {
                 result.is_valid = false;
                 result.reasoning = "Channeling target out of range";
@@ -2892,8 +2892,8 @@ namespace HybridPred
                         // Calculate intercept position at current progress estimate
                         math::vector3 intercept_pos = dash_start + dash_vector * progress;
 
-                        // Time for spell to reach this intercept position
-                        float dist_to_intercept = (intercept_pos - source->get_position()).magnitude();
+                        // Time for spell to reach this intercept position (2D - dashes have height arcs)
+                        float dist_to_intercept = distance_2d(intercept_pos, source->get_position());
                         float spell_time = spell.delay;
                         if (spell.projectile_speed > 0.f)
                             spell_time += dist_to_intercept / spell.projectile_speed;
@@ -2964,9 +2964,9 @@ namespace HybridPred
                     reasoning = "DASH ENDPOINT - Spell arrives " + std::to_string(ms_after) + "ms after landing (they may dodge)";
             }
 
-            // Check if cast position is in range
+            // Check if cast position is in range (2D - High Ground Fix)
             math::vector3 to_cast = cast_position - source->get_position();
-            if (to_cast.magnitude() > spell.range)
+            if (magnitude_2d(to_cast) > spell.range)
             {
                 result.is_valid = false;
                 result.reasoning = "Dash target position out of range";
@@ -3271,9 +3271,9 @@ namespace HybridPred
             }
         }
 
-        // RANGE CLAMPING: Ensure cast position is within spell range
+        // RANGE CLAMPING: Ensure cast position is within spell range (2D - High Ground Fix)
         math::vector3 to_cast = optimal_cast_pos - source_pos;
-        float distance_to_cast = to_cast.magnitude();
+        float distance_to_cast = magnitude_2d(to_cast);
         if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
         {
             // Clamp to max range
@@ -3661,7 +3661,8 @@ namespace HybridPred
             // Only consider targets within range
             if (distance <= max_range)
             {
-                target_positions.push_back(target_pos);
+                // Flatten to 2D for MEC calculation (High Ground Fix - prevent floating center)
+                target_positions.push_back(flatten_2d(target_pos));
             }
         }
 
@@ -3677,7 +3678,7 @@ namespace HybridPred
             return target_positions[0];
         }
 
-        // Use MEC algorithm to find optimal AOE center
+        // Use MEC algorithm to find optimal AOE center (inputs already flattened to 2D)
         Circle mec = PhysicsPredictor::compute_minimum_enclosing_circle(target_positions);
 
         // Verify the MEC center is within cast range (2D distance)
@@ -3685,11 +3686,11 @@ namespace HybridPred
 
         if (center_distance <= max_range)
         {
-            // Check if all targets are within the spell radius
+            // Check if all targets are within the spell radius (2D - High Ground Fix)
             bool all_hit = true;
             for (const auto& pos : target_positions)
             {
-                float dist_from_center = (pos - mec.center).magnitude();
+                float dist_from_center = distance_2d(pos, mec.center);
                 if (dist_from_center > spell_radius)
                 {
                     all_hit = false;
@@ -3711,11 +3712,11 @@ namespace HybridPred
 
         for (const auto& candidate_pos : target_positions)
         {
-            // Count how many targets would be hit if we cast at this position
+            // Count how many targets would be hit if we cast at this position (2D - High Ground Fix)
             int hit_count = 0;
             for (const auto& target_pos : target_positions)
             {
-                float dist = (target_pos - candidate_pos).magnitude();
+                float dist = distance_2d(target_pos, candidate_pos);
                 if (dist <= spell_radius)
                 {
                     hit_count++;
@@ -5266,14 +5267,14 @@ namespace HybridPred
             math::vector3 potential_first = predicted_target_pos - dir * (vector_length * 0.5f);
             math::vector3 potential_second = predicted_target_pos + dir * (vector_length * 0.5f);
 
-            // Constraint: First cast must be within cast_range of source
-            float dist_to_start = (potential_first - source_pos).magnitude();
+            // Constraint: First cast must be within cast_range of source (2D - High Ground Fix)
+            float dist_to_start = distance_2d(potential_first, source_pos);
 
             // If start is out of range, slide the vector closer while keeping direction
             if (dist_to_start > max_first_cast_range)
             {
                 math::vector3 to_start = potential_first - source_pos;
-                float to_start_mag = to_start.magnitude();
+                float to_start_mag = magnitude_2d(to_start);
                 if (to_start_mag > EPSILON)
                 {
                     potential_first = source_pos + (to_start / to_start_mag) * max_first_cast_range;
@@ -5290,8 +5291,8 @@ namespace HybridPred
                 potential_first, dir, vector_length, vector_width, behavior_pdf
             );
 
-            // Compute Hit Chance
-            float distance_to_target = (potential_first - source_pos).magnitude();
+            // Compute Hit Chance (2D distance for High Ground Fix)
+            float distance_to_target = distance_2d(potential_first, source_pos);
             float test_hit_chance = fuse_probabilities(
                 physics_prob, behavior_prob, confidence,
                 sample_count, time_since_update, target_speed, distance_to_target
@@ -5319,7 +5320,7 @@ namespace HybridPred
         if (best_config.hit_chance < EPSILON)
         {
             math::vector3 to_target = predicted_target_pos - source_pos;
-            float dist = to_target.magnitude();
+            float dist = magnitude_2d(to_target);  // 2D - High Ground Fix
             math::vector3 dir = (dist > EPSILON) ? to_target / dist : math::vector3(1, 0, 0);
 
             best_config.first_cast_position = source_pos + dir * std::min(max_first_cast_range, dist);
