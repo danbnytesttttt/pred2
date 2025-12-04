@@ -1589,6 +1589,115 @@ namespace HybridPred
         return pos;
     }
 
+    /**
+     * Estimate wall normal at a collision point by sampling nearby positions
+     * Returns normalized vector pointing AWAY from the wall (into open space)
+     */
+    static math::vector3 estimate_wall_normal(const math::vector3& collision_point)
+    {
+        if (!g_sdk || !g_sdk->nav_mesh)
+            return math::vector3(0, 0, 0);
+
+        // Sample 8 directions around the collision point to find wall orientation
+        constexpr float CHECK_DIST = 15.f;
+        constexpr int NUM_SAMPLES = 8;
+
+        math::vector3 normal(0, 0, 0);
+
+        for (int i = 0; i < NUM_SAMPLES; ++i)
+        {
+            float angle = (2.0f * PI * i) / NUM_SAMPLES;
+            math::vector3 offset(std::cos(angle) * CHECK_DIST, 0, std::sin(angle) * CHECK_DIST);
+            math::vector3 test_pos = collision_point + offset;
+
+            // If this direction is pathable (open), add it to normal
+            // If it's a wall, subtract it
+            if (g_sdk->nav_mesh->is_pathable(test_pos))
+            {
+                // Open space in this direction - normal points this way
+                normal.x += offset.x;
+                normal.z += offset.z;
+            }
+            else
+            {
+                // Wall in this direction - normal points opposite
+                normal.x -= offset.x;
+                normal.z -= offset.z;
+            }
+        }
+
+        float mag = normal.magnitude();
+        if (mag < 0.1f)
+            return math::vector3(0, 0, 0);  // Surrounded or ambiguous
+
+        return normal / mag;  // Normalized
+    }
+
+    /**
+     * Calculate wall slide velocity when hitting terrain
+     * Returns the component of velocity parallel to the wall surface
+     */
+    static math::vector3 calculate_wall_slide_velocity(
+        const math::vector3& collision_point,
+        const math::vector3& velocity)
+    {
+        math::vector3 normal = estimate_wall_normal(collision_point);
+
+        if (normal.magnitude() < 0.1f)
+            return math::vector3(0, 0, 0);  // Can't determine wall orientation
+
+        // Project velocity onto wall surface (remove component going INTO wall)
+        // Formula: V_slide = V - (V · N) * N
+        float dot = velocity.x * normal.x + velocity.z * normal.z;
+
+        // Only slide if moving INTO the wall (dot < 0 means velocity opposes normal)
+        if (dot >= 0.f)
+            return velocity;  // Moving away from wall, no slide needed
+
+        math::vector3 slide_velocity;
+        slide_velocity.x = velocity.x - normal.x * dot;
+        slide_velocity.y = 0.f;
+        slide_velocity.z = velocity.z - normal.z * dot;
+
+        return slide_velocity;
+    }
+
+    /**
+     * Find the exact collision point between start and end using binary search
+     * Returns the last pathable position before hitting the wall
+     */
+    static math::vector3 find_wall_collision_point(
+        const math::vector3& start,
+        const math::vector3& end)
+    {
+        if (!g_sdk || !g_sdk->nav_mesh)
+            return end;
+
+        // Binary search for collision point
+        math::vector3 low = start;
+        math::vector3 high = end;
+        constexpr int MAX_ITERATIONS = 8;  // ~1 unit precision at 256 unit range
+
+        for (int i = 0; i < MAX_ITERATIONS; ++i)
+        {
+            math::vector3 mid;
+            mid.x = (low.x + high.x) * 0.5f;
+            mid.y = (low.y + high.y) * 0.5f;
+            mid.z = (low.z + high.z) * 0.5f;
+
+            if (g_sdk->nav_mesh->is_pathable(mid))
+            {
+                low = mid;  // Mid is pathable, collision is further
+            }
+            else
+            {
+                high = mid;  // Mid is wall, collision is closer
+            }
+        }
+
+        return low;  // Last known pathable position
+    }
+
     ReachableRegion PhysicsPredictor::compute_reachable_region(
         const math::vector3& current_pos,
         const math::vector3& current_velocity,
@@ -1880,11 +1989,60 @@ namespace HybridPred
                 math::vector3 direction = segment_diff / segment_length;
                 math::vector3 predicted_pos = segment_start + direction * distance_into_segment;
 
-                // FIX: Clamp to pathable terrain (prevents predicting through walls)
-                math::vector3 clamped_pos = clamp_to_pathable(predicted_pos);
+                // WALL SLIDING: Handle collision with terrain properly
+                math::vector3 final_pos = predicted_pos;
+
+                if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(predicted_pos))
+                {
+                    // Position is in a wall - apply wall sliding physics
+                    // 1. Find exact collision point using binary search
+                    math::vector3 collision_point = find_wall_collision_point(segment_start, predicted_pos);
+
+                    // 2. Calculate remaining distance after collision
+                    float dist_to_collision = (collision_point - segment_start).magnitude();
+                    float remaining_dist = distance_into_segment - dist_to_collision;
+
+                    if (remaining_dist > 1.f)
+                    {
+                        // 3. Calculate slide velocity (parallel to wall)
+                        math::vector3 velocity = direction * move_speed;
+                        math::vector3 slide_velocity = calculate_wall_slide_velocity(collision_point, velocity);
+
+                        float slide_speed = slide_velocity.magnitude();
+                        if (slide_speed > 1.f)
+                        {
+                            // 4. Apply sliding movement with slight friction (0.85x)
+                            // Game engine applies some friction when sliding
+                            math::vector3 slide_dir = slide_velocity / slide_speed;
+                            float slide_distance = remaining_dist * 0.85f;
+                            math::vector3 slide_pos = collision_point + slide_dir * slide_distance;
+
+                            // 5. Validate slide position is pathable
+                            if (g_sdk->nav_mesh->is_pathable(slide_pos))
+                            {
+                                final_pos = slide_pos;
+                            }
+                            else
+                            {
+                                // Slide also hit a wall (corner case) - stay at collision
+                                final_pos = collision_point;
+                            }
+                        }
+                        else
+                        {
+                            // No valid slide direction - stay at collision point
+                            final_pos = collision_point;
+                        }
+                    }
+                    else
+                    {
+                        // Very close to wall - just use collision point
+                        final_pos = collision_point;
+                    }
+                }
 
                 // DEBUG: Log prediction result
-                if (g_sdk)
+                if (g_sdk && PredictionSettings::get().enable_debug_logging)
                 {
                     char msg[256];
                     snprintf(msg, sizeof(msg),
@@ -1893,11 +2051,11 @@ namespace HybridPred
                         segment_start.x, segment_start.z,
                         segment_end.x, segment_end.z,
                         distance_into_segment, segment_length,
-                        clamped_pos.x, clamped_pos.z);
+                        final_pos.x, final_pos.z);
                     g_sdk->log_console(msg);
                 }
 
-                return clamped_pos;
+                return final_pos;
             }
 
             traveled += segment_length;
@@ -1905,11 +2063,19 @@ namespace HybridPred
 
         // Traveled past all waypoints - target STOPS at final destination
         // Do NOT extrapolate past their click point
-        // FIX: Clamp to pathable terrain (path endpoint might be in wall due to latency/bugs)
-        math::vector3 final_pos = clamp_to_pathable(path.back());
+        math::vector3 final_dest = path.back();
+        math::vector3 final_pos = final_dest;
+
+        // Apply wall sliding if destination is in terrain
+        if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(final_dest))
+        {
+            // Find where they actually stop (wall collision)
+            math::vector3 prev_waypoint = path.size() > 1 ? path[path.size() - 2] : position;
+            final_pos = find_wall_collision_point(prev_waypoint, final_dest);
+        }
 
         // DEBUG: Log when target reaches destination
-        if (g_sdk)
+        if (g_sdk && PredictionSettings::get().enable_debug_logging)
         {
             char msg[256];
             snprintf(msg, sizeof(msg),

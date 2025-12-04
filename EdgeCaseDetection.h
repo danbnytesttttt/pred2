@@ -408,28 +408,42 @@ namespace EdgeCases
         float width;
         float end_time;
         std::string source_champion;  // "yasuo", "samira", "braum"
+        bool is_circle;               // true for Samira (360° block), false for line walls
 
         WindwallInfo() : exists(false), position{}, direction{},
-            width(0.f), end_time(0.f), source_champion("") {
+            width(0.f), end_time(0.f), source_champion(""), is_circle(false) {
         }
     };
 
     /**
+     * Get Yasuo W width based on ability rank
+     * Width scales: 320 / 390 / 460 / 530 / 600
+     */
+    inline float get_yasuo_wall_width(game_object* yasuo)
+    {
+        if (!yasuo || !yasuo->is_valid())
+            return 600.f;  // Default to max if can't determine
+
+        // Try to get W spell level
+        auto w_spell = yasuo->get_spell(spell_slot::w);
+        if (w_spell)
+        {
+            int level = w_spell->get_level();
+            if (level >= 1 && level <= 5)
+            {
+                static const float widths[] = { 320.f, 390.f, 460.f, 530.f, 600.f };
+                return widths[level - 1];
+            }
+        }
+        return 600.f;  // Default to max width to be safe
+    }
+
+    /**
      * Detect active windwalls that can block projectiles
-     *
-     * DISABLED: Cannot accurately track windwall position without particle API
-     * - Yasuo W spawns in front of him and drifts forward
-     * - Using hero position is incorrect (wall != hero location)
-     * - Particle tracking would require complex object iteration
-     *
-     * TODO: Implement proper particle-based detection or remove entirely
+     * Uses game object names from actual game data dumps
      */
     inline std::vector<WindwallInfo> detect_windwalls()
     {
-        // DISABLED - returns empty (no windwall detection)
-        return std::vector<WindwallInfo>();
-
-        /* DISABLED CODE - Geometry broken without particle positions
         std::vector<WindwallInfo> windwalls;
 
         if (!g_sdk || !g_sdk->object_manager)
@@ -440,68 +454,162 @@ namespace EdgeCases
             return windwalls;
 
         int local_team = local_player->get_team_id();
+        float current_time = 0.f;
+        if (g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
 
-        // Get all heroes and filter manually by team
+        // Object names that indicate projectile-blocking walls
+        // From game data dumps - these are the actual blocking objects
+        static const char* YASUO_WALL_NAMES[] = {
+            "Yasuo_Base_W_windwall1",
+            "Yasuo_Base_W_windwall_activate",
+            "YasuoWMovingWallMis"  // Alternative name
+        };
+
+        static const char* SAMIRA_WALL_NAMES[] = {
+            "Samira_Base_W_windwall",
+            "SamiraW"
+        };
+
+        static const char* BRAUM_SHIELD_NAMES[] = {
+            "Braum_Base_E_Shield",
+            "BraumShieldRaise"
+        };
+
+        // Cache enemy Yasuo for width lookup
+        game_object* enemy_yasuo = nullptr;
         auto heroes = g_sdk->object_manager->get_heroes();
         for (auto* hero : heroes)
         {
             if (!hero || !hero->is_valid() || hero->is_dead())
                 continue;
-
-            // Skip allies - only check enemies
             if (hero->get_team_id() == local_team)
                 continue;
 
-            // Yasuo Windwall
-            std::string yasuo_buff = "yasuowmovingwall";
-            auto yasuo_wall = hero->get_buff_by_name(yasuo_buff);
-            if (yasuo_wall && yasuo_wall->is_active())
+            std::string char_name = hero->get_char_name();
+            if (char_name.find("Yasuo") != std::string::npos)
             {
-                WindwallInfo wall;
-                wall.exists = true;
-                wall.position = hero->get_position();  // BROKEN: Wall spawns in front, not at hero
-                wall.width = 300.f;
-                wall.end_time = yasuo_wall->get_end_time();
-                wall.source_champion = "yasuo";
-                windwalls.push_back(wall);
+                enemy_yasuo = hero;
+                break;
+            }
+        }
+
+        // Search through minions/objects for wall entities
+        auto minions = g_sdk->object_manager->get_minions();
+        for (auto* obj : minions)
+        {
+            if (!obj || !obj->is_valid() || !obj->is_visible())
+                continue;
+
+            // Skip allied objects
+            if (obj->get_team_id() == local_team)
+                continue;
+
+            std::string name = obj->get_name();
+            if (name.empty())
+                continue;
+
+            WindwallInfo wall;
+            wall.exists = false;
+
+            // Check for Yasuo W
+            for (const char* wall_name : YASUO_WALL_NAMES)
+            {
+                if (name.find(wall_name) != std::string::npos)
+                {
+                    wall.exists = true;
+                    wall.position = obj->get_position();
+                    wall.direction = obj->get_direction();
+                    wall.width = enemy_yasuo ? get_yasuo_wall_width(enemy_yasuo) : 600.f;
+                    wall.end_time = current_time + 4.0f;  // 4 second duration
+                    wall.source_champion = "yasuo";
+                    wall.is_circle = false;
+                    break;
+                }
             }
 
-            // Samira Blade Whirl
-            std::string samira_buff = "samiraw";
-            auto samira_wall = hero->get_buff_by_name(samira_buff);
-            if (samira_wall && samira_wall->is_active())
+            // Check for Samira W
+            if (!wall.exists)
             {
-                WindwallInfo wall;
-                wall.exists = true;
-                wall.position = hero->get_position();
-                wall.width = 325.f;
-                wall.end_time = samira_wall->get_end_time();
-                wall.source_champion = "samira";
-                windwalls.push_back(wall);
+                for (const char* wall_name : SAMIRA_WALL_NAMES)
+                {
+                    if (name.find(wall_name) != std::string::npos)
+                    {
+                        wall.exists = true;
+                        wall.position = obj->get_position();
+                        wall.direction = math::vector3(0, 0, 0);  // Circle, no direction
+                        wall.width = 325.f;  // Samira W radius
+                        wall.end_time = current_time + 0.75f;  // Short duration
+                        wall.source_champion = "samira";
+                        wall.is_circle = true;
+                        break;
+                    }
+                }
             }
 
-            // Braum Unbreakable
-            std::string braum_buff = "braume";
-            auto braum_shield = hero->get_buff_by_name(braum_buff);
-            if (braum_shield && braum_shield->is_active())
+            // Check for Braum E
+            if (!wall.exists)
             {
-                WindwallInfo wall;
-                wall.exists = true;
-                wall.position = hero->get_position();
-                wall.width = 200.f;
-                wall.end_time = braum_shield->get_end_time();
-                wall.source_champion = "braum";
+                for (const char* wall_name : BRAUM_SHIELD_NAMES)
+                {
+                    if (name.find(wall_name) != std::string::npos)
+                    {
+                        wall.exists = true;
+                        wall.position = obj->get_position();
+                        wall.direction = obj->get_direction();
+                        wall.width = 250.f;  // Braum shield width
+                        wall.end_time = current_time + 4.0f;  // 4 second duration
+                        wall.source_champion = "braum";
+                        wall.is_circle = false;
+                        break;
+                    }
+                }
+            }
+
+            if (wall.exists)
+            {
+                // Validate direction - if zero, try to estimate from nearby champion
+                if (wall.direction.magnitude() < 0.1f && !wall.is_circle)
+                {
+                    // For Yasuo/Braum, wall faces away from caster
+                    // Find the closest enemy champion to use their facing direction
+                    for (auto* hero : heroes)
+                    {
+                        if (!hero || !hero->is_valid() || hero->is_dead())
+                            continue;
+                        if (hero->get_team_id() == local_team)
+                            continue;
+
+                        float dist = (hero->get_position() - wall.position).magnitude();
+                        if (dist < 200.f)  // Wall should be close to caster
+                        {
+                            wall.direction = hero->get_direction();
+                            break;
+                        }
+                    }
+
+                    // Final fallback - face toward local player (worst case)
+                    if (wall.direction.magnitude() < 0.1f)
+                    {
+                        math::vector3 to_local = local_player->get_position() - wall.position;
+                        float dist = to_local.magnitude();
+                        if (dist > 1.f)
+                            wall.direction = to_local / dist;
+                        else
+                            wall.direction = math::vector3(1, 0, 0);
+                    }
+                }
+
                 windwalls.push_back(wall);
             }
         }
 
         return windwalls;
-        END DISABLED CODE */
     }
 
     /**
      * Check if projectile path intersects with any windwall
-     * FIXED: Correct closest point calculation using dot product projection
+     * Handles both line walls (Yasuo/Braum) and circular walls (Samira)
      */
     inline bool will_hit_windwall(
         const math::vector3& start_pos,
@@ -517,28 +625,61 @@ namespace EdgeCases
             math::vector3 to_target = end_pos - start_pos;
             float distance_to_target = to_target.magnitude();
 
-            constexpr float MIN_SAFE_DISTANCE = 1.0f;  // Minimum safe distance for normalization
+            constexpr float MIN_SAFE_DISTANCE = 1.0f;
             if (distance_to_target < MIN_SAFE_DISTANCE)
-                continue;  // Zero-length path, skip windwall check
+                continue;
 
-            math::vector3 direction = to_target / distance_to_target;  // Normalized direction
+            math::vector3 direction = to_target / distance_to_target;
 
-            // FIXED: Project windwall position onto the projectile path using dot product
+            // Project windwall position onto the projectile path
             math::vector3 start_to_wall = wall.position - start_pos;
             float projection = start_to_wall.dot(direction);
 
             // Clamp projection to line segment [0, distance_to_target]
             if (projection < 0.f || projection > distance_to_target)
-                continue;  // Windwall is not between start and end
+                continue;  // Wall is not between start and end
 
-            // Calculate closest point on path and perpendicular distance to windwall
+            // Calculate closest point on path to wall center
             math::vector3 closest_point_on_path = start_pos + direction * projection;
             float perpendicular_distance = (wall.position - closest_point_on_path).magnitude();
 
-            // Check if windwall is close enough to block projectile
-            if (perpendicular_distance < wall.width)
+            if (wall.is_circle)
             {
-                return true;  // Projectile will be blocked
+                // CIRCULAR WALL (Samira W): Block if path passes through circle
+                // Check if projectile path intersects the circular zone
+                if (perpendicular_distance < wall.width)
+                {
+                    return true;  // Path passes through Samira's W circle
+                }
+            }
+            else
+            {
+                // LINE WALL (Yasuo/Braum): Check if path crosses the wall line
+                // Wall is a line segment perpendicular to wall.direction
+                // Half-width on each side of wall.position
+
+                // Calculate wall endpoints
+                math::vector3 wall_perp(-wall.direction.z, 0, wall.direction.x);
+                float half_width = wall.width / 2.f;
+
+                // Check if projectile path crosses the wall line
+                // The path crosses if the closest point is within half_width of wall center
+                // AND the path actually goes through the wall plane
+
+                // Check perpendicular distance to wall center
+                if (perpendicular_distance < half_width)
+                {
+                    // Path is within wall width - check if it crosses the wall plane
+                    // Wall plane is defined by wall.position and wall.direction (normal)
+                    float start_side = (start_pos - wall.position).dot(wall.direction);
+                    float end_side = (end_pos - wall.position).dot(wall.direction);
+
+                    // If signs differ, projectile crosses the wall plane
+                    if (start_side * end_side < 0.f)
+                    {
+                        return true;  // Projectile crosses Yasuo/Braum wall
+                    }
+                }
             }
         }
 
