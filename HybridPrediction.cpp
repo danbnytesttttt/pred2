@@ -2118,13 +2118,13 @@ namespace HybridPred
         // BUG FIX: Previously returned 1.0 for ANY cast position, even miles away!
         if (reachable_region.area < EPSILON)
         {
-            float dist = (cast_position - reachable_region.center).magnitude();
+            float dist = distance_2d(cast_position, reachable_region.center);  // 2D for ground plane
             return (dist <= projectile_radius) ? 1.0f : 0.0f;
         }
 
-        // Distance from cast position to predicted target center
+        // Distance from cast position to predicted target center (2D ground plane)
         math::vector3 to_cast = cast_position - reachable_region.center;
-        float distance = to_cast.magnitude();
+        float distance = distance_2d(cast_position, reachable_region.center);
 
         // Gaussian kernel: target most likely at predicted center
         // σ = max_radius / 2.5 (so ~95% within max_radius)
@@ -2219,8 +2219,8 @@ namespace HybridPred
         if (target_move_speed < EPSILON || arrival_time < EPSILON)
             return 0.f;
 
-        // Calculate distance from target to spell center
-        float distance_to_center = (target_position - cast_position).magnitude();
+        // Calculate distance from target to spell center (2D ground plane)
+        float distance_to_center = distance_2d(target_position, cast_position);
 
         // Calculate distance to escape (distance to edge of hitbox)
         // If target is outside spell, they're already safe
