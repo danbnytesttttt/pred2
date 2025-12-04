@@ -732,6 +732,21 @@ namespace EdgeCases
             if (!minion || !minion->is_valid() || !minion->is_visible())
                 continue;
 
+            // GHOST MINION FIX: Skip nearly-dead minions
+            // Low HP minions will likely die to lane damage before our projectile arrives
+            // This prevents "holding fire" for minions that are about to die anyway
+            //
+            // Heuristic: Skip if HP < 15% (typical last-hit threshold)
+            // More accurate would be full health prediction, but this works for most cases
+            float health_percent = minion->get_health_percent();
+            if (health_percent < 15.f)
+                continue;
+
+            // Also skip minions being attacked by towers (will die very fast)
+            // Check if minion is taking significant damage (tower shots are ~100+ damage)
+            if (health_percent < 30.f && minion->get_health() < 150.f)
+                continue;
+
             // Skip wards (don't block skillshots)
             std::string name = minion->get_char_name();
             if (name.find("Ward") != std::string::npos ||
