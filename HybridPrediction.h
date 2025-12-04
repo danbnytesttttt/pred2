@@ -398,12 +398,14 @@ namespace HybridPred
         // OLD BUG: Linear interpolation allowed behavior to "save" impossible predictions
         //   Example: physics=0.0, behavior=0.9 → 0.6*0.0 + 0.4*0.9 = 0.36 (WRONG!)
         //
-        // NEW: Physics multiplies the weighted behavior contribution
-        //   Formula: fused = physics × (physics_weight + (1-physics_weight) × behavior)
-        //   Example: physics=0.0, behavior=0.9 → 0.0 × (0.6 + 0.4*0.9) = 0.0 (CORRECT!)
-        //   Example: physics=1.0, behavior=0.5 → 1.0 × (0.6 + 0.4*0.5) = 0.8 (balanced)
-        //   Example: physics=0.5, behavior=0.8 → 0.5 × (0.6 + 0.4*0.8) = 0.46 (smooth)
-        float fused = physics_prob * (physics_weight + (1.0f - physics_weight) * behavior_prob);
+        // NEW: Sqrt fusion to soften harsh multiplication (fixes 97.8% rejection rate)
+        //   Formula: fused = sqrt(physics × (physics_weight + (1-physics_weight) × behavior))
+        //   This maintains physics constraint while being less conservative
+        //   Example: physics=0.0, behavior=0.9 → sqrt(0.0 × 0.76) = 0.0 (physics veto still works!)
+        //   Example: physics=1.0, behavior=0.5 → sqrt(1.0 × 0.8) = 0.894 (higher chance)
+        //   Example: physics=0.7, behavior=0.4 → sqrt(0.7 × 0.76) = 0.73 vs old 0.53 (less harsh)
+        float weighted_avg = physics_weight + (1.0f - physics_weight) * behavior_prob;
+        float fused = sqrtf(physics_prob * weighted_avg);
 
         // Apply confidence as a multiplier
         // Lower safety floor to allow proper penalization from edge cases
