@@ -1568,7 +1568,10 @@ namespace HybridPred
 
         // Reset window if spell was likely cast (hit_chance suddenly drops or becomes invalid)
         // This happens when target moves out of range or dies
-        if (result.hit_chance < window.last_hit_chance * 0.5f && elapsed_time > 1.0f)
+        // FIX: Use 20% threshold instead of 50% to prevent false resets during normal juking
+        // A 50% drop can happen from normal dodging (80% -> 40%), not just casting
+        // A 20% threshold (80% -> 16%) indicates actual major state change (out of range, died, flashed)
+        if (result.hit_chance < window.last_hit_chance * 0.2f && elapsed_time > 1.0f)
         {
             // Significant drop - likely cast occurred, reset window
             window = OpportunityWindow();
