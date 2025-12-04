@@ -839,16 +839,20 @@ pred_sdk::pred_data CustomPredictionSDK::convert_to_pred_data(
 pred_sdk::hitchance CustomPredictionSDK::convert_hit_chance_to_enum(float hit_chance)
 {
     // Map [0,1] to hitchance enum
-    // STRICTER thresholds to avoid coin-flip (50/50) casts
-    if (hit_chance >= 0.98f)
+    // CRITICAL: Thresholds MUST match enum percentage values in pred_sdk.hpp
+    // Otherwise comparison (result.hitchance >= expected_hitchance) breaks!
+    //
+    // Enum values: low=30, medium=50, high=70, very_high=85, guaranteed=100
+    // Conversion must use same thresholds (as percentages) for consistency
+    if (hit_chance >= 0.95f)  // 95%+ = guaranteed (allow small margin below 100)
         return pred_sdk::hitchance::guaranteed_hit;
-    else if (hit_chance >= 0.85f)  // very_high: raised from 80% to 85%
+    else if (hit_chance >= 0.85f)  // 85%+ = very_high (matches enum value)
         return pred_sdk::hitchance::very_high;
-    else if (hit_chance >= 0.75f)  // high: raised from 65% to 75% (no more coin flips)
+    else if (hit_chance >= 0.70f)  // 70%+ = high (matches enum value 70)
         return pred_sdk::hitchance::high;
-    else if (hit_chance >= 0.55f)  // medium: raised from 50% to 55%
+    else if (hit_chance >= 0.50f)  // 50%+ = medium (matches enum value 50)
         return pred_sdk::hitchance::medium;
-    else if (hit_chance >= 0.35f)  // low: raised from 30% to 35%
+    else if (hit_chance >= 0.30f)  // 30%+ = low (matches enum value 30)
         return pred_sdk::hitchance::low;
     else
         return pred_sdk::hitchance::any;
