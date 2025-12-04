@@ -1841,7 +1841,8 @@ namespace HybridPred
 
     math::vector3 PhysicsPredictor::predict_on_path(
         game_object* target,
-        float prediction_time)
+        float prediction_time,
+        float delay_start_time)
     {
         if (!target || !target->is_valid())
             return math::vector3{};
@@ -1875,7 +1876,25 @@ namespace HybridPred
         if (move_speed < 1.f)
             return position;
 
-        float distance_to_travel = move_speed * prediction_time;
+        // ANIMATION LOCK LOGIC (Stop-then-Go):
+        // If delay_start_time > 0, target stays at current position for that duration
+        // After delay expires, they move at full speed along their path
+        // This is more accurate than "smeared" speed (averaging speed over total time)
+        //
+        // Example: Animation lock = 0.3s, spell arrival = 0.5s
+        //   OLD (Smeared): effective_speed = base_speed * (0.2/0.5) = 40% speed for 0.5s
+        //   NEW (Stop-then-Go): stand still for 0.3s, then move at 100% for 0.2s
+        //   The NEW approach is geometrically correct - predicts actual path endpoint
+        float effective_movement_time = prediction_time;
+        if (delay_start_time > 0.f)
+        {
+            effective_movement_time = std::max(0.f, prediction_time - delay_start_time);
+            // If lock lasts longer than flight time, target stays put
+            if (effective_movement_time <= 0.f)
+                return position;
+        }
+
+        float distance_to_travel = move_speed * effective_movement_time;
 
         // CRITICAL FIX: Find which segment the target is actually on
         // If we naively start from position -> path[1], we might create a backwards segment
@@ -3043,6 +3062,15 @@ namespace HybridPred
         );
         float initial_arrival_time = arrival_time;
 
+        // ANIMATION LOCK DELAY (Stop-then-Go):
+        // Calculate remaining lock time for accurate path prediction
+        // Target stays at current position during lock, then moves at full speed
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
+        {
+            animation_lock_delay = get_remaining_lock_time(target);
+        }
+
         // Track refinement convergence
         int refinement_iterations = 0;
         bool arrival_converged = false;
@@ -3054,7 +3082,7 @@ namespace HybridPred
         {
             refinement_iterations = iteration + 1;
             float prev_arrival = arrival_time;
-            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
             final_predicted_pos = predicted_pos;
 
             arrival_time = PhysicsPredictor::compute_arrival_time(
@@ -3077,7 +3105,7 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for initial center position
-        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
@@ -3133,7 +3161,7 @@ namespace HybridPred
         // SPLIT-PATH APPROACH: Calculate position at reaction time
         // During reaction time, target follows their clicked path (not dodging yet)
         // This handles curved paths correctly (linear velocity extrapolation doesn't)
-        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time, animation_lock_delay);
 
         // Build reachable region FROM the reaction position
         // Zero velocity because path-following during reaction time is already handled above
@@ -3773,6 +3801,15 @@ namespace HybridPred
         );
         float initial_arrival_time = arrival_time;
 
+        // ANIMATION LOCK DELAY (Stop-then-Go):
+        // Calculate remaining lock time for accurate path prediction
+        // Target stays at current position during lock, then moves at full speed
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
+        {
+            animation_lock_delay = get_remaining_lock_time(target);
+        }
+
         // Track refinement convergence
         int refinement_iterations = 0;
         bool arrival_converged = false;
@@ -3784,7 +3821,7 @@ namespace HybridPred
         {
             refinement_iterations = iteration + 1;
             float prev_arrival = arrival_time;
-            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
             final_predicted_pos = predicted_pos;
 
             arrival_time = PhysicsPredictor::compute_arrival_time(
@@ -3807,7 +3844,7 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
-        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
@@ -3864,7 +3901,7 @@ namespace HybridPred
         // SPLIT-PATH APPROACH: Calculate position at reaction time
         // During reaction time, target follows their clicked path (not dodging yet)
         // This handles curved paths correctly (linear velocity extrapolation doesn't)
-        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time, animation_lock_delay);
 
         // Build reachable region FROM the reaction position
         // Zero velocity because path-following during reaction time is already handled above
@@ -4306,6 +4343,15 @@ namespace HybridPred
         );
         float initial_arrival_time = arrival_time;
 
+        // ANIMATION LOCK DELAY (Stop-then-Go):
+        // Calculate remaining lock time for accurate path prediction
+        // Target stays at current position during lock, then moves at full speed
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
+        {
+            animation_lock_delay = get_remaining_lock_time(target);
+        }
+
         // Track refinement convergence
         int refinement_iterations = 0;
         bool arrival_converged = false;
@@ -4317,7 +4363,7 @@ namespace HybridPred
         {
             refinement_iterations = iteration + 1;
             float prev_arrival = arrival_time;
-            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
             final_predicted_pos = predicted_pos;
 
             arrival_time = PhysicsPredictor::compute_arrival_time(
@@ -4340,7 +4386,7 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
-        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
@@ -4397,7 +4443,7 @@ namespace HybridPred
         // SPLIT-PATH APPROACH: Calculate position at reaction time
         // During reaction time, target follows their clicked path (not dodging yet)
         // This handles curved paths correctly (linear velocity extrapolation doesn't)
-        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time, animation_lock_delay);
 
         // Build reachable region FROM the reaction position
         // Zero velocity because path-following during reaction time is already handled above
@@ -4662,7 +4708,7 @@ namespace HybridPred
         // SPLIT-PATH APPROACH: Calculate position at reaction time
         // During reaction time, target follows their clicked path (not dodging yet)
         // This handles curved paths correctly (linear velocity extrapolation doesn't)
-        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time);
+        math::vector3 pos_at_reaction = PhysicsPredictor::predict_on_path(target, effective_reaction_time, animation_lock_delay);
 
         // Build reachable region FROM the reaction position
         // Zero velocity because path-following during reaction time is already handled above

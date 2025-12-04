@@ -716,10 +716,20 @@ namespace HybridPred
         /**
          * Predict position by following actual game path waypoints
          * More accurate than linear for curved/multi-waypoint paths
+         *
+         * Animation Lock Logic (Stop-then-Go):
+         * - If delay_start_time > 0, target stays at current position for that duration
+         * - After delay expires, they move at full speed along their path
+         * - This is more accurate than "smeared" speed averaging
+         *
+         * @param target The target to predict
+         * @param prediction_time Total time until spell arrives
+         * @param delay_start_time Time before target starts moving (animation lock, CC remaining)
          */
         static math::vector3 predict_on_path(
             game_object* target,
-            float prediction_time
+            float prediction_time,
+            float delay_start_time = 0.f
         );
 
         /**

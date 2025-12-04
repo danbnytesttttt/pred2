@@ -785,8 +785,14 @@ namespace EdgeCases
             float perpendicular_distance = (minion_pos - closest_point_on_path).magnitude();
 
             // Check if minion hitbox overlaps projectile
+            // SAFETY BUFFER: Add ~18 units to account for:
+            // - Minion movement during projectile flight
+            // - Hitbox uncertainty / server-client desync
+            // - "Grazing" shots that look like they should pass but don't
+            // 18 units ≈ 1/3 of average champion hitbox (55 units)
+            constexpr float MINION_COLLISION_SAFETY_BUFFER = 18.f;
             float minion_radius = minion->get_bounding_radius();
-            if (perpendicular_distance < minion_radius + projectile_width)
+            if (perpendicular_distance < minion_radius + projectile_width + MINION_COLLISION_SAFETY_BUFFER)
             {
                 blocking_minions++;
             }
