@@ -3544,7 +3544,8 @@ namespace HybridPred
 
         // Distance factor - further = less confident
         // HIGH GROUND FIX: 2D distance (ignore height)
-        float distance = distance_2d(target->get_position(), source->get_position());
+        // FIX: Use server position for accurate distance (client lags behind)
+        float distance = distance_2d(target->get_server_position(), source->get_position());
         confidence *= std::exp(-distance * CONFIDENCE_DISTANCE_DECAY);
 
         // Latency factor (ping in seconds)
@@ -4413,7 +4414,8 @@ namespace HybridPred
         }
 
         // Targeted spells can't miss (unless target becomes untargetable)
-        result.cast_position = target->get_position();
+        // FIX: Use server position to avoid casting at stale client position (30-100ms lag)
+        result.cast_position = target->get_server_position();
         result.hit_chance = 1.0f;
         result.physics_contribution = 1.0f;
         result.behavior_contribution = 1.0f;
