@@ -759,13 +759,14 @@ namespace HybridPred
         bool has_measured_physics() const { return accel_sample_count_ >= 3 || decel_sample_count_ >= 3; }
 
         // ADAPTIVE REACTION BUFFER: Get measured animation cancel delay for this target
-        // Returns value between 0.005s (scripter) and 0.1s (lazy player)
+        // Returns value between 0.005s (scripter) and 0.25s (very lazy player)
         // Default 0.025s until enough samples are collected
+        // NOTE: Delays > 0.25s are filtered in measurement (likely standing still, not slow cancel)
         float get_adaptive_reaction_buffer() const
         {
             if (cancel_delay_samples_ < 3)
                 return 0.025f;  // Default until we have data
-            return std::clamp(measured_cancel_delay_, 0.005f, 0.1f);
+            return std::clamp(measured_cancel_delay_, 0.005f, 0.25f);
         }
         bool has_measured_cancel_delay() const { return cancel_delay_samples_ >= 3; }
 
