@@ -299,19 +299,20 @@ namespace HybridPred
      * Formula: P = physics^w × behavior^(1-w) × confidence
      * where w = physics weight based on sample quality and staleness
      *
-     * SPECIAL CASE: When physics = 1.0 (physically impossible to dodge),
-     * return guaranteed hit regardless of behavior (flash/dash handled by edge cases)
+     * SPECIAL CASE: When physics >= 0.99 (physically impossible to dodge by walking),
+     * return guaranteed hit regardless of behavior (flash/dash not tracked - intentional)
      */
     inline float fuse_probabilities(float physics_prob, float behavior_prob, float confidence, size_t sample_count, float time_since_update = 0.f, float move_speed = 350.f, float distance = 1000.f)
     {
         // CRITICAL: Guaranteed hit override
-        // If physics says escape is physically impossible (>= 99%), guarantee the hit
-        // Behavior should NOT reduce this (flash/dash handled by edge case confidence penalties)
+        // If physics says escape is physically impossible by WALKING (>= 99%), guarantee the hit
+        // NOTE: This assumes targets can only walk (no flash/dash tracking - intentional)
+        // We want to cast even if flash is available (5min CD, shouldn't prevent all casts)
         constexpr float GUARANTEED_THRESHOLD = 0.99f;
         if (physics_prob >= GUARANTEED_THRESHOLD)
         {
-            // Physical escape impossible - return guaranteed hit
-            // Still apply confidence for edge cases (flash, spell shield, etc.)
+            // Physical escape by walking impossible - return guaranteed hit
+            // Still apply confidence for distance/latency penalties and active dashes
             return std::min(1.0f, confidence);  // Max 1.0, reduced only by edge cases
         }
 
