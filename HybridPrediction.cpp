@@ -396,10 +396,18 @@ namespace HybridPred
         bool currently_in_animation = snapshot.is_auto_attacking || snapshot.is_casting;
 
         // Detect animation END (was locked, now unlocked)
-        if (was_in_animation_ && !currently_in_animation)
+        // Only start tracking if they're NOT immediately CC'd (would corrupt measurement)
+        if (was_in_animation_ && !currently_in_animation && !snapshot.is_cced)
         {
             // Animation just ended - record timestamp
             animation_end_time_ = current_time;
+        }
+
+        // CANCEL TRACKING if they get CC'd after animation end
+        // CC duration would corrupt our cancel delay measurement
+        if (animation_end_time_ > 0.f && snapshot.is_cced)
+        {
+            animation_end_time_ = 0.f;  // Abort - CC invalidates measurement
         }
 
         // Detect movement START after animation end
@@ -3512,29 +3520,10 @@ namespace HybridPred
             return 0.95f;  // Near-perfect confidence for obvious hits
         }
 
-        // HIT_TYPE BOOST: If spell expects undodgeable or hard CC hits, boost confidence
-        // These are situations where the target is CC'd and can't physically dodge
-        // This allows the SDK to communicate "only fire when target is locked down"
-        bool expects_guaranteed_hit = false;
-        for (const auto& hit_type : spell.expected_hit_types)
-        {
-            if (hit_type == pred_sdk::hit_type::undodgeable ||
-                hit_type == pred_sdk::hit_type::cc_hard ||
-                hit_type == pred_sdk::hit_type::cc)
-            {
-                expects_guaranteed_hit = true;
-                break;
-            }
-        }
-        if (expects_guaranteed_hit)
-        {
-            // Caller wants us to only fire on CC'd targets
-            // If they ARE CC'd (checked above in is_obvious_hit), we returned 0.95
-            // If they're NOT CC'd but caller expected it, we should penalize
-            // But typically this field is informational, so just provide a small boost
-            // for spells designed to hit CC'd targets
-            return 0.90f;  // High confidence - these spells are designed for guaranteed hits
-        }
+        // NOTE: We intentionally do NOT boost confidence based on expected_hit_types here.
+        // The is_obvious_hit() check above already handles CC'd/locked targets.
+        // If spell expects undodgeable/cc but target ISN'T in that state, we should use
+        // normal confidence calculation - boosting would cause us to fire at dodgeable targets.
 
         float confidence = 1.0f;
 
