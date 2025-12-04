@@ -2213,7 +2213,9 @@ namespace HybridPred
         {
             // Calculate alignment: 1.0 = forward, -1.0 = backward
             math::vector3 vel_dir = reachable_region.velocity / vel_speed;
-            math::vector3 to_cast_dir = to_cast / distance;
+            // FIX: Must use 2D direction for normalization (cannot divide 3D vector by 2D distance!)
+            math::vector3 to_cast_2d = flatten_2d(to_cast);
+            math::vector3 to_cast_dir = to_cast_2d / distance;
             float alignment = to_cast_dir.x * vel_dir.x + to_cast_dir.y * vel_dir.y + to_cast_dir.z * vel_dir.z;
 
             // If cast position is behind the target's movement direction, tighten sigma
@@ -3360,7 +3362,12 @@ namespace HybridPred
         if (distance_to_cast > spell.range && distance_to_cast > 0.01f)
         {
             // Clamp to max range
-            optimal_cast_pos = source_pos + (to_cast / distance_to_cast) * spell.range;
+            // FIX: Must use 2D direction for normalization (cannot divide 3D vector by 2D magnitude!)
+            math::vector3 to_cast_2d = flatten_2d(to_cast);
+            math::vector3 direction_2d = to_cast_2d / distance_to_cast;  // Now both are 2D
+            float y_offset = optimal_cast_pos.y - source_pos.y;  // Preserve Y difference
+            optimal_cast_pos = source_pos + direction_2d * spell.range;
+            optimal_cast_pos.y = source_pos.y + y_offset;  // Restore Y coordinate
         }
 
         result.cast_position = optimal_cast_pos;
@@ -5383,7 +5390,12 @@ namespace HybridPred
                 float to_start_mag = magnitude_2d(to_start);
                 if (to_start_mag > EPSILON)
                 {
-                    potential_first = source_pos + (to_start / to_start_mag) * max_first_cast_range;
+                    // FIX: Must use 2D direction for normalization (cannot divide 3D vector by 2D magnitude!)
+                    math::vector3 to_start_2d = flatten_2d(to_start);
+                    math::vector3 direction_2d = to_start_2d / to_start_mag;  // Now both are 2D
+                    float y_offset = potential_first.y - source_pos.y;  // Preserve Y difference
+                    potential_first = source_pos + direction_2d * max_first_cast_range;
+                    potential_first.y = source_pos.y + y_offset;  // Restore Y coordinate
                     potential_second = potential_first + dir * vector_length;
                 }
             }
@@ -5427,9 +5439,12 @@ namespace HybridPred
         {
             math::vector3 to_target = predicted_target_pos - source_pos;
             float dist = magnitude_2d(to_target);  // 2D - High Ground Fix
-            math::vector3 dir = (dist > EPSILON) ? to_target / dist : math::vector3(1, 0, 0);
+            // FIX: Must use 2D direction for normalization (cannot divide 3D vector by 2D magnitude!)
+            math::vector3 to_target_2d = flatten_2d(to_target);
+            math::vector3 dir = (dist > EPSILON) ? to_target_2d / dist : math::vector3(1, 0, 0);
 
             best_config.first_cast_position = source_pos + dir * std::min(max_first_cast_range, dist);
+            best_config.first_cast_position.y = predicted_target_pos.y;  // Preserve target Y coordinate
             best_config.cast_position = best_config.first_cast_position + dir * vector_length;
             best_config.hit_chance = 0.05f; // Low confidence fallback
             best_config.physics_prob = 0.05f;
