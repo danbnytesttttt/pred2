@@ -56,6 +56,54 @@ namespace HybridPred
     constexpr float PI = 3.14159265358979323846f;
     constexpr float EPSILON = 1e-6f;
 
+    // =========================================================================
+    // 2D DISTANCE HELPERS (Z-Axis Normalization / "High Ground" Fix)
+    // =========================================================================
+    // League logic is 2D (X and Z axis). Height (Y) should NOT affect range/distance.
+    // Example: River (Y=-50) to Mid Lane (Y=50) - height difference shouldn't inflate distance.
+    // These helpers flatten calculations to the ground plane.
+
+    /**
+     * Calculate 2D distance ignoring Y (height) component
+     * Use this for ALL range checks and distance calculations
+     */
+    inline float distance_2d(const math::vector3& a, const math::vector3& b)
+    {
+        float dx = a.x - b.x;
+        float dz = a.z - b.z;
+        return std::sqrt(dx * dx + dz * dz);
+    }
+
+    /**
+     * Calculate 2D squared distance (faster, no sqrt)
+     * Use for comparisons: if (sqr_distance_2d(a,b) < range*range)
+     */
+    inline float sqr_distance_2d(const math::vector3& a, const math::vector3& b)
+    {
+        float dx = a.x - b.x;
+        float dz = a.z - b.z;
+        return dx * dx + dz * dz;
+    }
+
+    /**
+     * Calculate 2D magnitude (length) of a vector ignoring Y
+     * Use for velocity magnitude, direction lengths on ground plane
+     */
+    inline float magnitude_2d(const math::vector3& v)
+    {
+        return std::sqrt(v.x * v.x + v.z * v.z);
+    }
+
+    /**
+     * Flatten a vector to 2D (set Y to 0)
+     * Use when you need a 2D direction vector
+     */
+    inline math::vector3 flatten_2d(const math::vector3& v)
+    {
+        return math::vector3(v.x, 0.f, v.z);
+    }
+
+    // =========================================================================
     // Movement tracking parameters
     constexpr int MOVEMENT_HISTORY_SIZE = 100;      // Track last N positions
     constexpr float MOVEMENT_SAMPLE_RATE = 0.05f;   // Sample every 50ms

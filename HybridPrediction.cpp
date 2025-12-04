@@ -2347,7 +2347,9 @@ namespace HybridPred
         float projectile_speed,
         float cast_delay)
     {
-        float distance = (target_pos - source_pos).magnitude();
+        // HIGH GROUND FIX: Use 2D distance (ignore Y/height)
+        // League logic is 2D - river vs mid lane height shouldn't affect projectile travel
+        float distance = distance_2d(source_pos, target_pos);
 
         // Instant spell: No projectile travel time
         if (projectile_speed < EPSILON || projectile_speed >= FLT_MAX / 2.f)
@@ -3063,7 +3065,7 @@ namespace HybridPred
         math::vector3 target_client_pos = target->get_position();
         // FIX: Use server position for target to avoid latency lag (30-100ms behind)
         math::vector3 target_pos = target->get_server_position();
-        float initial_distance = (target_pos - source_pos).magnitude();
+        float initial_distance = distance_2d(target_pos, source_pos);  // 2D distance (ignore height)
 
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
@@ -3112,7 +3114,7 @@ namespace HybridPred
         }
 
         float final_arrival_time = arrival_time;
-        float predicted_distance = (final_predicted_pos - source_pos).magnitude();
+        float predicted_distance = distance_2d(final_predicted_pos, source_pos);  // 2D
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for initial center position
@@ -3120,7 +3122,8 @@ namespace HybridPred
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
-        float current_distance = (target->get_server_position() - source_pos).magnitude();
+        // HIGH GROUND FIX: 2D distance (ignore height)
+        float current_distance = distance_2d(target->get_server_position(), source_pos);
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         float move_speed = target->get_move_speed();
@@ -3437,7 +3440,8 @@ namespace HybridPred
         float confidence = 1.0f;
 
         // Distance factor - further = less confident
-        float distance = (target->get_position() - source->get_position()).magnitude();
+        // HIGH GROUND FIX: 2D distance (ignore height)
+        float distance = distance_2d(target->get_position(), source->get_position());
         confidence *= std::exp(-distance * CONFIDENCE_DISTANCE_DECAY);
 
         // Latency factor (ping in seconds)
@@ -3652,7 +3656,7 @@ namespace HybridPred
 
             // Use server position for accuracy
             math::vector3 target_pos = target->get_server_position();
-            float distance = (target_pos - source_pos).magnitude();
+            float distance = distance_2d(target_pos, source_pos);  // 2D
 
             // Only consider targets within range
             if (distance <= max_range)
@@ -3676,8 +3680,8 @@ namespace HybridPred
         // Use MEC algorithm to find optimal AOE center
         Circle mec = PhysicsPredictor::compute_minimum_enclosing_circle(target_positions);
 
-        // Verify the MEC center is within cast range
-        float center_distance = (mec.center - source_pos).magnitude();
+        // Verify the MEC center is within cast range (2D distance)
+        float center_distance = distance_2d(mec.center, source_pos);
 
         if (center_distance <= max_range)
         {
@@ -3797,7 +3801,7 @@ namespace HybridPred
         math::vector3 target_client_pos = target->get_position();
         // FIX: Use server position for target to avoid latency lag (30-100ms behind)
         math::vector3 target_pos = target->get_server_position();
-        float initial_distance = (target_pos - source_pos).magnitude();
+        float initial_distance = distance_2d(target_pos, source_pos);  // 2D distance (ignore height)
 
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
@@ -3846,7 +3850,7 @@ namespace HybridPred
         }
 
         float final_arrival_time = arrival_time;
-        float predicted_distance = (final_predicted_pos - source_pos).magnitude();
+        float predicted_distance = distance_2d(final_predicted_pos, source_pos);  // 2D
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
@@ -3854,7 +3858,8 @@ namespace HybridPred
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
-        float current_distance = (target->get_server_position() - source_pos).magnitude();
+        // HIGH GROUND FIX: 2D distance (ignore height)
+        float current_distance = distance_2d(target->get_server_position(), source_pos);
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         math::vector3 target_velocity = tracker.get_current_velocity();
@@ -4334,7 +4339,7 @@ namespace HybridPred
         math::vector3 target_client_pos = target->get_position();
         // FIX: Use server position for target to avoid latency lag (30-100ms behind)
         math::vector3 target_pos = target->get_server_position();
-        float initial_distance = (target_pos - source_pos).magnitude();
+        float initial_distance = distance_2d(target_pos, source_pos);  // 2D distance (ignore height)
 
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
@@ -4383,7 +4388,7 @@ namespace HybridPred
         }
 
         float final_arrival_time = arrival_time;
-        float predicted_distance = (final_predicted_pos - source_pos).magnitude();
+        float predicted_distance = distance_2d(final_predicted_pos, source_pos);  // 2D
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction for better accuracy
@@ -4391,7 +4396,8 @@ namespace HybridPred
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
-        float current_distance = (target->get_server_position() - source_pos).magnitude();
+        // HIGH GROUND FIX: 2D distance (ignore height)
+        float current_distance = distance_2d(target->get_server_position(), source_pos);
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         math::vector3 target_velocity = tracker.get_current_velocity();
@@ -4615,7 +4621,7 @@ namespace HybridPred
         math::vector3 target_client_pos = target->get_position();
         // FIX: Use server position for target to avoid latency lag (30-100ms behind)
         math::vector3 target_pos = target->get_server_position();
-        float initial_distance = (target_pos - source_pos).magnitude();
+        float initial_distance = distance_2d(target_pos, source_pos);  // 2D distance (ignore height)
 
         float arrival_time = PhysicsPredictor::compute_arrival_time(
             source_pos,
@@ -4655,7 +4661,7 @@ namespace HybridPred
         }
 
         float final_arrival_time = arrival_time;
-        float predicted_distance = (final_predicted_pos - source_pos).magnitude();
+        float predicted_distance = distance_2d(final_predicted_pos, source_pos);  // 2D
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction like circular/linear for consistency
@@ -4663,7 +4669,8 @@ namespace HybridPred
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
-        float current_distance = (target->get_server_position() - source_pos).magnitude();
+        // HIGH GROUND FIX: 2D distance (ignore height)
+        float current_distance = distance_2d(target->get_server_position(), source_pos);
         bool is_point_blank = current_distance < 200.f;  // Within 200 units
 
         float move_speed = target->get_move_speed();  // Stat value for historical lookups
