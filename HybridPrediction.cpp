@@ -2772,7 +2772,9 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
-        if (!source || !target || !source->is_valid() || !target->is_valid())
+        // FIX: Add dead checks - is_valid() doesn't return false for dead targets
+        if (!source || !target || !source->is_valid() || !target->is_valid() ||
+            source->is_dead() || target->is_dead())
         {
             result.is_valid = false;
             return result;
@@ -3133,7 +3135,9 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
-        if (!source || !target || !source->is_valid() || !target->is_valid())
+        // FIX: Add dead checks - is_valid() doesn't return false for dead targets
+        if (!source || !target || !source->is_valid() || !target->is_valid() ||
+            source->is_dead() || target->is_dead())
         {
             result.is_valid = false;
             result.reasoning = "Invalid source or target";
@@ -3881,7 +3885,9 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
-        if (!source || !target || !source->is_valid() || !target->is_valid())
+        // FIX: Add dead checks - is_valid() doesn't return false for dead targets
+        if (!source || !target || !source->is_valid() || !target->is_valid() ||
+            source->is_dead() || target->is_dead())
         {
             result.is_valid = false;
             return result;
@@ -4390,7 +4396,9 @@ namespace HybridPred
 
         HybridPredictionResult result;
 
-        if (!source || !target || !source->is_valid() || !target->is_valid())
+        // FIX: Add dead checks - is_valid() doesn't return false for dead targets
+        if (!source || !target || !source->is_valid() || !target->is_valid() ||
+            source->is_dead() || target->is_dead())
         {
             result.is_valid = false;
             return result;
@@ -4425,7 +4433,9 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
-        if (!source || !target || !source->is_valid() || !target->is_valid())
+        // FIX: Add dead checks - is_valid() doesn't return false for dead targets
+        if (!source || !target || !source->is_valid() || !target->is_valid() ||
+            source->is_dead() || target->is_dead())
         {
             result.is_valid = false;
             return result;
@@ -4713,7 +4723,9 @@ namespace HybridPred
     {
         HybridPredictionResult result;
 
-        if (!source || !target || !source->is_valid() || !target->is_valid())
+        // FIX: Add dead checks - is_valid() doesn't return false for dead targets
+        if (!source || !target || !source->is_valid() || !target->is_valid() ||
+            source->is_dead() || target->is_dead())
         {
             result.is_valid = false;
             return result;
