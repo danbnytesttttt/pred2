@@ -2944,7 +2944,8 @@ namespace HybridPred
                 // They're locked in forced movement, can't dodge or change direction
                 // Calculate intercept position along dash path
 
-                math::vector3 dash_start = target->get_position();
+                // FIX: Use server position for accurate dash start (client lags behind)
+                math::vector3 dash_start = target->get_server_position();
                 math::vector3 dash_end = edge_cases.dash.dash_end_position;
                 math::vector3 dash_vector = dash_end - dash_start;
                 float dash_length = dash_vector.magnitude();

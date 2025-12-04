@@ -194,7 +194,8 @@ namespace EdgeCases
         info.dash_speed = target->get_dash_speed();
 
         // Calculate arrival time at dash end
-        float distance = (info.dash_end_position - target->get_position()).magnitude();
+        // FIX: Use server position for accurate dash tracking (client lags behind)
+        float distance = (info.dash_end_position - target->get_server_position()).magnitude();
 
         constexpr float EPSILON = 0.01f;
         if (info.dash_speed > EPSILON)
