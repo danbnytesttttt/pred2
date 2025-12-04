@@ -859,12 +859,16 @@ namespace HybridPred
 
         /**
          * Compute time for projectile to reach target
+         *
+         * @param proc_delay Additional delay until spell deals damage (e.g., Syndra Q = 0.6s)
+         *                   This is separate from cast_delay (animation windup)
          */
         static float compute_arrival_time(
             const math::vector3& source_pos,
             const math::vector3& target_pos,
             float projectile_speed,
-            float cast_delay
+            float cast_delay,
+            float proc_delay = 0.f
         );
 
         /**

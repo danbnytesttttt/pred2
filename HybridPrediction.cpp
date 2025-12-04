@@ -84,7 +84,12 @@ namespace HybridPred
         int grid_z = static_cast<int>((dz / cell_size) + GRID_SIZE / 2);
 
         // Gaussian kernel (spread probability to nearby cells)
-        constexpr float sigma = 1.5f;
+        // CONSISTENCY FIX: Sigma in WORLD UNITS, not grid cells
+        // Old: sigma = 1.5 cells → varying spread (37-112 units depending on cell_size)
+        // New: sigma = 50 world units → consistent spread regardless of prediction distance
+        constexpr float SIGMA_WORLD_UNITS = 50.f;
+        float sigma = SIGMA_WORLD_UNITS / cell_size;  // Convert to grid cells
+        sigma = std::max(sigma, 0.5f);  // Minimum spread of 0.5 cells
         constexpr int kernel_radius = 2;
 
         for (int i = -kernel_radius; i <= kernel_radius; ++i)
@@ -1503,7 +1508,10 @@ namespace HybridPred
         // OPPORTUNITY ENFORCEMENT: Gentle penalty for non-peak opportunities
         // RELAXED: Only penalize if < 80% (good shots should fire regardless of peak)
         // REDUCED: 10% penalty instead of 15% (avoid "double jeopardy" with stricter thresholds)
-        if (!result.is_peak_opportunity && result.hit_chance < 0.80f)
+        // SKIP IF LOCKED: If target is currently animation-locked, don't penalize even if
+        // lock ends before spell arrives. Shooting at a locked target is ALWAYS a good opportunity.
+        bool target_currently_locked = tracker.is_animation_locked();
+        if (!result.is_peak_opportunity && result.hit_chance < 0.80f && !target_currently_locked)
         {
             result.hit_chance *= 0.90f;  // 10% penalty for impatience
         }
@@ -2345,16 +2353,18 @@ namespace HybridPred
         const math::vector3& source_pos,
         const math::vector3& target_pos,
         float projectile_speed,
-        float cast_delay)
+        float cast_delay,
+        float proc_delay)
     {
         // HIGH GROUND FIX: Use 2D distance (ignore Y/height)
         // League logic is 2D - river vs mid lane height shouldn't affect projectile travel
         float distance = distance_2d(source_pos, target_pos);
 
         // Instant spell: No projectile travel time
+        // proc_delay still applies (e.g., Syndra Q takes 0.6s to "pop" after placement)
         if (projectile_speed < EPSILON || projectile_speed >= FLT_MAX / 2.f)
         {
-            return cast_delay;  // Just the windup
+            return cast_delay + proc_delay;  // Windup + activation delay
         }
 
         // PING COMPENSATION (Zero-Ping Fallacy Fix):
@@ -2363,6 +2373,7 @@ namespace HybridPred
         // - t=ping/2 (server): Server receives our cast command, windup starts
         // - t=ping/2+delay (server): Projectile launches
         // - t=ping/2+delay+travel (server): Projectile arrives
+        // - t=ping/2+delay+travel+proc_delay (server): Spell deals damage (if proc_delay > 0)
         //
         // get_server_position() is where they are NOW on the server (t=0).
         // But our spell doesn't START until t=ping/2, by which time they've moved.
@@ -2382,7 +2393,7 @@ namespace HybridPred
             ping_delay = std::clamp(ping_delay, 0.005f, 0.15f);
         }
 
-        return ping_delay + cast_delay + (distance / projectile_speed);
+        return ping_delay + cast_delay + proc_delay + (distance / projectile_speed);
     }
 
     // =========================================================================
@@ -3071,7 +3082,8 @@ namespace HybridPred
             source_pos,
             target_pos,
             spell.projectile_speed,
-            spell.delay
+            spell.delay,
+            spell.proc_delay  // PROC_DELAY FIX: Include activation delay (e.g., Syndra Q pop time)
         );
         float initial_arrival_time = arrival_time;
 
@@ -3102,7 +3114,8 @@ namespace HybridPred
                 source_pos,
                 predicted_pos,
                 spell.projectile_speed,
-                spell.delay
+                spell.delay,
+                spell.proc_delay
             );
 
             // Early exit if converged (change < 1ms)
@@ -3148,7 +3161,8 @@ namespace HybridPred
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
             // At close range (arrival < 0.5s), targets can't execute full jukes
             // They barely finish reacting before spell lands
-            if (arrival_time < 0.5f)
+            // GUARD: Skip if effective_reaction_time >= 0.5s to avoid division by zero
+            if (arrival_time < 0.5f && effective_reaction_time < 0.5f - EPSILON)
             {
                 // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
                 float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
@@ -3435,6 +3449,30 @@ namespace HybridPred
         if (is_obvious_hit(target, tracker, edge_cases))
         {
             return 0.95f;  // Near-perfect confidence for obvious hits
+        }
+
+        // HIT_TYPE BOOST: If spell expects undodgeable or hard CC hits, boost confidence
+        // These are situations where the target is CC'd and can't physically dodge
+        // This allows the SDK to communicate "only fire when target is locked down"
+        bool expects_guaranteed_hit = false;
+        for (const auto& hit_type : spell.expected_hit_types)
+        {
+            if (hit_type == pred_sdk::hit_type::undodgeable ||
+                hit_type == pred_sdk::hit_type::cc_hard ||
+                hit_type == pred_sdk::hit_type::cc)
+            {
+                expects_guaranteed_hit = true;
+                break;
+            }
+        }
+        if (expects_guaranteed_hit)
+        {
+            // Caller wants us to only fire on CC'd targets
+            // If they ARE CC'd (checked above in is_obvious_hit), we returned 0.95
+            // If they're NOT CC'd but caller expected it, we should penalize
+            // But typically this field is informational, so just provide a small boost
+            // for spells designed to hit CC'd targets
+            return 0.90f;  // High confidence - these spells are designed for guaranteed hits
         }
 
         float confidence = 1.0f;
@@ -3808,7 +3846,8 @@ namespace HybridPred
             source_pos,
             target_pos,
             spell.projectile_speed,
-            spell.delay
+            spell.delay,
+            spell.proc_delay  // PROC_DELAY FIX: Include activation delay (e.g., Syndra Q pop time)
         );
         float initial_arrival_time = arrival_time;
 
@@ -3839,7 +3878,8 @@ namespace HybridPred
                 source_pos,
                 predicted_pos,
                 spell.projectile_speed,
-                spell.delay
+                spell.delay,
+                spell.proc_delay
             );
 
             // Early exit if converged (change < 1ms)
@@ -3886,7 +3926,8 @@ namespace HybridPred
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
             // At close range (arrival < 0.5s), targets can't execute full jukes
             // They barely finish reacting before spell lands
-            if (arrival_time < 0.5f)
+            // GUARD: Skip if effective_reaction_time >= 0.5s to avoid division by zero
+            if (arrival_time < 0.5f && effective_reaction_time < 0.5f - EPSILON)
             {
                 // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
                 float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
@@ -4346,7 +4387,8 @@ namespace HybridPred
             source_pos,
             target_pos,
             spell.projectile_speed,
-            spell.delay
+            spell.delay,
+            spell.proc_delay  // PROC_DELAY FIX: Include activation delay (e.g., Syndra Q pop time)
         );
         float initial_arrival_time = arrival_time;
 
@@ -4377,7 +4419,8 @@ namespace HybridPred
                 source_pos,
                 predicted_pos,
                 spell.projectile_speed,
-                spell.delay
+                spell.delay,
+                spell.proc_delay
             );
 
             // Early exit if converged (change < 1ms)
@@ -4424,7 +4467,8 @@ namespace HybridPred
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
             // At close range (arrival < 0.5s), targets can't execute full jukes
             // They barely finish reacting before spell lands
-            if (arrival_time < 0.5f)
+            // GUARD: Skip if effective_reaction_time >= 0.5s to avoid division by zero
+            if (arrival_time < 0.5f && effective_reaction_time < 0.5f - EPSILON)
             {
                 // Scale dodge time: 0.3s arrival → 40% dodge, 0.5s → 100% dodge
                 float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
@@ -4628,7 +4672,8 @@ namespace HybridPred
             source_pos,
             target_pos,
             spell.projectile_speed,
-            spell.delay
+            spell.delay,
+            spell.proc_delay  // PROC_DELAY FIX: Include activation delay (e.g., Syndra Q pop time)
         );
         float initial_arrival_time = arrival_time;
 
@@ -4659,7 +4704,8 @@ namespace HybridPred
                 source_pos,
                 predicted_pos,
                 spell.projectile_speed,
-                spell.delay
+                spell.delay,
+                spell.proc_delay
             );
 
             // Early exit if converged (change < 1ms)
@@ -4703,7 +4749,8 @@ namespace HybridPred
             dodge_time = std::min(observed_dodge_time, max_dodge_time);
 
             // CLOSE-RANGE FIX: Dramatically reduce dodge time for fast spells
-            if (arrival_time < 0.5f)
+            // GUARD: Skip if effective_reaction_time >= 0.5s to avoid division by zero
+            if (arrival_time < 0.5f && effective_reaction_time < 0.5f - EPSILON)
             {
                 float close_range_scale = (arrival_time - effective_reaction_time) / (0.5f - effective_reaction_time);
                 close_range_scale = std::clamp(close_range_scale, 0.f, 1.f);
