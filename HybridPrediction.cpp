@@ -390,6 +390,48 @@ namespace HybridPred
             }
         }
 
+        // ADAPTIVE REACTION BUFFER: Track animation cancel delay
+        // Measures how quickly this player starts moving after animation locks end
+        // Scripters: ~0.005-0.015s, Average: ~0.025s, Lazy: ~0.05-0.1s
+        bool currently_in_animation = snapshot.is_auto_attacking || snapshot.is_casting;
+
+        // Detect animation END (was locked, now unlocked)
+        if (was_in_animation_ && !currently_in_animation)
+        {
+            // Animation just ended - record timestamp
+            animation_end_time_ = current_time;
+        }
+
+        // Detect movement START after animation end
+        if (animation_end_time_ > 0.f && snapshot.velocity.magnitude() > 50.f)
+        {
+            // Movement started after animation - measure the delay
+            float cancel_delay = current_time - animation_end_time_;
+
+            // Only count reasonable delays (0.001s to 0.5s)
+            // Ignore very long delays (they probably got CC'd or changed their mind)
+            if (cancel_delay > 0.001f && cancel_delay < 0.5f)
+            {
+                // Rolling average with decay (newer samples weighted more)
+                if (cancel_delay_samples_ == 0)
+                    measured_cancel_delay_ = cancel_delay;
+                else
+                    measured_cancel_delay_ = measured_cancel_delay_ * 0.7f + cancel_delay * 0.3f;
+                cancel_delay_samples_++;
+            }
+
+            // Reset - we've captured this sample
+            animation_end_time_ = 0.f;
+        }
+
+        // Also reset if they've been static for too long (> 0.5s after animation end)
+        if (animation_end_time_ > 0.f && (current_time - animation_end_time_) > 0.5f)
+        {
+            animation_end_time_ = 0.f;  // Cancel tracking - they didn't move
+        }
+
+        was_in_animation_ = currently_in_animation;
+
         // Add to history
         movement_history_.push_back(snapshot);
 
@@ -1900,6 +1942,22 @@ namespace HybridPred
             // If lock lasts longer than flight time, target stays put
             if (effective_movement_time <= 0.f)
                 return position;
+
+            // PATH STALENESS FIX (Path Reset Fallacy):
+            // When a target is locked for a significant time (> 0.2s), their old path
+            // becomes increasingly unreliable:
+            // 1. Attack/Cast commands typically invalidate previous move commands
+            // 2. After lock ends, they either stand still or issue NEW movement (often perpendicular if kiting)
+            // 3. We can't know their new path, so we conservatively reduce extrapolation
+            //
+            // This prevents predicting too far along a stale path that's no longer valid
+            if (delay_start_time > 0.2f)
+            {
+                // Scale factor: 0.2s lock = 100%, 0.4s lock = 70%, 0.6s+ lock = 50%
+                // This biases prediction toward their locked position rather than wild extrapolation
+                float staleness_factor = 1.0f - std::min((delay_start_time - 0.2f) / 0.4f, 0.5f);
+                effective_movement_time *= staleness_factor;
+            }
         }
 
         float distance_to_travel = move_speed * effective_movement_time;
@@ -3090,10 +3148,13 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
+        // ADAPTIVE: Use measured cancel delay for this specific player
         float animation_lock_delay = 0.f;
         if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
         {
-            animation_lock_delay = get_remaining_lock_time(target);
+            // Use adaptive reaction buffer if we have enough samples, otherwise default
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
         }
 
         // Track refinement convergence
@@ -3854,10 +3915,13 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
+        // ADAPTIVE: Use measured cancel delay for this specific player
         float animation_lock_delay = 0.f;
         if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
         {
-            animation_lock_delay = get_remaining_lock_time(target);
+            // Use adaptive reaction buffer if we have enough samples, otherwise default
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
         }
 
         // Track refinement convergence
@@ -4395,10 +4459,13 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
+        // ADAPTIVE: Use measured cancel delay for this specific player
         float animation_lock_delay = 0.f;
         if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
         {
-            animation_lock_delay = get_remaining_lock_time(target);
+            // Use adaptive reaction buffer if we have enough samples, otherwise default
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
         }
 
         // Track refinement convergence
@@ -4680,10 +4747,13 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
+        // ADAPTIVE: Use measured cancel delay for this specific player
         float animation_lock_delay = 0.f;
         if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
         {
-            animation_lock_delay = get_remaining_lock_time(target);
+            // Use adaptive reaction buffer if we have enough samples, otherwise default
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
         }
 
         // Track refinement convergence

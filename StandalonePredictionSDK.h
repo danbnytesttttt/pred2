@@ -104,6 +104,7 @@ inline float get_current_windup(game_object* obj, spell_cast* cast)
 
 // Get exact time remaining in animation lock
 // Returns 0 if not locked, otherwise the time until they can move again
+// Uses HUMAN_REACTION_BUFFER (0.025s) as default for average players
 inline float get_remaining_lock_time(game_object* obj)
 {
     if (!obj) return 0.f;
@@ -118,6 +119,27 @@ inline float get_remaining_lock_time(game_object* obj)
     float windup = get_current_windup(obj, spell_cast);
 
     float end_time = cast_start + windup + HUMAN_REACTION_BUFFER;
+    return std::max(0.f, end_time - current_time);
+}
+
+// ADAPTIVE VERSION: Uses measured reaction buffer for this specific player
+// Pass the result of tracker.get_adaptive_reaction_buffer() for personalized prediction
+// Scripters: ~0.005-0.015s (near-instant cancel), Lazy: ~0.05-0.1s (let backswing play)
+inline float get_remaining_lock_time_adaptive(game_object* obj, float adaptive_reaction_buffer)
+{
+    if (!obj) return 0.f;
+    auto active_cast = obj->get_active_spell_cast();
+    if (!active_cast) return 0.f;
+    auto spell_cast = active_cast->get_spell_cast();
+    if (!spell_cast) return 0.f;
+
+    if (!g_sdk || !g_sdk->clock_facade) return 0.f;
+    float current_time = g_sdk->clock_facade->get_game_time();
+    float cast_start = active_cast->get_cast_start_time();
+    float windup = get_current_windup(obj, spell_cast);
+
+    // Use adaptive buffer instead of fixed constant
+    float end_time = cast_start + windup + adaptive_reaction_buffer;
     return std::max(0.f, end_time - current_time);
 }
 
@@ -173,6 +195,40 @@ inline bool is_channeling(game_object* obj)
     // Check if channeling end time is valid (> 0 means channeling)
     float channel_end = active_cast->get_cast_channeling_end_time();
     return channel_end > 0.f;
+}
+
+/**
+ * MOBILE CHANNEL FIX: Detect if a channel is stationary or mobile
+ *
+ * Mobile Channels (allow movement): Lucian R, Varus Q, Xerath Q, Pyke Q, Vladimir E
+ * Stationary Channels (lock movement): Malzahar R, Recall, Katarina R, MF R
+ *
+ * Heuristic: If target is channeling BUT is_moving() returns true AND
+ * they have meaningful velocity, it's a mobile channel.
+ * Stationary channels clamp velocity to exactly 0.
+ */
+inline bool is_stationary_channel(game_object* obj)
+{
+    if (!obj) return false;
+
+    // If not channeling at all, return false
+    if (!is_channeling(obj)) return false;
+
+    // HEURISTIC: If they are channeling BUT moving, it's a mobile channel
+    // Mobile channels (Lucian R, Varus Q charging) allow movement during channel
+    // Stationary channels (Malz R, Recall, MF R) lock the champion in place
+    if (obj->is_moving())
+    {
+        // Double-check with path - if they have valid waypoints, they're actually moving
+        auto path = obj->get_path();
+        if (path.size() > 1)
+        {
+            return false;  // Mobile channel - not stationary
+        }
+    }
+
+    // Not moving during channel = stationary channel
+    return true;
 }
 
 inline bool is_recalling(game_object* obj)

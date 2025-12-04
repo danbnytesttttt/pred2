@@ -192,10 +192,18 @@ namespace HybridPred
             return base_speed * (time_free / prediction_time);
         }
 
-        // 2. ANIMATION LOCK CHECK (Auto-Attack / Cast)
+        // 2. ANIMATION LOCK CHECK (Auto-Attack / Cast / Stationary Channel)
         // FIX: Calculate "Free Time" exactly like CC
         // Do NOT assume speed=0 just because they are attacking NOW
-        bool locked_state = (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target));
+        // MOBILE CHANNEL FIX: Only consider STATIONARY channels as locks
+        // Mobile channels (Lucian R, Varus Q, Xerath Q) allow movement during channel
+        bool locked_state = is_auto_attacking(target) || is_casting_spell(target);
+
+        // Only add channeling as a lock if it's a STATIONARY channel
+        if (!locked_state && is_channeling(target))
+        {
+            locked_state = is_stationary_channel(target);
+        }
 
         if (locked_state && !target->is_moving())
         {
@@ -700,6 +708,15 @@ namespace HybridPred
         int decel_sample_count_ = 0;              // Number of deceleration samples
         float last_measured_speed_ = 0.f;         // Previous frame's speed for delta calculation
 
+        // ADAPTIVE REACTION BUFFER: Track how quickly this player cancels animations
+        // Scripters/high-APM: ~0.005-0.015s (near-instant cancels)
+        // Average players: ~0.025-0.035s (default human reaction)
+        // Lazy/low-elo: ~0.05-0.1s (let backswing play out)
+        float measured_cancel_delay_ = 0.025f;    // Start with default
+        int cancel_delay_samples_ = 0;            // Number of samples
+        bool was_in_animation_ = false;           // Track animation state transitions
+        float animation_end_time_ = 0.f;          // When animation lock ended
+
     public:
         TargetBehaviorTracker(game_object* target);
 
@@ -740,6 +757,17 @@ namespace HybridPred
         float get_measured_acceleration() const { return measured_acceleration_; }
         float get_measured_deceleration() const { return measured_deceleration_; }
         bool has_measured_physics() const { return accel_sample_count_ >= 3 || decel_sample_count_ >= 3; }
+
+        // ADAPTIVE REACTION BUFFER: Get measured animation cancel delay for this target
+        // Returns value between 0.005s (scripter) and 0.1s (lazy player)
+        // Default 0.025s until enough samples are collected
+        float get_adaptive_reaction_buffer() const
+        {
+            if (cancel_delay_samples_ < 3)
+                return 0.025f;  // Default until we have data
+            return std::clamp(measured_cancel_delay_, 0.005f, 0.1f);
+        }
+        bool has_measured_cancel_delay() const { return cancel_delay_samples_ >= 3; }
 
     private:
         void update_dodge_pattern();
