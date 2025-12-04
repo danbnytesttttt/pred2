@@ -398,14 +398,14 @@ namespace HybridPred
         // OLD BUG: Linear interpolation allowed behavior to "save" impossible predictions
         //   Example: physics=0.0, behavior=0.9 → 0.6*0.0 + 0.4*0.9 = 0.36 (WRONG!)
         //
-        // NEW: Sqrt fusion to soften harsh multiplication (fixes 97.8% rejection rate)
-        //   Formula: fused = sqrt(physics × (physics_weight + (1-physics_weight) × behavior))
-        //   This maintains physics constraint while being less conservative
-        //   Example: physics=0.0, behavior=0.9 → sqrt(0.0 × 0.76) = 0.0 (physics veto still works!)
-        //   Example: physics=1.0, behavior=0.5 → sqrt(1.0 × 0.8) = 0.894 (higher chance)
-        //   Example: physics=0.7, behavior=0.4 → sqrt(0.7 × 0.76) = 0.73 vs old 0.53 (less harsh)
-        float weighted_avg = physics_weight + (1.0f - physics_weight) * behavior_prob;
-        float fused = sqrtf(physics_prob * weighted_avg);
+        // NEW: Weighted geometric mean - properly respects physics/behavior ratio
+        //   Formula: fused = physics^weight × behavior^(1-weight)
+        //   This is mathematically correct for combining two probability estimates
+        //   Example: physics=0.0, behavior=0.9 → 0^0.6 × 0.9^0.4 = 0.0 (physics veto still works!)
+        //   Example: physics=1.0, behavior=0.5 → 1.0^0.6 × 0.5^0.4 = 0.758 (balanced)
+        //   Example: physics=0.7, behavior=0.4 → 0.7^0.6 × 0.4^0.4 = 0.586 (true 60/40 blend)
+        //   With 60% weight, physics contributes 60% of the log-probability, behavior 40%
+        float fused = powf(physics_prob, physics_weight) * powf(behavior_prob, 1.0f - physics_weight);
 
         // Apply confidence as a multiplier
         // Lower safety floor to allow proper penalization from edge cases
