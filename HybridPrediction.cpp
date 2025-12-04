@@ -2373,7 +2373,7 @@ namespace HybridPred
         if (g_sdk && g_sdk->net_client)
         {
             // Ping is round-trip in ms, divide by 2 for one-way, convert to seconds
-            float ping_ms = g_sdk->net_client->get_ping();
+            float ping_ms = static_cast<float>(g_sdk->net_client->get_ping());
             ping_delay = ping_ms / 2000.f;
 
             // Clamp to reasonable range (5ms - 150ms one-way)
@@ -4631,6 +4631,15 @@ namespace HybridPred
         );
         float initial_arrival_time = arrival_time;
 
+        // ANIMATION LOCK DELAY (Stop-then-Go):
+        // Calculate remaining lock time for accurate path prediction
+        // Target stays at current position during lock, then moves at full speed
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
+        {
+            animation_lock_delay = get_remaining_lock_time(target);
+        }
+
         // Track refinement convergence
         int refinement_iterations = 0;
         bool arrival_converged = false;
@@ -4642,7 +4651,7 @@ namespace HybridPred
         {
             refinement_iterations = iteration + 1;
             float prev_arrival = arrival_time;
-            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+            math::vector3 predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
             final_predicted_pos = predicted_pos;
 
             arrival_time = PhysicsPredictor::compute_arrival_time(
@@ -4665,7 +4674,7 @@ namespace HybridPred
 
         // Step 2: Build reachable region (physics)
         // FIX: Use path-following prediction like circular/linear for consistency
-        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time);
+        math::vector3 path_predicted_pos = PhysicsPredictor::predict_on_path(target, arrival_time, animation_lock_delay);
 
         // POINT-BLANK DETECTION: At very close range, different rules apply
         // Use server position for accurate distance (client position lags)
@@ -4681,9 +4690,10 @@ namespace HybridPred
         const DodgePattern& dodge_pattern = tracker.get_dodge_pattern();
         float observed_magnitude = dodge_pattern.get_juke_magnitude(move_speed);
 
-        // Calculate dodge time accounting for human reaction
-        // FIX: Enemies react DURING cast animation, using up their reaction time
-        float effective_reaction_time = std::max(0.05f, HUMAN_REACTION_TIME - spell.delay);
+        // Calculate effective reaction time accounting for FOW and cast delay
+        // FOW FIX: If we're hidden, enemies can't see our animation - they get full reaction time
+        // VISIBLE: Enemies react DURING cast animation, consuming reaction time
+        float effective_reaction_time = get_effective_reaction_time(source, target, spell.delay);
         float max_dodge_time = arrival_time - effective_reaction_time;
         float dodge_time = 0.f;
         if (max_dodge_time > 0.f && effective_move_speed > EPSILON)

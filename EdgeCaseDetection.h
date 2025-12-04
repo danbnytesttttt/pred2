@@ -424,8 +424,8 @@ namespace EdgeCases
         if (!yasuo || !yasuo->is_valid())
             return 600.f;  // Default to max if can't determine
 
-        // Try to get W spell level
-        auto w_spell = yasuo->get_spell(spell_slot::w);
+        // Try to get W spell level (W = slot 1: Q=0, W=1, E=2, R=3)
+        auto w_spell = yasuo->get_spell(1);
         if (w_spell)
         {
             int level = w_spell->get_level();
@@ -738,13 +738,15 @@ namespace EdgeCases
             //
             // Heuristic: Skip if HP < 15% (typical last-hit threshold)
             // More accurate would be full health prediction, but this works for most cases
-            float health_percent = minion->get_health_percent();
+            float current_hp = minion->get_hp();
+            float max_hp = minion->get_max_hp();
+            float health_percent = (max_hp > 0.f) ? (current_hp / max_hp) * 100.f : 100.f;
             if (health_percent < 15.f)
                 continue;
 
             // Also skip minions being attacked by towers (will die very fast)
             // Check if minion is taking significant damage (tower shots are ~100+ damage)
-            if (health_percent < 30.f && minion->get_health() < 150.f)
+            if (health_percent < 30.f && current_hp < 150.f)
                 continue;
 
             // Skip wards (don't block skillshots)
