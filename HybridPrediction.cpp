@@ -861,6 +861,8 @@ namespace HybridPred
             return;
         }
 
+        // CONTEXT-AWARE JUKE DETECTION
+        // Only count INTENTIONAL dodging, not CSing/kiting/orb-walking
         for (size_t i = 2; i < movement_history_.size(); ++i)
         {
             const auto& prev = movement_history_[i - 2];
@@ -877,13 +879,61 @@ namespace HybridPred
             float angle = std::acos(std::clamp(prev_dir.dot(curr_dir), -1.f, 1.f));
             float angle_degrees = angle * (180.f / PI);
 
-            // Track ALL turn angles for average (not just significant ones > 30°)
-            recent_turn_angles_.push_back(angle_degrees);
+            // CONTEXT FILTERING: Distinguish jukes from normal gameplay
+            bool is_legitimate_juke = true;
+
+            // FILTER 1: Ignore orb-walking/CSing movement (during auto-attacks)
+            // If they're auto-attacking, direction changes are probably kiting, not dodging
+            if (curr.is_auto_attacking || mid.is_auto_attacking)
+            {
+                // Only count as juke if it's a LARGE lateral movement (>45° AND high speed)
+                // Small corrections during AAs are normal kiting
+                if (angle_degrees < 60.f || curr.velocity.magnitude() < 200.f)
+                {
+                    is_legitimate_juke = false;
+                }
+            }
+
+            // FILTER 2: Magnitude threshold - small corrections aren't jukes
+            // Calculate actual displacement to distinguish small corrections from real jukes
+            float time_delta = curr.timestamp - mid.timestamp;
+            if (time_delta > 0.001f)  // Avoid division by zero
+            {
+                math::vector3 displacement = curr.position - mid.position;
+                float lateral_displacement = displacement.magnitude();
+
+                // If lateral movement is < 75 units, it's probably a minor correction
+                // Real jukes involve significant lateral displacement (100+ units)
+                if (lateral_displacement < 75.f)
+                {
+                    is_legitimate_juke = false;
+                }
+            }
+
+            // FILTER 3: Forward path corrections vs lateral dodging
+            // Calculate if movement is perpendicular (juke) vs along path (correction)
+            if (angle_degrees > 30.f && angle_degrees < 150.f)  // Not a reversal or tiny turn
+            {
+                // Use cross product to check if it's lateral (left/right) vs forward/back
+                math::vector3 cross = prev_dir.cross(curr_dir);
+                float lateral_component = std::abs(cross.y);  // Y component = lateral magnitude
+
+                // If lateral component is small, it's a forward correction, not a juke
+                if (lateral_component < 0.4f)  // < ~24° lateral angle
+                {
+                    is_legitimate_juke = false;
+                }
+            }
+
+            // Track ALL turn angles for average (for smooth runners vs dancers)
+            // But weight legitimate jukes more heavily
+            float angle_weight = is_legitimate_juke ? 1.0f : 0.3f;
+            recent_turn_angles_.push_back(angle_degrees * angle_weight);
             if (recent_turn_angles_.size() > 8)  // Keep last 8 angles
                 recent_turn_angles_.pop_front();
 
-            // Also track significant changes (> 30°) for existing logic
-            if (angle > 0.5f) // ~30 degrees
+            // Only track LEGITIMATE jukes in direction change history
+            if (angle > 0.5f && is_legitimate_juke) // ~30 degrees + context filters
             {
                 direction_change_times_.push_back(curr.timestamp);
                 direction_change_angles_.push_back(angle);
@@ -905,6 +955,7 @@ namespace HybridPred
 
         // HARD JUKE DETECTION: Check for sharp turns (>45°) in recent history
         // Used for confidence fast-track - bypass sample count penalty
+        // NOW WITH CONTEXT FILTERING
         recent_hard_juke_ = false;
         if (movement_history_.size() >= 3)
         {
@@ -924,8 +975,22 @@ namespace HybridPred
                     // dot < 0.707 means angle > 45 degrees (sharp turn)
                     if (dot < 0.707f)
                     {
-                        recent_hard_juke_ = true;
-                        break;
+                        // CONTEXT CHECK: Was this during an auto-attack?
+                        // If yes, only count if it's a VERY sharp turn (>60°)
+                        if (curr.is_auto_attacking)
+                        {
+                            if (dot < 0.5f)  // >60° turn during AA = legitimate dodge
+                            {
+                                recent_hard_juke_ = true;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            // Not during AA - this is a legitimate juke
+                            recent_hard_juke_ = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -3656,11 +3721,12 @@ namespace HybridPred
             }
         }
 
-        // AVERAGE TURN ANGLE - Lightweight juke detection (O(1) vs O(n) loop)
-        // Low angle = running straight (predictable)
-        // High angle = dancing/juking (unpredictable)
+        // AVERAGE TURN ANGLE - Intelligent juke analysis
+        // Now context-aware: distinguishes predictable patterns from random dancing
         float avg_turn_angle = tracker.get_average_turn_angle();
+        const auto& dodge_pattern = tracker.get_dodge_pattern();
 
+        // PATTERN-AWARE CONFIDENCE: Don't penalize patterned movement
         if (avg_turn_angle < 15.f)
         {
             // Running nearly straight - boost confidence
@@ -3674,14 +3740,35 @@ namespace HybridPred
         }
         else if (avg_turn_angle > 60.f)
         {
-            // Dancing/juking heavily - penalize confidence
-            // > 60° = unpredictable sharp turns (dodging skillshots)
-            confidence *= 0.85f;
+            // HIGH turn angle - but check if it's PATTERNED or RANDOM
+            if (dodge_pattern.has_pattern && dodge_pattern.pattern_confidence > 0.65f)
+            {
+                // HIGH variance BUT we detected a strong pattern (alternating, repeating, etc.)
+                // This is PREDICTABLE juking (rhythmic kiter, predictable dodger)
+                // BOOST confidence instead of penalizing!
+                confidence *= 1.08f;  // 8% boost for predictable pattern
+            }
+            else
+            {
+                // HIGH variance AND no pattern = truly random dancing
+                // This is unpredictable - HEAVY penalty
+                confidence *= 0.75f;  // 25% penalty (increased from 15%)
+            }
         }
         else if (avg_turn_angle > 45.f)
         {
-            // Moderate juking
-            confidence *= 0.92f;
+            // MODERATE turn angle - check for patterns
+            if (dodge_pattern.has_pattern && dodge_pattern.pattern_confidence > 0.60f)
+            {
+                // Moderate variance but patterned = still predictable
+                // Neutral or slight boost
+                confidence *= 1.02f;  // 2% boost
+            }
+            else
+            {
+                // Moderate variance, no pattern = somewhat unpredictable
+                confidence *= 0.90f;  // 10% penalty (slightly reduced from 8%)
+            }
         }
         // 30-45° range = neutral, no modifier
 
