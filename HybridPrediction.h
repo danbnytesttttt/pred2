@@ -703,6 +703,11 @@ namespace HybridPred
         math::vector3 last_path_endpoint_;
         bool has_last_path_endpoint_ = false;
 
+        // Path state tracking for staleness detection
+        float last_path_update_time_ = 0.f;    // When path last changed (for staleness penalties)
+        uint8_t last_path_index_ = 0;          // Current waypoint index (for progress tracking)
+        size_t last_path_size_ = 0;            // Number of waypoints (for detecting path changes)
+
         // Dynamic acceleration measurement (per-target)
         // Start near measured averages (~20-25k), then adapt per-target
         float measured_acceleration_ = 15000.0f;  // Slightly conservative start
@@ -759,6 +764,30 @@ namespace HybridPred
         // Dynamic acceleration getters (measured from actual enemy behavior)
         float get_measured_acceleration() const { return measured_acceleration_; }
         float get_measured_deceleration() const { return measured_deceleration_; }
+
+        // Path state getters (for staleness and progress tracking)
+        float get_last_path_update_time() const { return last_path_update_time_; }
+        uint8_t get_last_path_index() const { return last_path_index_; }
+        size_t get_last_path_size() const { return last_path_size_; }
+
+        // Check if target is approaching destination (final waypoint, close to endpoint)
+        bool is_approaching_destination(game_object* target) const
+        {
+            if (!target || last_path_size_ <= 1)
+                return false;
+
+            // Check if on final waypoint and close to endpoint
+            if (last_path_index_ >= last_path_size_ - 1)
+            {
+                auto path = target->get_path();
+                if (!path.empty())
+                {
+                    float dist_to_end = (target->get_position() - path.back()).magnitude();
+                    return dist_to_end < 100.f;  // Within 100 units of destination
+                }
+            }
+            return false;
+        }
         bool has_measured_physics() const { return accel_sample_count_ >= 3 || decel_sample_count_ >= 3; }
 
         // ADAPTIVE REACTION BUFFER: Get measured animation cancel delay for this target

@@ -154,20 +154,58 @@ namespace HybridPred
         // If target clicked a new destination, sample immediately (bypass 50ms timer)
         bool force_sample = false;
         auto current_path = target_->get_path();
+        size_t current_path_size = current_path.size();
+
         if (!current_path.empty())
         {
             math::vector3 current_endpoint = current_path.back();
+            bool path_changed = false;
+
             if (has_last_path_endpoint_)
             {
                 // Check if path endpoint changed significantly (new click)
                 float endpoint_delta = (current_endpoint - last_path_endpoint_).magnitude();
                 if (endpoint_delta > 50.f)  // 50 units = meaningful new destination
                 {
+                    path_changed = true;
                     force_sample = true;  // New click detected - sample NOW
                 }
+
+                // Also check if path structure changed (waypoint added/removed)
+                if (current_path_size != last_path_size_)
+                {
+                    path_changed = true;
+                    force_sample = true;
+                }
             }
+
+            // Update path state tracking
             last_path_endpoint_ = current_endpoint;
             has_last_path_endpoint_ = true;
+
+            // Track path update timestamp for staleness detection
+            if (path_changed || last_path_update_time_ == 0.f)
+            {
+                last_path_update_time_ = current_time;
+            }
+
+            // Track path progress (which waypoint they're heading to)
+            last_path_size_ = current_path_size;
+            last_path_index_ = target_->get_current_path_index();
+        }
+        else
+        {
+            // Path is empty (stopped, arrived, or no path)
+            // Reset path state if we had a recent path
+            if (has_last_path_endpoint_ && (current_time - last_path_update_time_ < 0.1f))
+            {
+                // Path just disappeared - they arrived or stopped
+                force_sample = true;
+            }
+
+            has_last_path_endpoint_ = false;
+            last_path_size_ = 0;
+            last_path_index_ = 0;
         }
 
         // ANIMATION STATE CHANGE DETECTION: Sample immediately when AA/Cast starts
@@ -3647,6 +3685,52 @@ namespace HybridPred
         }
         // 30-45° range = neutral, no modifier
 
+        // PATH STALENESS PENALTY
+        // Old paths become unreliable - target may have changed their mind or arrived at destination
+        // Fresh clicks (< 0.5s) are high confidence, stale paths (> 2s) need significant penalties
+        float current_time = (g_sdk && g_sdk->clock_facade)
+            ? g_sdk->clock_facade->get_game_time() : 0.f;
+        float path_age = current_time - tracker.get_last_path_update_time();
+
+        if (tracker.get_last_path_size() > 0)  // Has an active path
+        {
+            if (path_age > 2.0f)
+            {
+                // Path is very stale (> 2s) - significant penalty
+                // They may have changed their mind, arrived, or are about to re-path
+                confidence *= 0.70f;  // 30% penalty
+            }
+            else if (path_age > 1.0f)
+            {
+                // Path is somewhat stale (1-2s) - moderate penalty
+                confidence *= 0.85f;  // 15% penalty
+            }
+            else if (path_age > 0.5f)
+            {
+                // Path is slightly stale (0.5-1s) - minor penalty
+                confidence *= 0.95f;  // 5% penalty
+            }
+            // Path < 0.5s = fresh, no penalty (full confidence)
+
+            // PATH COMPLETION BOOST
+            // If target is approaching destination (final waypoint, < 100 units away), they're more predictable
+            // They're committed to the path and unlikely to change direction
+            if (tracker.is_approaching_destination(target))
+            {
+                confidence *= 1.15f;  // 15% boost for path completion
+            }
+
+            // LONG PATH PENALTY
+            // Long paths (> 5 waypoints) give more opportunity to change direction or re-path
+            size_t path_size = tracker.get_last_path_size();
+            if (path_size > 5)
+            {
+                // Very long path - reduce confidence
+                float path_penalty = std::min((path_size - 5) * 0.05f, 0.25f);
+                confidence *= (1.0f - path_penalty);  // Up to 25% penalty for 10+ waypoints
+            }
+        }
+
         return std::clamp(confidence, 0.1f, 1.0f);
     }
 
@@ -4236,6 +4320,23 @@ namespace HybridPred
                     test_physics_prob = std::max(test_physics_prob, 0.70f);
                 }
                 // If < MIN_SAMPLES, don't boost - they might be about to move
+
+                // PATH VALIDATION: Don't apply full stationary boost if they have a fresh path
+                // Target with recent path click is about to start moving, not truly stationary
+                auto path = target->get_path();
+                if (path.size() > 1)
+                {
+                    float current_time = (g_sdk && g_sdk->clock_facade)
+                        ? g_sdk->clock_facade->get_game_time() : 0.f;
+                    float path_age = current_time - tracker.get_last_path_update_time();
+
+                    if (path_age < 0.5f)  // Fresh path within last 0.5s
+                    {
+                        // They have an active path - they're about to move, not stationary
+                        // Cap physics boost to moderate level (don't assume they're AFK)
+                        test_physics_prob = std::min(test_physics_prob, 0.60f);
+                    }
+                }
             }
             else if (current_speed < 100.f)
             {
