@@ -48,6 +48,50 @@ void __fastcall on_draw()
             PredictionVisuals::draw_continuous_prediction(current_time);
         }
 
+        // Draw debug hitchance text on left side of screen
+        if (PredictionVisuals::VisualsSettings::get().draw_debug_text && g_sdk->object_manager)
+        {
+            auto* local_player = g_sdk->object_manager->get_local_player();
+            if (local_player)
+            {
+                int local_team = local_player->get_team_id();
+                auto heroes = g_sdk->object_manager->get_heroes();
+
+                // Collect visible enemies with hitchances
+                game_object* visible_enemies[5] = {nullptr};
+                float hitchances[5] = {0.0f};
+                const char* names[5] = {nullptr};
+                int count = 0;
+
+                for (auto* enemy : heroes)
+                {
+                    if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                        continue;
+
+                    // Skip allies - only show enemies
+                    if (enemy->get_team_id() == local_team)
+                        continue;
+
+                    // Check if we have a hit chance for this enemy
+                    uint32_t enemy_id = enemy->get_network_id();
+                    auto it = g_hit_chance_map.find(enemy_id);
+                    if (it != g_hit_chance_map.end() && count < 5)
+                    {
+                        visible_enemies[count] = enemy;
+                        hitchances[count] = it->second * 100.0f;  // Convert to percentage
+                        names[count] = enemy->get_char_name();
+                        count++;
+                    }
+                }
+
+                // Draw all collected enemies
+                if (count > 0)
+                {
+                    PredictionVisuals::draw_debug_hitchance_all(visible_enemies, hitchances, names, count);
+                }
+            }
+        }
+
         // Draw hit chance % below enemy feet
         if (PredictionSettings::get().enable_hit_chance_display && g_sdk->object_manager)
         {
@@ -149,6 +193,10 @@ namespace Prediction
 
             g_menu->add_checkbox("hit_chance_display", "Show Hit Chance %", false, [](bool value) {
                 PredictionSettings::get().enable_hit_chance_display = value;
+                });
+
+            g_menu->add_checkbox("debug_hitchance_text", "Debug Hitchance (Left Side)", false, [](bool value) {
+                PredictionVisuals::VisualsSettings::get().draw_debug_text = value;
                 });
 
             g_menu->add_hotkey("output_telemetry", "Output Telemetry Report", 0, false, false, [](std::string*, bool pressed) {

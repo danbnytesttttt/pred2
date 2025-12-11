@@ -23,14 +23,19 @@ namespace PredictionVisuals
         bool draw_current_position = true;       // Draw circle at enemy's current position
         bool draw_predicted_position = true;     // Draw circle at predicted position
         bool draw_movement_line = true;          // Draw line current → predicted
+        bool draw_debug_text = true;             // Draw hitchance % and champion name on left side
         float prediction_time = 0.75f;           // How far ahead to predict (seconds)
 
         uint32_t main_color = 0xFFE19D9D;  // Main color for all visuals (salmon/pink default)
+        uint32_t debug_text_color = 0xFFFFFFFF;  // White text for debug info
 
         float current_circle_radius = 65.0f;
         float predicted_circle_radius = 80.0f;
         float line_thickness = 2.0f;
         float circle_thickness = 2.5f;
+
+        float debug_text_x = 10.0f;              // X position from left edge
+        float debug_text_y = 200.0f;             // Y position from top
 
         static VisualsSettings& get()
         {
@@ -238,6 +243,100 @@ namespace PredictionVisuals
                 }
             }
             catch (...) { /* Ignore render errors */ }
+        }
+    }
+
+    /**
+     * Draw debug text showing hitchance and target name
+     * Call this with prediction results to display on left side of screen
+     */
+    inline void draw_debug_hitchance(const char* champion_name, float hitchance_percent)
+    {
+        const auto& settings = VisualsSettings::get();
+
+        // Check if debug text is enabled
+        if (!settings.draw_debug_text)
+            return;
+
+        // Safety checks
+        if (!g_sdk || !g_sdk->renderer)
+            return;
+
+        if (!champion_name)
+            return;
+
+        try
+        {
+            // Format hitchance as percentage (e.g., "75.3%")
+            char hitchance_str[32];
+            snprintf(hitchance_str, sizeof(hitchance_str), "%.1f%%", hitchance_percent);
+
+            // Draw champion name
+            g_sdk->renderer->add_text_2d(
+                champion_name,
+                math::vector2(settings.debug_text_x, settings.debug_text_y),
+                18.0f,  // Font size
+                settings.debug_text_color
+            );
+
+            // Draw hitchance below champion name
+            g_sdk->renderer->add_text_2d(
+                hitchance_str,
+                math::vector2(settings.debug_text_x, settings.debug_text_y + 20.0f),
+                16.0f,  // Slightly smaller font
+                settings.debug_text_color
+            );
+        }
+        catch (...)
+        {
+            // Ignore render errors
+        }
+    }
+
+    /**
+     * Draw debug hitchance for multiple targets (up to 5 enemies)
+     * Displays all visible enemies with their hitchances
+     */
+    inline void draw_debug_hitchance_all(game_object** targets, float* hitchances, const char** names, int count)
+    {
+        const auto& settings = VisualsSettings::get();
+
+        if (!settings.draw_debug_text)
+            return;
+
+        if (!g_sdk || !g_sdk->renderer)
+            return;
+
+        if (!targets || !hitchances || !names || count <= 0)
+            return;
+
+        try
+        {
+            float y_offset = settings.debug_text_y;
+            const float line_height = 25.0f;
+
+            for (int i = 0; i < count && i < 5; ++i)  // Max 5 enemies
+            {
+                if (!targets[i] || !names[i])
+                    continue;
+
+                // Format: "ChampionName: 75.3%"
+                char text[128];
+                snprintf(text, sizeof(text), "%s: %.1f%%", names[i], hitchances[i]);
+
+                g_sdk->renderer->add_text_2d(
+                    text,
+                    math::vector2(settings.debug_text_x, y_offset),
+                    16.0f,
+                    settings.debug_text_color
+                );
+
+                y_offset += line_height;
+            }
+        }
+        catch (...)
+        {
+            // Ignore render errors
         }
     }
 
