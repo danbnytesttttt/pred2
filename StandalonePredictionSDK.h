@@ -252,23 +252,28 @@ inline float get_remaining_channel_time(game_object* obj)
 /**
  * GEOMETRIC HIT CHANCE: Time-To-Exit (TTE) Calculation
  *
- * Replaces fuzzy logic with pure geometry: Can they physically escape the hitbox in time?
+ * Replaces fuzzy logic with pure geometry: "How much time do they have to dodge?"
  *
  * Philosophy:
  * - Don't guess what they will do
- * - Calculate if it's physically possible to dodge
+ * - Calculate the reaction_window they have to escape
+ * - Map that window to confidence levels (Low/Medium/High/VeryHigh/Undodgeable)
  * - Assume perfect play from enemy (worst case for us)
- * - Binary answer: Undodgeable or Dodgeable
  *
- * This creates "scripting feel" - only fires when mathematically guaranteed.
+ * This gives nuanced confidence instead of binary yes/no, allowing "75% chance" shots.
  */
-enum class GeometricHitChance {
-    Impossible,    // Out of range, invalid target, etc.
-    Dodgeable,     // They can physically escape the hitbox
-    Undodgeable    // Mathematically guaranteed hit
+enum class HitChance {
+    Impossible,     // Out of range, invalid target, etc.
+    Low,            // Large reaction window (>0.4s) - easily dodgeable
+    Medium,         // Moderate window (0.25s-0.4s) - requires attention
+    High,           // Small window (0.1s-0.25s) - difficult to dodge
+    VeryHigh,       // Tiny window (<0.1s) - requires quick reaction
+    Undodgeable,    // No time to react or physically impossible to escape
+    Dashing,        // Target is dashing (special handling)
+    Immobile        // Target is CC'd and cannot move
 };
 
-inline GeometricHitChance calculate_geometric_hitchance(
+inline HitChance calculate_geometric_hitchance(
     game_object* target,
     math::vector3 cast_position,
     math::vector3 predicted_position,
@@ -278,36 +283,61 @@ inline GeometricHitChance calculate_geometric_hitchance(
 {
     // 1. Sanity checks
     if (!target || !target->is_valid() || target->is_dead())
-        return GeometricHitChance::Impossible;
+        return HitChance::Impossible;
 
-    // 2. Calculate time until impact
+    // 2. Status checks: Immobile and Dashing take priority
+    // Immobile: Can't move at all (CC'd)
+    if (target->has_buff_of_type(buff_type::stun) ||
+        target->has_buff_of_type(buff_type::snare) ||
+        target->has_buff_of_type(buff_type::charm) ||
+        target->has_buff_of_type(buff_type::fear) ||
+        target->has_buff_of_type(buff_type::taunt) ||
+        target->has_buff_of_type(buff_type::suppression) ||
+        target->has_buff_of_type(buff_type::knockup) ||
+        target->has_buff_of_type(buff_type::asleep))
+    {
+        return HitChance::Immobile;
+    }
+
+    // Dashing: Special movement state (handled separately in prediction)
+    if (target->is_dashing())
+        return HitChance::Dashing;
+
+    // 3. Calculate time until impact
     float distance = (predicted_position - cast_position).magnitude();
     float time_to_impact = cast_delay + (distance / missile_speed);
 
-    // 3. Conservative reaction time (average human)
-    // Scripters: ~0.01s, Average: ~0.15s, Casual: ~0.25s
-    // We use 0.15s as reasonable middle ground
-    constexpr float REACTION_TIME = 0.15f;
-    float time_available_to_dodge = time_to_impact - REACTION_TIME;
-
-    // If spell arrives before they can react, it's undodgeable
-    if (time_available_to_dodge <= 0.0f)
-        return GeometricHitChance::Undodgeable;
-
-    // 4. Geometric constraint: Can they walk out of the hitbox?
+    // 4. Geometric constraint: How far must they travel to escape?
     // Assume they run perpendicular to missile path (optimal escape)
     float target_radius = target->get_bounding_radius();
     float distance_to_exit = (spell_width * 0.5f) + target_radius;  // Edge-to-edge
 
-    // How far can they travel in available time?
+    // How long does it take them to escape at their move speed?
     float move_speed = target->get_move_speed();
-    float distance_can_travel = move_speed * time_available_to_dodge;
+    if (move_speed <= 0.0f)
+        return HitChance::Immobile;  // Can't move
 
-    // 5. Binary answer: Can they escape or not?
-    if (distance_can_travel < distance_to_exit)
-        return GeometricHitChance::Undodgeable;  // Can't escape in time
+    float time_needed_to_dodge = distance_to_exit / move_speed;
 
-    return GeometricHitChance::Dodgeable;
+    // 5. Calculate reaction window: How much time do they have?
+    // reaction_window = time_to_impact - time_needed_to_dodge
+    // Larger window = easier to dodge = lower confidence
+    float reaction_window = time_to_impact - time_needed_to_dodge;
+
+    // 6. Map reaction_window to confidence levels
+    if (reaction_window <= 0.0f)
+        return HitChance::Undodgeable;  // Can't escape even with perfect reaction
+
+    if (reaction_window <= 0.1f)
+        return HitChance::VeryHigh;  // Must react within 100ms
+
+    if (reaction_window <= 0.25f)
+        return HitChance::High;  // Must react within 250ms
+
+    if (reaction_window <= 0.4f)
+        return HitChance::Medium;  // Must react within 400ms
+
+    return HitChance::Low;  // Over 400ms to react - easily dodgeable
 }
 
 inline bool is_recalling(game_object* obj)
