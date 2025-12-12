@@ -249,6 +249,67 @@ inline float get_remaining_channel_time(game_object* obj)
     return std::max(0.f, channel_end - current_time);
 }
 
+/**
+ * GEOMETRIC HIT CHANCE: Time-To-Exit (TTE) Calculation
+ *
+ * Replaces fuzzy logic with pure geometry: Can they physically escape the hitbox in time?
+ *
+ * Philosophy:
+ * - Don't guess what they will do
+ * - Calculate if it's physically possible to dodge
+ * - Assume perfect play from enemy (worst case for us)
+ * - Binary answer: Undodgeable or Dodgeable
+ *
+ * This creates "scripting feel" - only fires when mathematically guaranteed.
+ */
+enum class GeometricHitChance {
+    Impossible,    // Out of range, invalid target, etc.
+    Dodgeable,     // They can physically escape the hitbox
+    Undodgeable    // Mathematically guaranteed hit
+};
+
+inline GeometricHitChance calculate_geometric_hitchance(
+    game_object* target,
+    math::vector3 cast_position,
+    math::vector3 predicted_position,
+    float spell_width,
+    float missile_speed,
+    float cast_delay)
+{
+    // 1. Sanity checks
+    if (!target || !target->is_valid() || target->is_dead())
+        return GeometricHitChance::Impossible;
+
+    // 2. Calculate time until impact
+    float distance = (predicted_position - cast_position).magnitude();
+    float time_to_impact = cast_delay + (distance / missile_speed);
+
+    // 3. Conservative reaction time (average human)
+    // Scripters: ~0.01s, Average: ~0.15s, Casual: ~0.25s
+    // We use 0.15s as reasonable middle ground
+    constexpr float REACTION_TIME = 0.15f;
+    float time_available_to_dodge = time_to_impact - REACTION_TIME;
+
+    // If spell arrives before they can react, it's undodgeable
+    if (time_available_to_dodge <= 0.0f)
+        return GeometricHitChance::Undodgeable;
+
+    // 4. Geometric constraint: Can they walk out of the hitbox?
+    // Assume they run perpendicular to missile path (optimal escape)
+    float target_radius = target->get_bounding_radius();
+    float distance_to_exit = (spell_width * 0.5f) + target_radius;  // Edge-to-edge
+
+    // How far can they travel in available time?
+    float move_speed = target->get_move_speed();
+    float distance_can_travel = move_speed * time_available_to_dodge;
+
+    // 5. Binary answer: Can they escape or not?
+    if (distance_can_travel < distance_to_exit)
+        return GeometricHitChance::Undodgeable;  // Can't escape in time
+
+    return GeometricHitChance::Dodgeable;
+}
+
 inline bool is_recalling(game_object* obj)
 {
     if (!obj) return false;
