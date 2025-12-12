@@ -279,7 +279,8 @@ inline HitChance calculate_geometric_hitchance(
     math::vector3 predicted_position,
     float spell_width,
     float missile_speed,
-    float cast_delay)
+    float cast_delay,
+    float latency)
 {
     // 1. Sanity checks
     if (!target || !target->is_valid() || target->is_dead())
@@ -303,14 +304,18 @@ inline HitChance calculate_geometric_hitchance(
     if (target->is_dashing())
         return HitChance::Dashing;
 
-    // 3. Calculate time until impact
+    // 3. Calculate time until impact (CRITICAL: Include latency!)
+    // The spell doesn't arrive when the math says - it arrives after your ping delay
+    // 50ms ping = spell arrives 0.05s later than calculated
     float distance = (predicted_position - cast_position).magnitude();
-    float time_to_impact = cast_delay + (distance / missile_speed);
+    float time_to_impact = (cast_delay + latency) + (distance / missile_speed);
 
     // 4. Geometric constraint: How far must they travel to escape?
     // Assume they run perpendicular to missile path (optimal escape)
     float target_radius = target->get_bounding_radius();
-    float distance_to_exit = (spell_width * 0.5f) + target_radius;  // Edge-to-edge
+    // Edge-to-edge collision: (SpellWidth / 2) + TargetHitboxRadius
+    // We hit them when we touch their edge, not their center
+    float distance_to_exit = (spell_width * 0.5f) + target_radius;
 
     // How long does it take them to escape at their move speed?
     float move_speed = target->get_move_speed();
