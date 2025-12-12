@@ -43,12 +43,8 @@ namespace PredictionSettings
         // Edge case toggles
         bool enable_dash_prediction = true;  // Predict at dash endpoints
 
-        // Performance settings
-        int grid_search_resolution = 8;  // Grid search size (8 = balanced, 16 = high quality)
-
-        // Advanced settings
-        bool enable_cs_prediction = false;  // Predict toward low HP minions (experimental)
-        bool enable_hp_pressure = true;     // Low HP retreat bias
+        // Geometric prediction settings
+        bool prefer_safe_shots = false;      // Only cast on VeryHigh/Undodgeable (more conservative)
 
         Settings() {}
     };
