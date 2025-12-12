@@ -231,6 +231,24 @@ inline bool is_stationary_channel(game_object* obj)
     return true;
 }
 
+// Get remaining time in stationary channel (Malz R, Recall, Kat R, MF R, etc.)
+// Returns 0 if not channeling or if mobile channel
+inline float get_remaining_channel_time(game_object* obj)
+{
+    if (!obj || !is_stationary_channel(obj)) return 0.f;
+
+    auto active_cast = obj->get_active_spell_cast();
+    if (!active_cast) return 0.f;
+
+    float channel_end = active_cast->get_cast_channeling_end_time();
+    if (channel_end <= 0.f) return 0.f;
+
+    if (!g_sdk || !g_sdk->clock_facade) return 0.f;
+    float current_time = g_sdk->clock_facade->get_game_time();
+
+    return std::max(0.f, channel_end - current_time);
+}
+
 inline bool is_recalling(game_object* obj)
 {
     if (!obj) return false;

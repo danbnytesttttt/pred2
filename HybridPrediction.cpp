@@ -3077,14 +3077,19 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // ADAPTIVE: Use measured cancel delay for this specific player
-        float animation_lock_delay = 0.f;
-        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
-        {
-            // Use adaptive reaction buffer if we have enough samples, otherwise default
-            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
-            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
-        }
+        // SMART: Always calculate lock time - functions return 0 if not locked
+        // This handles orb-walking (can be "moving" but still in AA windup)
+        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+
+        // Check AA/spell cast lock time (handles both auto-attacks and spells)
+        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+
+        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+        // Mobile channels (Lucian R, Varus Q) return 0 from this
+        float channel_lock_time = get_remaining_channel_time(target);
+
+        // Use whichever lock is longer (they shouldn't overlap, but be safe)
+        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
 
         // Track refinement convergence
         int refinement_iterations = 0;
@@ -3901,14 +3906,19 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // ADAPTIVE: Use measured cancel delay for this specific player
-        float animation_lock_delay = 0.f;
-        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
-        {
-            // Use adaptive reaction buffer if we have enough samples, otherwise default
-            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
-            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
-        }
+        // SMART: Always calculate lock time - functions return 0 if not locked
+        // This handles orb-walking (can be "moving" but still in AA windup)
+        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+
+        // Check AA/spell cast lock time (handles both auto-attacks and spells)
+        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+
+        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+        // Mobile channels (Lucian R, Varus Q) return 0 from this
+        float channel_lock_time = get_remaining_channel_time(target);
+
+        // Use whichever lock is longer (they shouldn't overlap, but be safe)
+        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
 
         // Track refinement convergence
         int refinement_iterations = 0;
@@ -4467,14 +4477,19 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // ADAPTIVE: Use measured cancel delay for this specific player
-        float animation_lock_delay = 0.f;
-        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
-        {
-            // Use adaptive reaction buffer if we have enough samples, otherwise default
-            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
-            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
-        }
+        // SMART: Always calculate lock time - functions return 0 if not locked
+        // This handles orb-walking (can be "moving" but still in AA windup)
+        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+
+        // Check AA/spell cast lock time (handles both auto-attacks and spells)
+        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+
+        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+        // Mobile channels (Lucian R, Varus Q) return 0 from this
+        float channel_lock_time = get_remaining_channel_time(target);
+
+        // Use whichever lock is longer (they shouldn't overlap, but be safe)
+        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
 
         // Track refinement convergence
         int refinement_iterations = 0;
@@ -4757,14 +4772,19 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // ADAPTIVE: Use measured cancel delay for this specific player
-        float animation_lock_delay = 0.f;
-        if (!target->is_moving() && (is_auto_attacking(target) || is_casting_spell(target) || is_channeling(target)))
-        {
-            // Use adaptive reaction buffer if we have enough samples, otherwise default
-            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
-            animation_lock_delay = get_remaining_lock_time_adaptive(target, reaction_buffer);
-        }
+        // SMART: Always calculate lock time - functions return 0 if not locked
+        // This handles orb-walking (can be "moving" but still in AA windup)
+        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+
+        // Check AA/spell cast lock time (handles both auto-attacks and spells)
+        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+
+        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+        // Mobile channels (Lucian R, Varus Q) return 0 from this
+        float channel_lock_time = get_remaining_channel_time(target);
+
+        // Use whichever lock is longer (they shouldn't overlap, but be safe)
+        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
 
         // Track refinement convergence
         int refinement_iterations = 0;
