@@ -249,6 +249,29 @@ inline float get_remaining_channel_time(game_object* obj)
     return std::max(0.f, channel_end - current_time);
 }
 
+// Get RAW remaining animation lock time (no reaction buffer added)
+// Used for geometric calculations where we need pure lock duration
+inline float get_raw_remaining_lock_time(game_object* obj)
+{
+    if (!obj) return 0.f;
+
+    auto active_cast = obj->get_active_spell_cast();
+    if (!active_cast) return 0.f;
+
+    auto spell_cast = active_cast->get_spell_cast();
+    if (!spell_cast) return 0.f;
+
+    if (!g_sdk || !g_sdk->clock_facade) return 0.f;
+
+    float current_time = g_sdk->clock_facade->get_game_time();
+    float cast_start = active_cast->get_cast_start_time();
+    float windup = get_current_windup(obj, spell_cast);
+
+    // Pure lock time, no reaction buffer
+    float end_time = cast_start + windup;
+    return std::max(0.f, end_time - current_time);
+}
+
 /**
  * GEOMETRIC HIT CHANCE: Time-To-Exit (TTE) Calculation
  *
@@ -322,7 +345,14 @@ inline HitChance calculate_geometric_hitchance(
     if (move_speed <= 0.0f)
         return HitChance::Immobile;  // Can't move
 
-    float time_needed_to_dodge = distance_to_exit / move_speed;
+    // CRITICAL: Account for animation locks (AA windup, spell cast)
+    // If they're locked for 0.2s, they can't START moving for 0.2s
+    // So total time needed = lock_time + walk_time
+    float animation_lock = get_raw_remaining_lock_time(target);
+    float channel_lock = get_remaining_channel_time(target);
+    float total_lock_time = std::max(animation_lock, channel_lock);
+
+    float time_needed_to_dodge = total_lock_time + (distance_to_exit / move_speed);
 
     // 5. Calculate reaction window: How much time do they have?
     // reaction_window = time_to_impact - time_needed_to_dodge
