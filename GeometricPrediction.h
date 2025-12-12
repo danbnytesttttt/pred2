@@ -13,19 +13,28 @@
  * - Environmental validation (minions, walls, windwall)
  * - Time-To-Exit (TTE) grading for confidence levels
  *
- * Replaces the 4000-line hybrid system with ~500 lines of focused logic.
+ * Replaces the 4000-line hybrid system with ~700 lines of focused logic.
  *
  * Core Components:
  * 1. predict_linear_path()  - The Engine (where will they be?)
  * 2. calculate_hitchance()  - The Brain  (should we cast?)
  * 3. get_prediction()       - The Driver (main entry point)
+ *
+ * Integration:
+ * - EdgeCaseDetection.h: Stasis, dash, windwall, minion, clone detection
+ * - PredictionSettings.h: User configuration
+ * - PredictionTelemetry.h: Performance tracking
  * ============================================================================
  */
 
 #include "sdk.hpp"
+#include "EdgeCaseDetection.h"
+#include "PredictionSettings.h"
+#include "PredictionTelemetry.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 
 namespace GeometricPred
 {
@@ -72,18 +81,24 @@ namespace GeometricPred
 
     /**
      * Graded hit chance levels
-     * Maps reaction_window to confidence levels
+     * Maps reaction_window to confidence levels + edge case states
      */
     enum class HitChance
     {
         Impossible,     // Target is dead, invulnerable, out of range, or spell blocked
+        Clone,          // Target is a clone (Shaco, Wukong, LeBlanc, Neeko)
         SpellShielded,  // Target has spell shield (Sivir E, Banshee's, Malz passive)
+        Windwalled,     // Windwall blocks the spell (Yasuo W, Braum E, Samira W)
+        MinionBlocked,  // Minion collision detected
         Low,            // >400ms reaction window - easily dodgeable
         Medium,         // 250-400ms window - requires attention
         High,           // 100-250ms window - difficult to dodge
         VeryHigh,       // <100ms window - requires quick reaction
         Undodgeable,    // Physically impossible to escape or no time to react
-        Immobile        // CC'd and cannot move
+        Immobile,       // CC'd and cannot move
+        Stasis,         // In stasis (Zhonya's, Bard R, etc.) - special timing needed
+        Channeling,     // Channeling or recalling - high priority stationary target
+        Dashing         // Dashing - predict to endpoint
     };
 
     // =========================================================================
@@ -120,16 +135,53 @@ namespace GeometricPred
         HitChance hit_chance;         // Confidence level
         bool should_cast;             // Simple yes/no recommendation
 
-        // Debug information
+        // Core metrics
+        float hit_chance_float;       // Hit chance as 0-1 float (for telemetry)
         float reaction_window;        // Time enemy has to dodge (seconds)
         float time_to_impact;         // Spell arrival time (seconds)
         float distance_to_exit;       // Distance enemy must travel to escape
+
+        // Edge case tracking (for telemetry)
+        bool is_stasis;               // Target in stasis
+        bool is_dash;                 // Target dashing
+        bool is_channeling;           // Target channeling/recalling
+        bool is_immobile;             // Target CC'd
+        bool is_animation_locked;     // Target in AA/cast animation
+        bool is_slowed;               // Target slowed
+        float dash_confidence;        // Dash-specific confidence multiplier
+
+        // Collision tracking
+        bool minion_collision;        // Minion blocks spell
+        bool windwall_detected;       // Windwall blocks spell
+        bool spell_shield_detected;   // Spell shield active
+        bool is_clone_target;         // Target is clone
+
+        // Position data (for telemetry)
+        math::vector3 target_current_pos;   // Target's current position
+        math::vector3 predicted_position;   // Where we predicted they'll be
+        float prediction_offset;            // Distance between current and predicted
+        float distance_to_target;           // Distance from source to target
+        bool target_is_moving;              // Whether target is moving
+        float target_velocity;              // Target's movement speed
+
+        // Timing data
+        float stasis_wait_time;       // How long to wait before casting (stasis)
+        float computation_time_ms;    // How long prediction took
+
+        // Debug
         const char* block_reason;     // Why we can't cast (if Impossible)
+        const char* edge_case_type;   // "normal", "stasis", "dash", "channeling"
 
         PredictionResult()
             : cast_position{}, hit_chance(HitChance::Impossible), should_cast(false),
-              reaction_window(0.f), time_to_impact(0.f), distance_to_exit(0.f),
-              block_reason(nullptr)
+              hit_chance_float(0.f), reaction_window(0.f), time_to_impact(0.f), distance_to_exit(0.f),
+              is_stasis(false), is_dash(false), is_channeling(false), is_immobile(false),
+              is_animation_locked(false), is_slowed(false), dash_confidence(1.0f),
+              minion_collision(false), windwall_detected(false), spell_shield_detected(false),
+              is_clone_target(false), target_current_pos{}, predicted_position{},
+              prediction_offset(0.f), distance_to_target(0.f), target_is_moving(false),
+              target_velocity(0.f), stasis_wait_time(0.f), computation_time_ms(0.f),
+              block_reason(nullptr), edge_case_type("normal")
         {}
     };
 
