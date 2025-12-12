@@ -237,7 +237,8 @@ namespace HybridPred
         snapshot.is_dashing = target_->is_dashing();
         snapshot.is_cced = target_->has_buff_of_type(buff_type::stun) || target_->has_buff_of_type(buff_type::charm) ||
             target_->has_buff_of_type(buff_type::fear) || target_->has_buff_of_type(buff_type::snare) || target_->has_buff_of_type(buff_type::taunt) ||
-            target_->has_buff_of_type(buff_type::suppression) || target_->has_buff_of_type(buff_type::knockup);
+            target_->has_buff_of_type(buff_type::suppression) || target_->has_buff_of_type(buff_type::knockup) ||
+            target_->has_buff_of_type(buff_type::knockback) || target_->has_buff_of_type(buff_type::asleep);
 
         // Safety: Prevent division by zero
         float max_hp = target_->get_max_hp();
@@ -1963,13 +1964,14 @@ namespace HybridPred
         constexpr float PATH_STALE_RANGE = 0.4f;       // Full staleness ramp duration (200-600ms)
         constexpr float PATH_STALE_MAX_REDUCTION = 0.5f;  // Max 50% reduction in extrapolation
 
-        if (!target || !target->is_valid())
+        if (!target || !target->is_valid() || target->is_dead())
             return math::vector3{};
 
         // Use server position (authoritative for hit detection, avoids 30-100ms client lag)
         math::vector3 position = target->get_server_position();
 
         // CC CHECK: Immobilized targets can't move
+        // Note: Knockback is NOT included - it's forced movement (treated like dash)
         if (target->has_buff_of_type(buff_type::stun) ||
             target->has_buff_of_type(buff_type::snare) ||
             target->has_buff_of_type(buff_type::charm) ||
@@ -1977,7 +1979,6 @@ namespace HybridPred
             target->has_buff_of_type(buff_type::taunt) ||
             target->has_buff_of_type(buff_type::suppression) ||
             target->has_buff_of_type(buff_type::knockup) ||
-            target->has_buff_of_type(buff_type::knockback) ||
             target->has_buff_of_type(buff_type::asleep))
         {
             return position;  // CC'd - stay at current position

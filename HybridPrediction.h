@@ -151,6 +151,7 @@ namespace HybridPred
         float base_speed = target->get_move_speed();
 
         // 1. HARD CC CHECK (Stun, Snare, etc.)
+        // Check for hard CC (includes knockback - prevents following normal path)
         bool is_immobile = target->has_buff_of_type(buff_type::stun) ||
             target->has_buff_of_type(buff_type::snare) ||
             target->has_buff_of_type(buff_type::charm) ||
@@ -158,7 +159,8 @@ namespace HybridPred
             target->has_buff_of_type(buff_type::taunt) ||
             target->has_buff_of_type(buff_type::suppression) ||
             target->has_buff_of_type(buff_type::knockup) ||
-            target->has_buff_of_type(buff_type::knockback);
+            target->has_buff_of_type(buff_type::knockback) ||
+            target->has_buff_of_type(buff_type::asleep);
 
         if (is_immobile)
         {
@@ -176,7 +178,7 @@ namespace HybridPred
                 buff_type t = buff->get_type();
                 if (t == buff_type::stun || t == buff_type::snare || t == buff_type::charm ||
                     t == buff_type::fear || t == buff_type::taunt || t == buff_type::suppression ||
-                    t == buff_type::knockup || t == buff_type::knockback)
+                    t == buff_type::knockup || t == buff_type::knockback || t == buff_type::asleep)
                 {
                     if (buff->get_end_time() > max_cc_end)
                         max_cc_end = buff->get_end_time();
