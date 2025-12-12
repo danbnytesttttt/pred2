@@ -3077,19 +3077,24 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // SMART: Always calculate lock time - functions return 0 if not locked
-        // This handles orb-walking (can be "moving" but still in AA windup)
-        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+        // CRITICAL: !is_moving() filters out moving-cast spells (Syndra Q, Cassio Q, TF Q)
+        // Those spells don't lock movement - champion keeps moving during cast
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving())
+        {
+            // Not moving = actually locked (AA windup, stationary spell, or stationary channel)
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
 
-        // Check AA/spell cast lock time (handles both auto-attacks and spells)
-        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+            // Check AA/spell cast lock time (handles both auto-attacks and spells)
+            float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
 
-        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
-        // Mobile channels (Lucian R, Varus Q) return 0 from this
-        float channel_lock_time = get_remaining_channel_time(target);
+            // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+            // Mobile channels (Lucian R, Varus Q) also filtered by !is_moving()
+            float channel_lock_time = get_remaining_channel_time(target);
 
-        // Use whichever lock is longer (they shouldn't overlap, but be safe)
-        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+            // Use whichever lock is longer (they shouldn't overlap, but be safe)
+            animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+        }
 
         // Track refinement convergence
         int refinement_iterations = 0;
@@ -3906,19 +3911,24 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // SMART: Always calculate lock time - functions return 0 if not locked
-        // This handles orb-walking (can be "moving" but still in AA windup)
-        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+        // CRITICAL: !is_moving() filters out moving-cast spells (Syndra Q, Cassio Q, TF Q)
+        // Those spells don't lock movement - champion keeps moving during cast
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving())
+        {
+            // Not moving = actually locked (AA windup, stationary spell, or stationary channel)
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
 
-        // Check AA/spell cast lock time (handles both auto-attacks and spells)
-        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+            // Check AA/spell cast lock time (handles both auto-attacks and spells)
+            float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
 
-        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
-        // Mobile channels (Lucian R, Varus Q) return 0 from this
-        float channel_lock_time = get_remaining_channel_time(target);
+            // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+            // Mobile channels (Lucian R, Varus Q) also filtered by !is_moving()
+            float channel_lock_time = get_remaining_channel_time(target);
 
-        // Use whichever lock is longer (they shouldn't overlap, but be safe)
-        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+            // Use whichever lock is longer (they shouldn't overlap, but be safe)
+            animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+        }
 
         // Track refinement convergence
         int refinement_iterations = 0;
@@ -4477,19 +4487,24 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // SMART: Always calculate lock time - functions return 0 if not locked
-        // This handles orb-walking (can be "moving" but still in AA windup)
-        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+        // CRITICAL: !is_moving() filters out moving-cast spells (Syndra Q, Cassio Q, TF Q)
+        // Those spells don't lock movement - champion keeps moving during cast
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving())
+        {
+            // Not moving = actually locked (AA windup, stationary spell, or stationary channel)
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
 
-        // Check AA/spell cast lock time (handles both auto-attacks and spells)
-        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+            // Check AA/spell cast lock time (handles both auto-attacks and spells)
+            float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
 
-        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
-        // Mobile channels (Lucian R, Varus Q) return 0 from this
-        float channel_lock_time = get_remaining_channel_time(target);
+            // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+            // Mobile channels (Lucian R, Varus Q) also filtered by !is_moving()
+            float channel_lock_time = get_remaining_channel_time(target);
 
-        // Use whichever lock is longer (they shouldn't overlap, but be safe)
-        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+            // Use whichever lock is longer (they shouldn't overlap, but be safe)
+            animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+        }
 
         // Track refinement convergence
         int refinement_iterations = 0;
@@ -4772,19 +4787,24 @@ namespace HybridPred
         // ANIMATION LOCK DELAY (Stop-then-Go):
         // Calculate remaining lock time for accurate path prediction
         // Target stays at current position during lock, then moves at full speed
-        // SMART: Always calculate lock time - functions return 0 if not locked
-        // This handles orb-walking (can be "moving" but still in AA windup)
-        float reaction_buffer = tracker.get_adaptive_reaction_buffer();
+        // CRITICAL: !is_moving() filters out moving-cast spells (Syndra Q, Cassio Q, TF Q)
+        // Those spells don't lock movement - champion keeps moving during cast
+        float animation_lock_delay = 0.f;
+        if (!target->is_moving())
+        {
+            // Not moving = actually locked (AA windup, stationary spell, or stationary channel)
+            float reaction_buffer = tracker.get_adaptive_reaction_buffer();
 
-        // Check AA/spell cast lock time (handles both auto-attacks and spells)
-        float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
+            // Check AA/spell cast lock time (handles both auto-attacks and spells)
+            float cast_lock_time = get_remaining_lock_time_adaptive(target, reaction_buffer);
 
-        // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
-        // Mobile channels (Lucian R, Varus Q) return 0 from this
-        float channel_lock_time = get_remaining_channel_time(target);
+            // Check stationary channel lock time (Malz R, Recall, Kat R, MF R)
+            // Mobile channels (Lucian R, Varus Q) also filtered by !is_moving()
+            float channel_lock_time = get_remaining_channel_time(target);
 
-        // Use whichever lock is longer (they shouldn't overlap, but be safe)
-        float animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+            // Use whichever lock is longer (they shouldn't overlap, but be safe)
+            animation_lock_delay = std::max(cast_lock_time, channel_lock_time);
+        }
 
         // Track refinement convergence
         int refinement_iterations = 0;
