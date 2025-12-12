@@ -141,7 +141,6 @@ namespace HybridPred
             // Target just emerged from fog - clear ALL stale data
             movement_history_.clear();
             last_update_time_ = 0.f;
-            last_measured_speed_ = 0.f;  // Reset to prevent garbage acceleration measurements
             has_last_path_endpoint_ = false;  // Path data is stale too
         }
         was_visible_last_update_ = currently_visible;
@@ -262,55 +261,6 @@ namespace HybridPred
 
                 // Physics measurement code removed - calibration phase complete
 
-                // ================================================================
-                // DYNAMIC PHYSICS: Always measure acceleration/deceleration
-                // Used for per-target prediction regardless of debug setting
-                // Skip during dashes/knockbacks (forced movement, not player input)
-                // ================================================================
-                if (!snapshot.is_dashing && !snapshot.is_cced)
-                {
-                    float current_speed = snapshot.velocity.magnitude();
-                    float prev_speed = last_measured_speed_;
-                    float dt = current_time - movement_history_.back().timestamp;
-
-                    if (dt > 0.005f && dt < 0.2f)  // Valid time delta
-                    {
-                        float speed_change = current_speed - prev_speed;
-
-                        // Acceleration: significant speed increase
-                        if (speed_change > 50.f && current_speed > 50.f)
-                        {
-                            float accel = speed_change / dt;
-                            // Sanity check: 500-50000 units/s² is reasonable
-                            if (accel > 500.f && accel < 50000.f)
-                            {
-                                // Rolling average with decay (newer samples weighted more)
-                                if (accel_sample_count_ == 0)
-                                    measured_acceleration_ = accel;
-                                else
-                                    measured_acceleration_ = measured_acceleration_ * 0.8f + accel * 0.2f;
-                                accel_sample_count_++;
-                            }
-                        }
-
-                        // Deceleration: significant speed decrease
-                        if (speed_change < -50.f && prev_speed > 50.f)
-                        {
-                            float decel = -speed_change / dt;
-                            // Sanity check
-                            if (decel > 500.f && decel < 50000.f)
-                            {
-                                if (decel_sample_count_ == 0)
-                                    measured_deceleration_ = decel;
-                                else
-                                    measured_deceleration_ = measured_deceleration_ * 0.8f + decel * 0.2f;
-                                decel_sample_count_++;
-                            }
-                        }
-                    }
-                }
-                // Always update last speed (even during dash) to prevent stale comparisons
-                last_measured_speed_ = snapshot.velocity.magnitude();
                 // ================================================================
 
                 // VELOCITY SANITY CAPPING: Prevent extreme values
@@ -2011,14 +1961,10 @@ namespace HybridPred
         if (!target || !target->is_valid())
             return math::vector3{};
 
-        // FIX: Use server position to avoid latency/interpolation lag
-        // Client position can be 30-100ms behind server, causing "ghost movements"
-        // Server position is the authoritative position for hit detection
+        // Use server position (authoritative for hit detection, avoids 30-100ms client lag)
         math::vector3 position = target->get_server_position();
 
-        // CC CHECK: Immobilized targets can't follow their path
-        // Return current position for stuns, snares, etc. (but allow knockbacks to follow forced movement)
-        // FIX: Added knockup - was missing, causing prediction to think knocked-up targets can move
+        // CC CHECK: Immobilized targets can't move
         if (target->has_buff_of_type(buff_type::stun) ||
             target->has_buff_of_type(buff_type::snare) ||
             target->has_buff_of_type(buff_type::charm) ||
@@ -2040,252 +1986,105 @@ namespace HybridPred
         if (move_speed < 1.f)
             return position;
 
-        // ANIMATION LOCK LOGIC (Stop-then-Go):
-        // If delay_start_time > 0, target stays at current position for that duration
-        // After delay expires, they move at full speed along their path
-        // This is more accurate than "smeared" speed (averaging speed over total time)
-        //
-        // Example: Animation lock = 0.3s, spell arrival = 0.5s
-        //   OLD (Smeared): effective_speed = base_speed * (0.2/0.5) = 40% speed for 0.5s
-        //   NEW (Stop-then-Go): stand still for 0.3s, then move at 100% for 0.2s
-        //   The NEW approach is geometrically correct - predicts actual path endpoint
+        // ANIMATION LOCK: Stop-then-go model
+        // Target stays still during lock, then moves at full speed
         float effective_movement_time = prediction_time;
         if (delay_start_time > 0.f)
         {
             effective_movement_time = std::max(0.f, prediction_time - delay_start_time);
-            // If lock lasts longer than flight time, target stays put
             if (effective_movement_time <= 0.f)
-                return position;
+                return position;  // Lock lasts longer than prediction time
 
-            // PATH STALENESS FIX (Path Reset Fallacy):
-            // When a target is locked for a significant time (> 0.2s), their old path
-            // becomes increasingly unreliable:
-            // 1. Attack/Cast commands typically invalidate previous move commands
-            // 2. After lock ends, they either stand still or issue NEW movement (often perpendicular if kiting)
-            // 3. We can't know their new path, so we conservatively reduce extrapolation
-            //
-            // This prevents predicting too far along a stale path that's no longer valid
+            // PATH STALENESS: Long locks (>0.2s) make paths unreliable
+            // After attack/cast, targets often issue new movement commands
             if (delay_start_time > 0.2f)
             {
-                // Scale factor: 0.2s lock = 100%, 0.4s lock = 70%, 0.6s+ lock = 50%
-                // This biases prediction toward their locked position rather than wild extrapolation
                 float staleness_factor = 1.0f - std::min((delay_start_time - 0.2f) / 0.4f, 0.5f);
                 effective_movement_time *= staleness_factor;
             }
         }
 
-        float distance_to_travel = move_speed * effective_movement_time;
+        // INTELLIGENT HEURISTICS BASED ON PATH STATE
 
-        // CRITICAL FIX: Find which segment the target is actually on
-        // If we naively start from position -> path[1], we might create a backwards segment
-        // Example: position=(600,0), path[1]=(500,0) creates backwards segment!
+        // Get path age from tracker if available
+        float path_age = 0.f;
+        if (g_sdk && g_sdk->object_manager)
+        {
+            auto tracker_map = HybridPrediction::HybridFusionEngine::get_tracker_map();
+            auto it = tracker_map.find(target->get_network_id());
+            if (it != tracker_map.end())
+            {
+                float current_time = g_sdk->clock_facade ? g_sdk->clock_facade->get_game_time() : 0.f;
+                path_age = current_time - it->second.get_last_path_update_time();
+            }
+        }
 
-        // Find the closest segment to current position
-        size_t start_segment = 1;
-        float min_distance_to_segment = 99999.f;
+        // HEURISTIC 1: Start-of-Path Dampening
+        // Just clicked (< 0.1s ago) → assume still accelerating, reduce effective speed
+        float speed_multiplier = 1.0f;
+        if (path_age < 0.1f)
+        {
+            speed_multiplier = 0.85f;  // 15% dampening for acceleration phase
+        }
+
+        float distance_to_travel = move_speed * effective_movement_time * speed_multiplier;
+
+        // HEURISTIC 2: End-of-Path Clamping
+        // Calculate total path distance to detect approaching destination
+        float total_path_distance = 0.f;
+        for (size_t i = 1; i < path.size(); ++i)
+        {
+            total_path_distance += (path[i] - path[i-1]).magnitude();
+        }
+
+        // Distance from current position to path start
+        float dist_to_path_start = (position - path[0]).magnitude();
+        float remaining_path = total_path_distance - dist_to_path_start;
+
+        // Clamp travel distance to not overshoot destination
+        if (distance_to_travel > remaining_path)
+        {
+            distance_to_travel = remaining_path;
+        }
+
+        // SIMPLE LINEAR PATH ITERATION
+        // Start from current position, iterate through waypoints at constant velocity
+        float distance_traveled = 0.f;
 
         for (size_t i = 1; i < path.size(); ++i)
         {
-            math::vector3 seg_start = (i == 1) ? path[0] : path[i - 1];
-            math::vector3 seg_end = path[i];
-
-            // Project current position onto this segment
-            math::vector3 seg_vec = seg_end - seg_start;
-            float seg_len_sq = seg_vec.dot(seg_vec);
-
-            if (seg_len_sq < 0.001f)
-                continue;
-
-            math::vector3 to_pos = position - seg_start;
-            float t = to_pos.dot(seg_vec) / seg_len_sq;
-            t = std::clamp(t, 0.f, 1.f);
-
-            math::vector3 closest_point = seg_start + seg_vec * t;
-            float dist = (position - closest_point).magnitude();
-
-            if (dist < min_distance_to_segment)
-            {
-                min_distance_to_segment = dist;
-                start_segment = i;
-            }
-        }
-
-        // Calculate how far along the current segment we are
-        float initial_traveled = 0.f;
-        if (start_segment > 1)
-        {
-            // We're past some waypoints - account for those segments
-            for (size_t i = 1; i < start_segment; ++i)
-            {
-                math::vector3 seg_start = (i == 1) ? path[0] : path[i - 1];
-                math::vector3 seg_end = path[i];
-                initial_traveled += (seg_end - seg_start).magnitude();
-            }
-        }
-
-        // Add distance from start of current segment to current position
-        math::vector3 current_seg_start = (start_segment == 1) ? path[0] : path[start_segment - 1];
-        math::vector3 current_seg_end = path[start_segment];
-        math::vector3 current_seg_vec = current_seg_end - current_seg_start;
-        float current_seg_len_sq = current_seg_vec.dot(current_seg_vec);
-
-        if (current_seg_len_sq > 0.001f)
-        {
-            math::vector3 to_pos = position - current_seg_start;
-            float t = to_pos.dot(current_seg_vec) / current_seg_len_sq;
-            t = std::clamp(t, 0.f, 1.f);
-            initial_traveled += std::sqrt(current_seg_len_sq) * t;
-        }
-
-        float traveled = initial_traveled;
-
-        // DEBUG: Log path prediction details
-        if (g_sdk && path.size() > 0)
-        {
-            char msg[512];
-            snprintf(msg, sizeof(msg),
-                "[PathDebug] %s: predTime=%.2fs, moveSpeed=%.0f, distToTravel=%.0f, pathSize=%zu, startSeg=%zu, initialTraveled=%.0f",
-                target->get_char_name().c_str(),
-                prediction_time,
-                move_speed,
-                distance_to_travel,
-                path.size(),
-                start_segment,
-                initial_traveled);
-            g_sdk->log_console(msg);
-
-            // Log position and closest segment
-            snprintf(msg, sizeof(msg),
-                "  Current=(%.0f,%.0f), SegStart=(%.0f,%.0f), SegEnd=(%.0f,%.0f), distToSeg=%.0f",
-                position.x, position.z,
-                current_seg_start.x, current_seg_start.z,
-                current_seg_end.x, current_seg_end.z,
-                min_distance_to_segment);
-            g_sdk->log_console(msg);
-        }
-
-        // Calculate total distance target will have traveled when projectile arrives
-        float target_path_distance = initial_traveled + distance_to_travel;
-
-        // Follow path waypoints from current segment onwards
-        for (size_t i = start_segment; i < path.size(); ++i)
-        {
-            math::vector3 segment_start = (i == start_segment) ? position : path[i - 1];
+            math::vector3 segment_start = (i == 1) ? position : path[i - 1];
             math::vector3 segment_end = path[i];
 
-            math::vector3 segment_diff = segment_end - segment_start;
-            float segment_length = segment_diff.magnitude();
+            math::vector3 segment_vec = segment_end - segment_start;
+            float segment_length = segment_vec.magnitude();
 
             if (segment_length < 0.001f)
-                continue;
+                continue;  // Skip zero-length segments
 
-            // Check if target will arrive on this segment
-            if (traveled + segment_length >= target_path_distance)
+            // Check if prediction endpoint is on this segment
+            if (distance_traveled + segment_length >= distance_to_travel)
             {
-                // Target will be on this segment
-                // Calculate how far along this segment they'll be
-                float distance_into_segment = target_path_distance - traveled;
-                math::vector3 direction = segment_diff / segment_length;
+                // Found the segment - linear interpolate
+                float distance_into_segment = distance_to_travel - distance_traveled;
+                math::vector3 direction = segment_vec / segment_length;
                 math::vector3 predicted_pos = segment_start + direction * distance_into_segment;
 
-                // WALL SLIDING: Handle collision with terrain properly
-                math::vector3 final_pos = predicted_pos;
-
+                // WALL COLLISION CHECK: Ensure predicted position is pathable
                 if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(predicted_pos))
                 {
-                    // Position is in a wall - apply wall sliding physics
-                    // 1. Find exact collision point using binary search
-                    math::vector3 collision_point = find_wall_collision_point(segment_start, predicted_pos);
-
-                    // 2. Calculate remaining distance after collision
-                    float dist_to_collision = (collision_point - segment_start).magnitude();
-                    float remaining_dist = distance_into_segment - dist_to_collision;
-
-                    if (remaining_dist > 1.f)
-                    {
-                        // 3. Calculate slide velocity (parallel to wall)
-                        math::vector3 velocity = direction * move_speed;
-                        math::vector3 slide_velocity = calculate_wall_slide_velocity(collision_point, velocity);
-
-                        float slide_speed = slide_velocity.magnitude();
-                        if (slide_speed > 1.f)
-                        {
-                            // 4. Apply sliding movement with slight friction (0.85x)
-                            // Game engine applies some friction when sliding
-                            math::vector3 slide_dir = slide_velocity / slide_speed;
-                            float slide_distance = remaining_dist * 0.85f;
-                            math::vector3 slide_pos = collision_point + slide_dir * slide_distance;
-
-                            // 5. Validate slide position is pathable
-                            if (g_sdk->nav_mesh->is_pathable(slide_pos))
-                            {
-                                final_pos = slide_pos;
-                            }
-                            else
-                            {
-                                // Slide also hit a wall (corner case) - stay at collision
-                                final_pos = collision_point;
-                            }
-                        }
-                        else
-                        {
-                            // No valid slide direction - stay at collision point
-                            final_pos = collision_point;
-                        }
-                    }
-                    else
-                    {
-                        // Very close to wall - just use collision point
-                        final_pos = collision_point;
-                    }
+                    // Position is in wall - clamp to segment start (safe position)
+                    return segment_start;
                 }
 
-                // DEBUG: Log prediction result
-                if (g_sdk && PredictionSettings::get().enable_debug_logging)
-                {
-                    char msg[256];
-                    snprintf(msg, sizeof(msg),
-                        "  Predicted on segment %zu: (%.0f,%.0f) -> (%.0f,%.0f), distIntoSeg=%.0f/%.0f, result=(%.0f,%.0f)",
-                        i,
-                        segment_start.x, segment_start.z,
-                        segment_end.x, segment_end.z,
-                        distance_into_segment, segment_length,
-                        final_pos.x, final_pos.z);
-                    g_sdk->log_console(msg);
-                }
-
-                return final_pos;
+                return predicted_pos;
             }
 
-            traveled += segment_length;
+            distance_traveled += segment_length;
         }
 
-        // Traveled past all waypoints - target STOPS at final destination
-        // Do NOT extrapolate past their click point
-        math::vector3 final_dest = path.back();
-        math::vector3 final_pos = final_dest;
-
-        // Apply wall sliding if destination is in terrain
-        if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(final_dest))
-        {
-            // Find where they actually stop (wall collision)
-            math::vector3 prev_waypoint = path.size() > 1 ? path[path.size() - 2] : position;
-            final_pos = find_wall_collision_point(prev_waypoint, final_dest);
-        }
-
-        // DEBUG: Log when target reaches destination
-        if (g_sdk && PredictionSettings::get().enable_debug_logging)
-        {
-            char msg[256];
-            snprintf(msg, sizeof(msg),
-                "  Reached final destination: (%.0f,%.0f), totalPathDist=%.0f, targetDist=%.0f",
-                final_pos.x, final_pos.z,
-                traveled,
-                target_path_distance);
-            g_sdk->log_console(msg);
-        }
-
-        return final_pos;
+        // Traveled entire path - return final waypoint
+        return path.back();
     }
 
     float PhysicsPredictor::compute_physics_hit_probability(

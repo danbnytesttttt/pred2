@@ -708,14 +708,6 @@ namespace HybridPred
         uint8_t last_path_index_ = 0;          // Current waypoint index (for progress tracking)
         size_t last_path_size_ = 0;            // Number of waypoints (for detecting path changes)
 
-        // Dynamic acceleration measurement (per-target)
-        // Start near measured averages (~20-25k), then adapt per-target
-        float measured_acceleration_ = 15000.0f;  // Slightly conservative start
-        float measured_deceleration_ = 20000.0f;  // Decel measured slightly higher
-        int accel_sample_count_ = 0;              // Number of acceleration samples
-        int decel_sample_count_ = 0;              // Number of deceleration samples
-        float last_measured_speed_ = 0.f;         // Previous frame's speed for delta calculation
-
         // ADAPTIVE REACTION BUFFER: Track how quickly this player cancels animations
         // Scripters/high-APM: ~0.005-0.015s (near-instant cancels)
         // Average players: ~0.025-0.035s (default human reaction)
@@ -761,10 +753,6 @@ namespace HybridPred
         // Opportunistic casting - get or create window for spell slot
         OpportunityWindow& get_opportunity_window(int spell_slot) const;
 
-        // Dynamic acceleration getters (measured from actual enemy behavior)
-        float get_measured_acceleration() const { return measured_acceleration_; }
-        float get_measured_deceleration() const { return measured_deceleration_; }
-
         // Path state getters (for staleness and progress tracking)
         float get_last_path_update_time() const { return last_path_update_time_; }
         uint8_t get_last_path_index() const { return last_path_index_; }
@@ -788,7 +776,6 @@ namespace HybridPred
             }
             return false;
         }
-        bool has_measured_physics() const { return accel_sample_count_ >= 3 || decel_sample_count_ >= 3; }
 
         // ADAPTIVE REACTION BUFFER: Get measured animation cancel delay for this target
         // Returns value between 0.005s (scripter) and 0.25s (very lazy player)
