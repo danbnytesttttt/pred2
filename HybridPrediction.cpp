@@ -1958,6 +1958,11 @@ namespace HybridPred
         float prediction_time,
         float delay_start_time)
     {
+        // Path staleness constants
+        constexpr float PATH_STALE_THRESHOLD = 0.2f;   // Animation locks > 200ms make paths unreliable
+        constexpr float PATH_STALE_RANGE = 0.4f;       // Full staleness ramp duration (200-600ms)
+        constexpr float PATH_STALE_MAX_REDUCTION = 0.5f;  // Max 50% reduction in extrapolation
+
         if (!target || !target->is_valid())
             return math::vector3{};
 
@@ -1971,7 +1976,9 @@ namespace HybridPred
             target->has_buff_of_type(buff_type::fear) ||
             target->has_buff_of_type(buff_type::taunt) ||
             target->has_buff_of_type(buff_type::suppression) ||
-            target->has_buff_of_type(buff_type::knockup))
+            target->has_buff_of_type(buff_type::knockup) ||
+            target->has_buff_of_type(buff_type::knockback) ||
+            target->has_buff_of_type(buff_type::asleep))
         {
             return position;  // CC'd - stay at current position
         }
@@ -1995,11 +2002,11 @@ namespace HybridPred
             if (effective_movement_time <= 0.f)
                 return position;  // Lock lasts longer than prediction time
 
-            // PATH STALENESS: Long locks (>0.2s) make paths unreliable
+            // PATH STALENESS: Long locks make paths unreliable
             // After attack/cast, targets often issue new movement commands
-            if (delay_start_time > 0.2f)
+            if (delay_start_time > PATH_STALE_THRESHOLD)
             {
-                float staleness_factor = 1.0f - std::min((delay_start_time - 0.2f) / 0.4f, 0.5f);
+                float staleness_factor = 1.0f - std::min((delay_start_time - PATH_STALE_THRESHOLD) / PATH_STALE_RANGE, PATH_STALE_MAX_REDUCTION);
                 effective_movement_time *= staleness_factor;
             }
         }
@@ -2020,26 +2027,27 @@ namespace HybridPred
         }
 
         // HEURISTIC 1: Start-of-Path Dampening
-        // Just clicked (< 0.1s ago) → assume still accelerating, reduce effective speed
+        // Smooth ramp over acceleration phase (0-100ms)
+        // League accelerates to max speed in ~23ms, but we use conservative 100ms window
         float speed_multiplier = 1.0f;
         if (path_age < 0.1f)
         {
-            speed_multiplier = 0.85f;  // 15% dampening for acceleration phase
+            // Linear ramp: 0ms=0.85x speed, 100ms=1.0x speed (smooth transition)
+            speed_multiplier = 0.85f + 0.15f * (path_age / 0.1f);
         }
 
         float distance_to_travel = move_speed * effective_movement_time * speed_multiplier;
 
         // HEURISTIC 2: End-of-Path Clamping
-        // Calculate total path distance to detect approaching destination
-        float total_path_distance = 0.f;
+        // Calculate remaining path distance from current position forward
+        // This prevents overshooting the final destination
+        float remaining_path = 0.f;
         for (size_t i = 1; i < path.size(); ++i)
         {
-            total_path_distance += (path[i] - path[i-1]).magnitude();
+            math::vector3 seg_start = (i == 1) ? position : path[i - 1];
+            math::vector3 seg_end = path[i];
+            remaining_path += (seg_end - seg_start).magnitude();
         }
-
-        // Distance from current position to path start
-        float dist_to_path_start = (position - path[0]).magnitude();
-        float remaining_path = total_path_distance - dist_to_path_start;
 
         // Clamp travel distance to not overshoot destination
         if (distance_to_travel > remaining_path)
