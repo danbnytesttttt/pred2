@@ -767,16 +767,48 @@ namespace EdgeCases
             }
             else
             {
-                // Fallback: Conservative heuristic when HP prediction unavailable
-                // Only skip if VERY low HP (about to die from any source)
+                // IMPROVED FALLBACK: Time-based heuristic when HP prediction SDK unavailable
+                // Estimates if minion will die before spell arrives based on current HP and typical lane DPS
                 float current_hp = minion->get_hp();
                 float max_hp = minion->get_max_hp();
-                float health_percent = (max_hp > 0.f) ? (current_hp / max_hp) * 100.f : 100.f;
 
-                // Only skip if minion is basically dead (< 5% HP) AND travel time is long enough
-                // This is conservative to avoid shooting through minions that survive
+                // Estimate incoming DPS based on minion type and game time
+                // Melee minions: ~100 HP at 0min, ~1500 HP at 30min (linear scaling)
+                // Typical lane DPS: ~50-150 depending on game time (minion autos, tower, champion)
+                float estimated_dps = 50.f;  // Base DPS (conservative)
+
+                // Higher DPS if minion is under tower (tower shots = massive burst)
+                if (g_sdk && g_sdk->nav_mesh)
+                {
+                    // Check if minion is near an enemy tower (within ~900 units)
+                    auto towers = g_sdk->object_manager->get_enemy_turrets();
+                    for (auto* tower : towers)
+                    {
+                        if (tower && tower->is_valid() && !tower->is_dead())
+                        {
+                            float dist_to_tower = (minion->get_position() - tower->get_position()).magnitude();
+                            if (dist_to_tower < 900.f)
+                            {
+                                estimated_dps = 250.f;  // Tower shots = very high DPS
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Estimate survival time: HP / DPS
+                float estimated_survival_time = (estimated_dps > 0.f) ? (current_hp / estimated_dps) : 999.f;
+
+                // Skip minion if it will die before spell arrives
+                // Add 0.05s safety buffer to avoid edge cases
+                if (estimated_survival_time < (travel_time - 0.05f))
+                    continue;  // Minion will be dead when spell arrives
+
+                // Additional conservative check: Very low HP minions (< 5%) are risky
+                // Even if survival time > travel time, they might die from unexpected damage
+                float health_percent = (max_hp > 0.f) ? (current_hp / max_hp) * 100.f : 100.f;
                 if (health_percent < 5.f && travel_time > 0.15f)
-                    continue;
+                    continue;  // Too risky, assume it will die
             }
 
             if (minion->is_moving() && travel_time > 0.05f)

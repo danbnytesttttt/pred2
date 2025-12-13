@@ -698,11 +698,15 @@ namespace GeometricPred
                 // Lateral escape distance (perpendicular)
                 float lateral_escape = effective_radius - lateral_dist;
 
-                // Backward escape distance (off the back of spell)
+                // Backward escape distance (to start of capsule)
                 float backward_escape = proj_length + target_radius;
 
-                // Return minimum (easiest escape path)
-                return std::max(0.f, std::min(lateral_escape, backward_escape));
+                // CRITICAL FIX: Forward escape distance (to end of capsule)
+                // Target near the front can escape by running forward off the end
+                float forward_escape = (spell_range - proj_length) + target_radius;
+
+                // Return minimum of ALL THREE escape paths (lateral, backward, forward)
+                return std::max(0.f, std::min({lateral_escape, backward_escape, forward_escape}));
             }
             else
             {
@@ -901,6 +905,69 @@ namespace GeometricPred
             case HitChance::Dashing:       return 0.80f;
             default:                       return 0.5f;
         }
+    }
+
+    /**
+     * CONTINUOUS CONFIDENCE CALCULATION
+     * Converts reaction window (time to dodge) to smooth 0-1 confidence
+     *
+     * This provides MUCH better granularity than discrete levels:
+     * - 0.10s → 0.90 (very hard to dodge)
+     * - 0.25s → 0.75 (medium-hard)
+     * - 0.40s → 0.55 (medium)
+     * - 0.50s → 0.35 (easy to dodge)
+     *
+     * Uses piecewise linear interpolation between thresholds for smooth gradient.
+     */
+    inline float reaction_window_to_confidence(float reaction_window)
+    {
+        // Negative or zero = impossible to dodge
+        if (reaction_window <= 0.0f)
+            return 1.0f;
+
+        // Piecewise linear interpolation between threshold points
+        // This gives smooth confidence instead of discrete steps
+
+        // Range 1: 0.0s - 0.1s → confidence 1.0 - 0.90
+        if (reaction_window <= REACTION_VERY_HIGH)  // 0.1s
+        {
+            float t = reaction_window / REACTION_VERY_HIGH;
+            return 1.0f - (t * 0.10f);  // Interpolate from 1.0 to 0.90
+        }
+
+        // Range 2: 0.1s - 0.25s → confidence 0.90 - 0.75
+        if (reaction_window <= REACTION_HIGH)  // 0.25s
+        {
+            float t = (reaction_window - REACTION_VERY_HIGH) / (REACTION_HIGH - REACTION_VERY_HIGH);
+            return 0.90f - (t * 0.15f);  // Interpolate from 0.90 to 0.75
+        }
+
+        // Range 3: 0.25s - 0.4s → confidence 0.75 - 0.55
+        if (reaction_window <= REACTION_MEDIUM)  // 0.4s
+        {
+            float t = (reaction_window - REACTION_HIGH) / (REACTION_MEDIUM - REACTION_HIGH);
+            return 0.75f - (t * 0.20f);  // Interpolate from 0.75 to 0.55
+        }
+
+        // Range 4: 0.4s - 0.6s → confidence 0.55 - 0.35
+        constexpr float LOW_THRESHOLD = 0.6f;
+        if (reaction_window <= LOW_THRESHOLD)
+        {
+            float t = (reaction_window - REACTION_MEDIUM) / (LOW_THRESHOLD - REACTION_MEDIUM);
+            return 0.55f - (t * 0.20f);  // Interpolate from 0.55 to 0.35
+        }
+
+        // Range 5: 0.6s+ → confidence 0.35 - 0.20 (floor at 0.20)
+        // Very long reaction window = very easy to dodge
+        constexpr float VERY_LOW_THRESHOLD = 1.0f;
+        if (reaction_window <= VERY_LOW_THRESHOLD)
+        {
+            float t = (reaction_window - LOW_THRESHOLD) / (VERY_LOW_THRESHOLD - LOW_THRESHOLD);
+            return 0.35f - (t * 0.15f);  // Interpolate from 0.35 to 0.20
+        }
+
+        // 1.0s+ reaction window = floor at 0.20 (always some chance of hitting distracted players)
+        return 0.20f;
     }
 
     /**
@@ -1226,7 +1293,7 @@ namespace GeometricPred
             reaction_window /= 1.15f;  // Confidence boost for slowed targets
         }
 
-        // Grade reaction window to hit chance
+        // Grade reaction window to hit chance (discrete enum for backwards compatibility)
         if (reaction_window <= REACTION_UNDODGEABLE)
             result.hit_chance = HitChance::Undodgeable;
         else if (reaction_window <= REACTION_VERY_HIGH)
@@ -1238,7 +1305,9 @@ namespace GeometricPred
         else
             result.hit_chance = HitChance::Low;
 
-        result.hit_chance_float = hit_chance_to_float(result.hit_chance);
+        // CONTINUOUS CONFIDENCE: Use smooth interpolation instead of discrete levels
+        // This provides much better granularity (0.39s vs 0.41s are now distinguishable)
+        result.hit_chance_float = reaction_window_to_confidence(reaction_window);
 
         // Simple recommendation: Cast on Medium or higher (or use conservative mode)
         if (PredictionSettings::get().prefer_safe_shots)
@@ -1553,6 +1622,173 @@ namespace GeometricPred
             result.hit_chance == HitChance::Undodgeable ||
             result.hit_chance == HitChance::Immobile
         );
+
+        return result;
+    }
+
+    // =========================================================================
+    // MULTI-TARGET AOE PREDICTION
+    // =========================================================================
+
+    /**
+     * Multi-target AOE prediction result
+     * Contains cast position and list of targets that will be hit
+     */
+    struct AOEPredictionResult
+    {
+        math::vector3 cast_position;                  // Optimal cast location
+        std::vector<game_object*> hit_targets;        // Targets that will be hit
+        std::vector<float> individual_hit_chances;    // Hit chance for each target
+        float expected_hits;                          // Sum of hit chances (2.7 = likely 2-3 hits)
+        float min_hit_chance;                         // Weakest link
+        float avg_hit_chance;                         // Average confidence
+        bool is_valid;                                // Whether this is a good cast
+
+        AOEPredictionResult()
+            : expected_hits(0.f), min_hit_chance(0.f),
+              avg_hit_chance(0.f), is_valid(false)
+        {}
+    };
+
+    /**
+     * MULTI-TARGET AOE PREDICTION
+     *
+     * Find optimal cast position for circular AOE spells (Brand R, Orianna R, Annie R)
+     * Returns position that maximizes expected hits × average hit chance
+     *
+     * Algorithm:
+     * 1. Get individual predictions for all enemies in range
+     * 2. Filter by minimum hit chance threshold
+     * 3. Find centroid (center of mass) of predicted positions
+     * 4. Clamp centroid to spell range
+     * 5. Calculate expected hits at that position
+     *
+     * Example:
+     *   - 3 enemies with 0.8, 0.7, 0.6 hit chance
+     *   - Expected hits = 2.1 (likely 2 hits, possibly 3)
+     *   - Avg confidence = 0.70
+     */
+    inline AOEPredictionResult predict_aoe_circle(
+        game_object* source,
+        float spell_radius,
+        float spell_range,
+        float missile_speed,
+        float cast_delay,
+        float proc_delay = 0.f,
+        float min_targets = 2.0f,        // Minimum expected hits to be valid
+        float min_individual_hc = 0.3f)  // Filter out very low confidence targets
+    {
+        AOEPredictionResult result;
+
+        if (!source || !g_sdk || !g_sdk->object_manager)
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 1. Get all valid enemy champions in range
+        std::vector<game_object*> candidates;
+        std::vector<math::vector3> predicted_positions;
+        std::vector<float> hit_chances;
+
+        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        for (auto* enemy : enemies)
+        {
+            if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                continue;
+
+            // Skip enemies out of range
+            float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
+            if (dist > spell_range + 500.f)  // +500 for movement during cast
+                continue;
+
+            // Get individual prediction
+            PredictionInput input;
+            input.source = source;
+            input.target = enemy;
+            input.shape = SpellShape::Circle;
+            input.spell_width = spell_radius;
+            input.spell_range = spell_range;
+            input.missile_speed = missile_speed;
+            input.cast_delay = cast_delay;
+            input.proc_delay = proc_delay;
+
+            auto pred = get_prediction(input);
+
+            // Filter by minimum hit chance (exclude impossible/blocked/very low)
+            if (pred.hit_chance_float >= min_individual_hc &&
+                pred.hit_chance != HitChance::Impossible &&
+                pred.hit_chance != HitChance::Clone &&
+                pred.hit_chance != HitChance::SpellShielded)
+            {
+                candidates.push_back(enemy);
+                predicted_positions.push_back(pred.predicted_position);
+                hit_chances.push_back(pred.hit_chance_float);
+            }
+        }
+
+        // Check if we have enough candidates
+        if (candidates.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 2. Find centroid (center of mass) of predicted positions
+        // This is a fast approximation of minimum enclosing circle
+        math::vector3 centroid{};
+        for (const auto& pos : predicted_positions)
+        {
+            centroid.x += pos.x;
+            centroid.y += pos.y;
+            centroid.z += pos.z;
+        }
+        centroid.x /= predicted_positions.size();
+        centroid.y /= predicted_positions.size();
+        centroid.z /= predicted_positions.size();
+
+        // 3. Clamp centroid to spell range
+        math::vector3 source_pos = source->get_position();
+        math::vector3 to_centroid = centroid - source_pos;
+        float dist_to_centroid = Utils::magnitude_2d(to_centroid);
+
+        if (dist_to_centroid > spell_range)
+        {
+            // Normalize and scale to max range
+            to_centroid = to_centroid / dist_to_centroid;  // Normalize (2D would be better but this is safe)
+            centroid = source_pos + to_centroid * spell_range;
+        }
+
+        // 4. Calculate expected hits at centroid position
+        float expected = 0.f;
+        float min_hc = 1.0f;
+        float sum_hc = 0.f;
+        int hits = 0;
+
+        for (size_t i = 0; i < predicted_positions.size(); ++i)
+        {
+            // Check if predicted position is within AOE radius
+            float dist_to_center = Utils::distance_2d(predicted_positions[i], centroid);
+            float target_radius = candidates[i]->get_bounding_radius();
+
+            // Target is hit if their center is within spell_radius + their_hitbox
+            if (dist_to_center <= spell_radius + target_radius)
+            {
+                result.hit_targets.push_back(candidates[i]);
+                result.individual_hit_chances.push_back(hit_chances[i]);
+                expected += hit_chances[i];
+                sum_hc += hit_chances[i];
+                min_hc = std::min(min_hc, hit_chances[i]);
+                hits++;
+            }
+        }
+
+        // 5. Populate result
+        result.cast_position = centroid;
+        result.expected_hits = expected;
+        result.min_hit_chance = min_hc;
+        result.avg_hit_chance = hits > 0 ? sum_hc / hits : 0.f;
+        result.is_valid = (expected >= min_targets);
 
         return result;
     }
