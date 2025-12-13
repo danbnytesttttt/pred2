@@ -255,25 +255,18 @@ namespace GeometricPred
                 if (std::strcmp(champ_name, "Garen") == 0)
                     tenacity = std::max(tenacity, 0.30f);
 
-                // Irelia passive: scales up to 40% tenacity (assume 30% average)
-                else if (std::strcmp(champ_name, "Irelia") == 0)
-                    tenacity = std::max(tenacity, 0.30f);
-
                 // Mundo R: 30% tenacity while active (hard to detect, skip)
                 // Trundle W: 20% tenacity in zone (hard to detect, skip)
             }
 
-            // Conservative estimate: If target has ANY tenacity items/runes
-            // we can't detect, assume baseline 20% (typical Mercury + minor rune)
-            // ONLY if we see they're likely a bruiser/tank (high HP, low AP)
+            // High HP targets likely have tenacity items (Mercury Treads, Legend Tenacity)
+            // Use max HP threshold only - don't exclude AP bruisers
             if (tenacity == 0.f)
             {
                 float max_hp = target->get_max_health();
-                float ap = target->get_ability_power();
 
-                // Bruiser/tank heuristic: >2500 HP and <100 AP
-                // These champs often build Merc Treads + Legend Tenacity
-                if (max_hp > 2500.f && ap < 100.f)
+                // High HP heuristic: likely bruiser/tank with tenacity items
+                if (max_hp > 3000.f)
                 {
                     tenacity = 0.15f;  // Conservative 15% estimate
                 }
@@ -914,54 +907,12 @@ namespace GeometricPred
             }
         }
 
-        // HEURISTIC 1: Orbwalking Detection
-        // ADCs frequently attack-move-attack, making paths unreliable
-        // Signature: Short path (<400 units) + has AA windup = likely orbwalking
-        // Reduce prediction distance to account for frequent stops
-        float orbwalk_multiplier = 1.0f;
+        // Path prediction: trust the path from SDK
+        // If target is orbwalking, their path will naturally be short
+        // No need for arbitrary distance multipliers
+        float distance_to_travel = move_speed * effective_movement_time;
 
-        // Calculate total path distance
-        float total_path_distance = 0.f;
-        for (size_t i = 1; i < path.size(); ++i)
-        {
-            math::vector3 seg_start = (i == 1) ? position : path[i - 1];
-            math::vector3 seg_end = path[i];
-            total_path_distance += (seg_end - seg_start).magnitude();
-        }
-
-        // Check if target is in attack animation (likely orbwalking)
-        bool has_attack_animation = false;
-        auto active_cast = target->get_active_spell_cast();
-        if (active_cast)
-        {
-            auto spell_cast = active_cast->get_spell_cast();
-            if (spell_cast && spell_cast->is_basic_attack())
-            {
-                has_attack_animation = true;
-            }
-        }
-
-        // Orbwalking heuristic: Short path + attack animation = reduce distance by 40%
-        // This accounts for the fact they'll stop to attack again soon
-        constexpr float ORBWALK_PATH_THRESHOLD = 400.f;  // Short movement typical of kiting
-        if (has_attack_animation && total_path_distance < ORBWALK_PATH_THRESHOLD)
-        {
-            orbwalk_multiplier = 0.6f;  // Predict 40% less distance
-        }
-        // Even without animation, very short paths suggest kiting/repositioning
-        else if (total_path_distance < 200.f)
-        {
-            orbwalk_multiplier = 0.75f;  // Mild reduction
-        }
-
-        // HEURISTIC 2: Start-of-Path Dampening (smooth acceleration ramp)
-        // League accelerates to max speed in ~23ms, but we use 100ms conservative window
-        float speed_multiplier = 1.0f;
-        // Path dampening is less important than orbwalking detection
-
-        float distance_to_travel = move_speed * effective_movement_time * speed_multiplier * orbwalk_multiplier;
-
-        // HEURISTIC 3: End-of-Path Clamping (don't overshoot destination)
+        // End-of-Path Clamping (don't overshoot destination)
         float remaining_path = 0.f;
         for (size_t i = 1; i < path.size(); ++i)
         {
