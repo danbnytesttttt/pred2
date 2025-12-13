@@ -355,6 +355,20 @@ namespace EdgeCases
     };
 
     /**
+     * Grounded information
+     * Grounded targets cannot use movement abilities (Flash, dashes, blinks)
+     * This is a HUGE confidence boost - they cannot escape except by walking!
+     */
+    struct GroundedInfo
+    {
+        bool is_grounded;
+        float duration_remaining;
+        std::string source;  // "cassiopeia_w", "singed_w", etc.
+
+        GroundedInfo() : is_grounded(false), duration_remaining(0.f), source("") {}
+    };
+
+    /**
      * Detect forced movement CCs (charm, taunt, fear)
      * Returns direction target will be forced to walk
      */
@@ -716,6 +730,57 @@ namespace EdgeCases
                 }
             }
         }
+
+        return info;
+    }
+
+    /**
+     * Detect grounded buff (Cassiopeia W, Singed W)
+     * CRITICAL: Grounded targets CANNOT use movement abilities!
+     * This includes: Flash, all dashes, all blinks
+     * Confidence boost: They can ONLY escape by walking
+     */
+    inline GroundedInfo detect_grounded(game_object* target)
+    {
+        GroundedInfo info;
+
+        if (!target || !target->is_valid())
+            return info;
+
+        if (!g_sdk || !g_sdk->clock_facade)
+            return info;
+
+        float current_time = g_sdk->clock_facade->get_game_time();
+
+        // Check for specific grounded buffs
+        auto check_buff = [&](const std::string& name, const std::string& source)
+        {
+            std::string buff_name = name;  // Make mutable copy for API
+            auto buff = target->get_buff_by_name(buff_name);
+            if (buff && buff->is_active())
+            {
+                float end = buff->get_end_time();
+                float duration_left = end - current_time;
+
+                // Grounded effects are typically short (< 5s)
+                if (duration_left > 0.f && duration_left < 6.0f)
+                {
+                    info.is_grounded = true;
+                    info.duration_remaining = duration_left;
+                    info.source = source;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Cassiopeia W (Miasma) - 5 second duration
+        if (check_buff("cassiopeiamiasma", "cassiopeia_w")) return info;
+        if (check_buff("cassiopeiaw", "cassiopeia_w")) return info;
+
+        // Singed W (Mega Adhesive) - 3 second duration
+        if (check_buff("megaadhesive", "singed_w")) return info;
+        if (check_buff("singedw", "singed_w")) return info;
 
         return info;
     }
@@ -1667,6 +1732,7 @@ namespace EdgeCases
         ReviveInfo revive;
         PolymorphInfo polymorph;
         KnockbackInfo knockback;
+        GroundedInfo grounded;
         std::vector<WindwallInfo> windwalls;
         std::vector<TerrainInfo> terrains;
         bool is_slowed;
@@ -1710,6 +1776,7 @@ namespace EdgeCases
         analysis.revive = detect_revive(target);
         analysis.polymorph = detect_polymorph(target);
         analysis.knockback = detect_knockback(target);
+        analysis.grounded = detect_grounded(target);
         analysis.windwalls = detect_windwalls();
         analysis.terrains = detect_terrain();
         analysis.is_slowed = is_slowed(target);
@@ -1787,6 +1854,11 @@ namespace EdgeCases
 
         if (analysis.knockback.is_knocked_back)
             analysis.confidence_multiplier *= 0.6f;  // Unpredictable displacement
+
+        // GROUNDED: MASSIVE confidence boost!
+        // Target CANNOT use Flash, dashes, or blinks - only walking escape
+        if (analysis.grounded.is_grounded)
+            analysis.confidence_multiplier *= 1.5f;  // 50% boost - they're trapped!
 
         if (analysis.dash.is_dashing)
             analysis.confidence_multiplier *= analysis.dash.confidence_multiplier;
