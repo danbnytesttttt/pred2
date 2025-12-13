@@ -79,7 +79,8 @@ namespace GeometricPred
         Circle,   // Point-target AoE
         Capsule,  // Line + width (missiles, most skillshots)
         Line,     // Alias for Capsule
-        Cone      // Wedge-shaped directional AoE
+        Cone,     // Wedge-shaped directional AoE
+        Vector    // Two-position cast (Viktor E, Rumble R, Taliyah W)
     };
 
     /**
@@ -733,6 +734,60 @@ namespace GeometricPred
             }
         }
 
+        /**
+         * ESCAPE DISTANCE CALCULATION (CONE)
+         * How far must target run to escape a cone AoE?
+         *
+         * Cone = circular sector from origin
+         * Target can escape by:
+         * 1. Exiting through cone edge (perpendicular to cone radius)
+         * 2. Exiting backward (past cone origin)
+         * 3. Exiting forward (beyond cone range)
+         */
+        inline float calculate_escape_distance_cone(
+            const math::vector3& target_pos,
+            const math::vector3& cone_origin,
+            const math::vector3& cone_direction,  // Normalized
+            float cone_half_angle,                // In radians
+            float cone_range,
+            float target_radius)
+        {
+            // Check if target is inside cone using existing geometry function
+            if (!point_in_cone(target_pos, cone_origin, cone_direction, cone_half_angle, cone_range))
+                return 0.f;  // Already outside, no escape needed
+
+            math::vector3 to_target = target_pos - cone_origin;
+            float distance = magnitude_2d(to_target);
+
+            // SAFETY: If at origin, already escaped (impossible to be outside a cone at its origin)
+            constexpr float MIN_SAFE_DISTANCE = 0.01f;
+            if (distance < MIN_SAFE_DISTANCE)
+                return target_radius;  // Minimum escape distance
+
+            // Normalize to_target for angle calculations
+            math::vector3 to_target_norm = to_target / distance;
+
+            // Calculate actual angle from cone center
+            float dot_product = to_target_norm.x * cone_direction.x + to_target_norm.z * cone_direction.z;
+            float cos_angle = std::clamp(dot_product, -1.f, 1.f);
+            float actual_angle = std::acos(cos_angle);
+
+            // ESCAPE OPTION 1: Exit through side of cone (perpendicular escape)
+            // Distance = distance_from_center * sin(angle_difference)
+            // angle_difference = actual_angle - cone_half_angle
+            float angle_to_edge = std::max(0.f, actual_angle - cone_half_angle);
+            float side_escape = distance * std::sin(angle_to_edge) + target_radius;
+
+            // ESCAPE OPTION 2: Exit backward (past cone origin)
+            float backward_escape = distance + target_radius;
+
+            // ESCAPE OPTION 3: Exit forward (beyond cone range)
+            float forward_escape = cone_range - distance + target_radius;
+
+            // Return shortest escape path
+            return std::max(0.f, std::min({side_escape, backward_escape, forward_escape}));
+        }
+
     } // namespace Utils
 
     // =========================================================================
@@ -1247,7 +1302,11 @@ namespace GeometricPred
         // =======================================================================================
         // MINION COLLISION CHECK (uses EdgeCaseDetection.h)
         // =======================================================================================
-        if (input.shape == SpellShape::Capsule)
+        // Check minion collision for line skillshots (Capsule, Cone, Vector)
+        if (input.shape == SpellShape::Capsule ||
+            input.shape == SpellShape::Line ||
+            input.shape == SpellShape::Cone ||
+            input.shape == SpellShape::Vector)
         {
             // Use EdgeCases minion collision with health prediction
             // Champion script decides if spell collides via input parameter
@@ -1301,8 +1360,29 @@ namespace GeometricPred
                 target_radius
             );
         }
-        else  // Capsule
+        else if (input.shape == SpellShape::Cone)
         {
+            // Cone: spell_width stores cone angle in radians
+            math::vector3 spell_direction = (predicted_pos - input.source->get_position());
+            float spell_length = Utils::magnitude_2d(spell_direction);
+            if (spell_length > EPSILON)
+                spell_direction = spell_direction / spell_length;
+            else
+                spell_direction = math::vector3(0.f, 0.f, 1.f);
+
+            float cone_half_angle = input.spell_width / 2.f;  // Convert full angle to half angle
+            distance_to_exit = Utils::calculate_escape_distance_cone(
+                predicted_pos,
+                input.source->get_position(),
+                spell_direction,
+                cone_half_angle,
+                input.spell_range,
+                target_radius
+            );
+        }
+        else  // Capsule, Line, Vector
+        {
+            // All treated as linear skillshots for single-target escape distance
             math::vector3 spell_direction = (predicted_pos - input.source->get_position());
             float spell_length = Utils::magnitude_2d(spell_direction);
             if (spell_length > EPSILON)
@@ -1407,7 +1487,16 @@ namespace GeometricPred
             PredictionTelemetry::PredictionEvent event;
             event.timestamp = g_sdk->clock_facade ? g_sdk->clock_facade->get_game_time() : 0.f;
             event.target_name = input.target->get_char_name();
-            event.spell_type = (input.shape == SpellShape::Circle) ? "Circle" : "Capsule";
+
+            // Log spell shape type
+            if (input.shape == SpellShape::Circle)
+                event.spell_type = "Circle";
+            else if (input.shape == SpellShape::Cone)
+                event.spell_type = "Cone";
+            else if (input.shape == SpellShape::Vector)
+                event.spell_type = "Vector";
+            else  // Capsule or Line
+                event.spell_type = "Capsule";
             event.hit_chance = result.hit_chance_float;
             event.confidence = result.hit_chance_float;  // Geometric has no separate confidence
             event.distance = result.distance_to_target;

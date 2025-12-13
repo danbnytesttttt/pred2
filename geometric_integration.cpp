@@ -230,7 +230,11 @@ namespace GeometricPred
         // =======================================================================================
         // MINION COLLISION CHECK (uses EdgeCaseDetection.h)
         // =======================================================================================
-        if (input.shape == SpellShape::Capsule)
+        // Check minion collision for line skillshots (Capsule, Cone, Vector)
+        if (input.shape == SpellShape::Capsule ||
+            input.shape == SpellShape::Line ||
+            input.shape == SpellShape::Cone ||
+            input.shape == SpellShape::Vector)
         {
             // Use EdgeCases minion collision with health prediction
             // Champion script decides if spell collides via input parameter
@@ -284,8 +288,29 @@ namespace GeometricPred
                 target_radius
             );
         }
-        else  // Capsule
+        else if (input.shape == SpellShape::Cone)
         {
+            // Cone: spell_width stores cone angle in radians
+            math::vector3 spell_direction = (predicted_pos - input.source->get_position());
+            float spell_length = Utils::magnitude_2d(spell_direction);
+            if (spell_length > EPSILON)
+                spell_direction = spell_direction / spell_length;
+            else
+                spell_direction = math::vector3(0.f, 0.f, 1.f);
+
+            float cone_half_angle = input.spell_width / 2.f;  // Convert full angle to half angle
+            distance_to_exit = Utils::calculate_escape_distance_cone(
+                predicted_pos,
+                input.source->get_position(),
+                spell_direction,
+                cone_half_angle,
+                input.spell_range,
+                target_radius
+            );
+        }
+        else  // Capsule, Line, Vector
+        {
+            // All treated as linear skillshots for single-target escape distance
             math::vector3 spell_direction = (predicted_pos - input.source->get_position());
             float spell_length = Utils::magnitude_2d(spell_direction);
             if (spell_length > EPSILON)
