@@ -330,6 +330,31 @@ namespace EdgeCases
     };
 
     /**
+     * Polymorph information
+     * Polymorph disables abilities and limits movement control
+     */
+    struct PolymorphInfo
+    {
+        bool is_polymorphed;
+        float duration_remaining;
+        std::string source;  // "lulu_w", etc.
+
+        PolymorphInfo() : is_polymorphed(false), duration_remaining(0.f), source("") {}
+    };
+
+    /**
+     * Knockback/Displacement information
+     * Active knockbacks make prediction difficult - wait for completion
+     */
+    struct KnockbackInfo
+    {
+        bool is_knocked_back;
+        float duration_remaining;
+
+        KnockbackInfo() : is_knocked_back(false), duration_remaining(0.f) {}
+    };
+
+    /**
      * Detect forced movement CCs (charm, taunt, fear)
      * Returns direction target will be forced to walk
      */
@@ -611,6 +636,91 @@ namespace EdgeCases
     }
 
     /**
+     * Detect polymorph effects (Lulu W)
+     * Polymorphed targets have limited movement control - easier to hit
+     */
+    inline PolymorphInfo detect_polymorph(game_object* target)
+    {
+        PolymorphInfo info;
+
+        if (!target || !target->is_valid())
+            return info;
+
+        // Check for polymorph buff type
+        if (target->has_buff_of_type(buff_type::polymorph))
+        {
+            info.is_polymorphed = true;
+
+            if (g_sdk && g_sdk->clock_facade)
+            {
+                float current_time = g_sdk->clock_facade->get_game_time();
+
+                // Try to find the specific polymorph buff for duration
+                auto buffs = target->get_buffs();
+                for (auto* buff : buffs)
+                {
+                    if (buff && buff->is_active() && buff->get_type() == buff_type::polymorph)
+                    {
+                        info.duration_remaining = std::max(0.f, buff->get_end_time() - current_time);
+
+                        // Try to identify source
+                        std::string buff_name = buff->get_name();
+                        if (buff_name.find("lulu") != std::string::npos || buff_name.find("Lulu") != std::string::npos)
+                            info.source = "lulu_w";
+                        else
+                            info.source = "unknown";
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        return info;
+    }
+
+    /**
+     * Detect active knockback/displacement effects
+     * Knockbacks are brief but make prediction unreliable
+     */
+    inline KnockbackInfo detect_knockback(game_object* target)
+    {
+        KnockbackInfo info;
+
+        if (!target || !target->is_valid())
+            return info;
+
+        // Check for knockback buff type
+        if (target->has_buff_of_type(buff_type::knockback) ||
+            target->has_buff_of_type(buff_type::knockup))
+        {
+            info.is_knocked_back = true;
+
+            if (g_sdk && g_sdk->clock_facade)
+            {
+                float current_time = g_sdk->clock_facade->get_game_time();
+
+                // Find knockback buff for duration
+                auto buffs = target->get_buffs();
+                for (auto* buff : buffs)
+                {
+                    if (buff && buff->is_active())
+                    {
+                        auto type = buff->get_type();
+                        if (type == buff_type::knockback || type == buff_type::knockup)
+                        {
+                            info.duration_remaining = std::max(0.f, buff->get_end_time() - current_time);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        return info;
+    }
+
+    /**
      * Detect channeling or recall
      */
     inline ChannelInfo detect_channel(game_object* target)
@@ -672,6 +782,9 @@ namespace EdgeCases
 
     /**
      * Check if target is slowed
+     *
+     * Note: Slow decay is automatically handled by using real-time move speed.
+     * Decaying slows (99% -> 20% over time) are captured via current_speed check.
      */
     inline bool is_slowed(game_object* target)
     {
@@ -683,6 +796,7 @@ namespace EdgeCases
             return true;
 
         // Method 2: Compare current vs base move speed
+        // This automatically accounts for slow decay since we check real-time speed
         float current_speed = target->get_move_speed();
         float base_speed = get_base_move_speed(target);
 
@@ -1551,6 +1665,8 @@ namespace EdgeCases
         ForcedMovementInfo forced_movement;
         UntargetabilityInfo untargetability;
         ReviveInfo revive;
+        PolymorphInfo polymorph;
+        KnockbackInfo knockback;
         std::vector<WindwallInfo> windwalls;
         std::vector<TerrainInfo> terrains;
         bool is_slowed;
@@ -1592,6 +1708,8 @@ namespace EdgeCases
         analysis.forced_movement = detect_forced_movement(target, source);
         analysis.untargetability = detect_untargetability(target);
         analysis.revive = detect_revive(target);
+        analysis.polymorph = detect_polymorph(target);
+        analysis.knockback = detect_knockback(target);
         analysis.windwalls = detect_windwalls();
         analysis.terrains = detect_terrain();
         analysis.is_slowed = is_slowed(target);
@@ -1663,6 +1781,12 @@ namespace EdgeCases
 
         if (analysis.is_slowed)
             analysis.confidence_multiplier *= 1.15f;  // Reduced mobility
+
+        if (analysis.polymorph.is_polymorphed)
+            analysis.confidence_multiplier *= 1.25f;  // Limited movement control
+
+        if (analysis.knockback.is_knocked_back)
+            analysis.confidence_multiplier *= 0.6f;  // Unpredictable displacement
 
         if (analysis.dash.is_dashing)
             analysis.confidence_multiplier *= analysis.dash.confidence_multiplier;
