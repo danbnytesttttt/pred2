@@ -1854,4 +1854,508 @@ namespace GeometricPred
         return result;
     }
 
+    /**
+     * LINEAR/CAPSULE AOE PREDICTION
+     *
+     * Find optimal cast direction for line AOE spells (Vel'Koz W, Ezreal R, MF R, Lux R)
+     * A capsule is a rectangle with semicircular ends (line segment swept by a circle)
+     *
+     * Algorithm:
+     * 1. Get individual predictions for all enemies in range
+     * 2. Try multiple cast angles (e.g., every 15 degrees)
+     * 3. For each angle, calculate expected hits by checking if predicted positions intersect the line
+     * 4. Return angle with maximum expected hits
+     *
+     * Parameters:
+     *   - spell_width: Radius of the line (half-width)
+     *   - spell_range: Length of the line
+     */
+    inline AOEPredictionResult predict_aoe_linear(
+        game_object* source,
+        float spell_width,
+        float spell_range,
+        float missile_speed,
+        float cast_delay,
+        float proc_delay = 0.f,
+        float min_targets = 2.0f,
+        float min_individual_hc = 0.3f,
+        int angle_samples = 24)  // Test every 15 degrees (360/24)
+    {
+        AOEPredictionResult result;
+
+        if (!source || !g_sdk || !g_sdk->object_manager)
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 1. Get all valid enemy champions in range
+        std::vector<game_object*> candidates;
+        std::vector<math::vector3> predicted_positions;
+        std::vector<float> hit_chances;
+
+        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        for (auto* enemy : enemies)
+        {
+            if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                continue;
+
+            // Skip enemies out of range
+            float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
+            if (dist > spell_range + spell_width + AOE_MOVEMENT_BUFFER)
+                continue;
+
+            // Get individual prediction
+            PredictionInput input;
+            input.source = source;
+            input.target = enemy;
+            input.shape = SpellShape::Line;
+            input.spell_width = spell_width;
+            input.spell_range = spell_range;
+            input.missile_speed = missile_speed;
+            input.cast_delay = cast_delay;
+            input.proc_delay = proc_delay;
+
+            auto pred = get_prediction(input);
+
+            // Filter by minimum hit chance
+            if (pred.hit_chance_float >= min_individual_hc &&
+                pred.hit_chance != HitChance::Impossible &&
+                pred.hit_chance != HitChance::Clone &&
+                pred.hit_chance != HitChance::SpellShielded)
+            {
+                candidates.push_back(enemy);
+                predicted_positions.push_back(pred.predicted_position);
+                hit_chances.push_back(pred.hit_chance_float);
+            }
+        }
+
+        if (candidates.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 2. Try multiple cast angles and find best
+        math::vector3 source_pos = source->get_position();
+        float best_expected = 0.f;
+        math::vector3 best_cast_pos{};
+        std::vector<int> best_hit_indices;
+
+        constexpr float PI = 3.14159265359f;
+        float angle_step = (2.f * PI) / angle_samples;
+
+        for (int angle_idx = 0; angle_idx < angle_samples; ++angle_idx)
+        {
+            float angle = angle_idx * angle_step;
+            math::vector3 direction(std::cos(angle), 0.f, std::sin(angle));
+
+            // Cast endpoint
+            math::vector3 line_end = source_pos + direction * spell_range;
+
+            // Check how many targets this angle would hit
+            float expected = 0.f;
+            std::vector<int> hit_indices;
+
+            for (size_t i = 0; i < predicted_positions.size(); ++i)
+            {
+                // Check if predicted position intersects the capsule
+                // Capsule = line segment + circular ends + thickness
+
+                math::vector3 to_target = predicted_positions[i] - source_pos;
+                float proj = to_target.dot(direction);  // Projection onto line direction
+
+                // Clamp projection to [0, spell_range]
+                proj = std::max(0.f, std::min(spell_range, proj));
+
+                // Closest point on line segment to target
+                math::vector3 closest_point = source_pos + direction * proj;
+                float dist = Utils::distance_2d(predicted_positions[i], closest_point);
+                float target_radius = candidates[i]->get_bounding_radius();
+
+                // Hit if within width + target hitbox
+                if (dist <= spell_width + target_radius)
+                {
+                    expected += hit_chances[i];
+                    hit_indices.push_back(static_cast<int>(i));
+                }
+            }
+
+            // Track best angle
+            if (expected > best_expected)
+            {
+                best_expected = expected;
+                best_cast_pos = line_end;
+                best_hit_indices = hit_indices;
+            }
+        }
+
+        // 3. Populate result with best angle
+        if (best_hit_indices.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        float sum_hc = 0.f;
+        float min_hc = 1.0f;
+        for (int idx : best_hit_indices)
+        {
+            result.hit_targets.push_back(candidates[idx]);
+            result.individual_hit_chances.push_back(hit_chances[idx]);
+            sum_hc += hit_chances[idx];
+            min_hc = std::min(min_hc, hit_chances[idx]);
+        }
+
+        result.cast_position = best_cast_pos;
+        result.expected_hits = best_expected;
+        result.min_hit_chance = min_hc;
+        result.avg_hit_chance = sum_hc / best_hit_indices.size();
+        result.is_valid = (best_expected >= min_targets);
+
+        return result;
+    }
+
+    /**
+     * CONE AOE PREDICTION
+     *
+     * Find optimal cast direction for cone AOE spells (Annie W, Cassiopeia Q, Rumble E)
+     * A cone is a wedge-shaped area from source
+     *
+     * Algorithm:
+     * 1. Get individual predictions for all enemies in range
+     * 2. Try multiple cast angles
+     * 3. For each angle, check if predicted positions fall within the cone
+     * 4. Return angle with maximum expected hits
+     *
+     * Parameters:
+     *   - spell_width: Cone angle in radians (e.g., 50 degrees = 0.873 radians)
+     *   - spell_range: Cone length
+     */
+    inline AOEPredictionResult predict_aoe_cone(
+        game_object* source,
+        float cone_angle_radians,
+        float spell_range,
+        float missile_speed,
+        float cast_delay,
+        float proc_delay = 0.f,
+        float min_targets = 2.0f,
+        float min_individual_hc = 0.3f,
+        int angle_samples = 24)
+    {
+        AOEPredictionResult result;
+
+        if (!source || !g_sdk || !g_sdk->object_manager)
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 1. Get all valid enemy champions in range
+        std::vector<game_object*> candidates;
+        std::vector<math::vector3> predicted_positions;
+        std::vector<float> hit_chances;
+
+        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        for (auto* enemy : enemies)
+        {
+            if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                continue;
+
+            float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
+            if (dist > spell_range + AOE_MOVEMENT_BUFFER)
+                continue;
+
+            PredictionInput input;
+            input.source = source;
+            input.target = enemy;
+            input.shape = SpellShape::Cone;
+            input.spell_width = cone_angle_radians;
+            input.spell_range = spell_range;
+            input.missile_speed = missile_speed;
+            input.cast_delay = cast_delay;
+            input.proc_delay = proc_delay;
+
+            auto pred = get_prediction(input);
+
+            if (pred.hit_chance_float >= min_individual_hc &&
+                pred.hit_chance != HitChance::Impossible &&
+                pred.hit_chance != HitChance::Clone &&
+                pred.hit_chance != HitChance::SpellShielded)
+            {
+                candidates.push_back(enemy);
+                predicted_positions.push_back(pred.predicted_position);
+                hit_chances.push_back(pred.hit_chance_float);
+            }
+        }
+
+        if (candidates.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 2. Try multiple cast angles
+        math::vector3 source_pos = source->get_position();
+        float best_expected = 0.f;
+        math::vector3 best_cast_pos{};
+        std::vector<int> best_hit_indices;
+
+        constexpr float PI = 3.14159265359f;
+        float angle_step = (2.f * PI) / angle_samples;
+        float half_cone = cone_angle_radians / 2.f;
+
+        for (int angle_idx = 0; angle_idx < angle_samples; ++angle_idx)
+        {
+            float center_angle = angle_idx * angle_step;
+            math::vector3 direction(std::cos(center_angle), 0.f, std::sin(center_angle));
+
+            math::vector3 cone_end = source_pos + direction * spell_range;
+
+            float expected = 0.f;
+            std::vector<int> hit_indices;
+
+            for (size_t i = 0; i < predicted_positions.size(); ++i)
+            {
+                // Check if target is within cone
+                math::vector3 to_target = predicted_positions[i] - source_pos;
+                float dist = to_target.magnitude();
+
+                if (dist < EPSILON)
+                    continue;
+
+                // Check range
+                if (dist > spell_range)
+                    continue;
+
+                // Calculate angle between center direction and target direction
+                math::vector3 target_dir = to_target / dist;
+                float dot = direction.dot(target_dir);
+                float angle_diff = std::acos(std::max(-1.f, std::min(1.f, dot)));
+
+                // Check if within cone angle (with target radius buffer)
+                float target_radius = candidates[i]->get_bounding_radius();
+                float angular_tolerance = std::atan2(target_radius, dist);
+
+                if (angle_diff <= half_cone + angular_tolerance)
+                {
+                    expected += hit_chances[i];
+                    hit_indices.push_back(static_cast<int>(i));
+                }
+            }
+
+            if (expected > best_expected)
+            {
+                best_expected = expected;
+                best_cast_pos = cone_end;
+                best_hit_indices = hit_indices;
+            }
+        }
+
+        // 3. Populate result
+        if (best_hit_indices.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        float sum_hc = 0.f;
+        float min_hc = 1.0f;
+        for (int idx : best_hit_indices)
+        {
+            result.hit_targets.push_back(candidates[idx]);
+            result.individual_hit_chances.push_back(hit_chances[idx]);
+            sum_hc += hit_chances[idx];
+            min_hc = std::min(min_hc, hit_chances[idx]);
+        }
+
+        result.cast_position = best_cast_pos;
+        result.expected_hits = best_expected;
+        result.min_hit_chance = min_hc;
+        result.avg_hit_chance = sum_hc / best_hit_indices.size();
+        result.is_valid = (best_expected >= min_targets);
+
+        return result;
+    }
+
+    /**
+     * VECTOR AOE PREDICTION
+     *
+     * Find optimal cast for vector spells (Viktor E, Rumble R, Taliyah W)
+     * Vector spells require TWO positions: start and end
+     *
+     * Algorithm:
+     * 1. Get individual predictions
+     * 2. Try different line segments (varying start + end positions)
+     * 3. Find line that hits most targets
+     *
+     * This is more complex - simplified version just finds best line through targets
+     */
+    inline AOEPredictionResult predict_aoe_vector(
+        game_object* source,
+        float spell_width,
+        float max_range,
+        float line_length,
+        float missile_speed,
+        float cast_delay,
+        float proc_delay = 0.f,
+        float min_targets = 2.0f,
+        float min_individual_hc = 0.3f)
+    {
+        AOEPredictionResult result;
+
+        if (!source || !g_sdk || !g_sdk->object_manager)
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 1. Get all valid enemy champions
+        std::vector<game_object*> candidates;
+        std::vector<math::vector3> predicted_positions;
+        std::vector<float> hit_chances;
+
+        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        for (auto* enemy : enemies)
+        {
+            if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                continue;
+
+            float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
+            if (dist > max_range + line_length + AOE_MOVEMENT_BUFFER)
+                continue;
+
+            PredictionInput input;
+            input.source = source;
+            input.target = enemy;
+            input.shape = SpellShape::Line;  // Similar to line
+            input.spell_width = spell_width;
+            input.spell_range = max_range;
+            input.missile_speed = missile_speed;
+            input.cast_delay = cast_delay;
+            input.proc_delay = proc_delay;
+
+            auto pred = get_prediction(input);
+
+            if (pred.hit_chance_float >= min_individual_hc &&
+                pred.hit_chance != HitChance::Impossible &&
+                pred.hit_chance != HitChance::Clone &&
+                pred.hit_chance != HitChance::SpellShielded)
+            {
+                candidates.push_back(enemy);
+                predicted_positions.push_back(pred.predicted_position);
+                hit_chances.push_back(pred.hit_chance_float);
+            }
+        }
+
+        if (candidates.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        // 2. Simplified: Try line segments starting from various positions
+        // For full implementation: Would try all combinations of start/end positions
+        // Here: Try lines at different angles from near the centroid
+
+        math::vector3 source_pos = source->get_position();
+        float best_expected = 0.f;
+        math::vector3 best_start{};
+        math::vector3 best_end{};
+        std::vector<int> best_hit_indices;
+
+        // Calculate rough centroid to orient lines toward targets
+        math::vector3 centroid{};
+        for (const auto& pos : predicted_positions)
+        {
+            centroid.x += pos.x;
+            centroid.z += pos.z;
+        }
+        centroid.x /= predicted_positions.size();
+        centroid.z /= predicted_positions.size();
+        centroid.y = source_pos.y;
+
+        // Try multiple angles
+        constexpr float PI = 3.14159265359f;
+        int angle_samples = 16;
+        float angle_step = (2.f * PI) / angle_samples;
+
+        for (int angle_idx = 0; angle_idx < angle_samples; ++angle_idx)
+        {
+            float angle = angle_idx * angle_step;
+            math::vector3 direction(std::cos(angle), 0.f, std::sin(angle));
+
+            // Line starts near centroid, extends in direction
+            math::vector3 line_start = centroid;
+            math::vector3 line_end = centroid + direction * line_length;
+
+            // Clamp to max range
+            if (Utils::distance_2d(source_pos, line_start) > max_range)
+                continue;
+
+            float expected = 0.f;
+            std::vector<int> hit_indices;
+
+            for (size_t i = 0; i < predicted_positions.size(); ++i)
+            {
+                // Check if target intersects the line segment
+                math::vector3 to_start = predicted_positions[i] - line_start;
+                math::vector3 line_vec = line_end - line_start;
+                float line_len = line_vec.magnitude();
+
+                if (line_len < EPSILON)
+                    continue;
+
+                math::vector3 line_dir = line_vec / line_len;
+                float proj = to_start.dot(line_dir);
+                proj = std::max(0.f, std::min(line_len, proj));
+
+                math::vector3 closest = line_start + line_dir * proj;
+                float dist = Utils::distance_2d(predicted_positions[i], closest);
+                float target_radius = candidates[i]->get_bounding_radius();
+
+                if (dist <= spell_width + target_radius)
+                {
+                    expected += hit_chances[i];
+                    hit_indices.push_back(static_cast<int>(i));
+                }
+            }
+
+            if (expected > best_expected)
+            {
+                best_expected = expected;
+                best_start = line_start;
+                best_end = line_end;
+                best_hit_indices = hit_indices;
+            }
+        }
+
+        // 3. Populate result
+        if (best_hit_indices.empty())
+        {
+            result.is_valid = false;
+            return result;
+        }
+
+        float sum_hc = 0.f;
+        float min_hc = 1.0f;
+        for (int idx : best_hit_indices)
+        {
+            result.hit_targets.push_back(candidates[idx]);
+            result.individual_hit_chances.push_back(hit_chances[idx]);
+            sum_hc += hit_chances[idx];
+            min_hc = std::min(min_hc, hit_chances[idx]);
+        }
+
+        // For vector spells, cast_position represents the END point
+        // Caller would need to know the START point separately
+        result.cast_position = best_end;
+        result.expected_hits = best_expected;
+        result.min_hit_chance = min_hc;
+        result.avg_hit_chance = sum_hc / best_hit_indices.size();
+        result.is_valid = (best_expected >= min_targets);
+
+        return result;
+    }
+
 } // namespace GeometricPred
