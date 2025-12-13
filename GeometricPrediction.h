@@ -118,15 +118,20 @@ namespace GeometricPred
         game_object* target;        // Target to predict
         SpellShape shape;           // Spell collision shape
         float spell_width;          // Spell radius (circle) or width (capsule)
-        float spell_range;          // Spell max range (for capsules)
+        float spell_range;          // Spell max range (for capsules/vectors - vector length)
         float missile_speed;        // Projectile speed (0 = instant)
         float cast_delay;           // Windup/cast time before spell launches
         float proc_delay;           // Additional delay before damage (e.g., Syndra Q = 0.6s)
 
+        // Vector spell parameters (Viktor E, Rumble R, Taliyah W)
+        math::vector3 first_cast_position;  // Start position for vector spells (if zero, auto-calculated)
+        float cast_range;                   // Max range for first cast position (default = spell_range)
+
         PredictionInput()
             : source(nullptr), target(nullptr), shape(SpellShape::Capsule),
               spell_width(70.f), spell_range(1000.f), missile_speed(1500.f),
-              cast_delay(0.25f), proc_delay(0.f)
+              cast_delay(0.25f), proc_delay(0.f),
+              first_cast_position(math::vector3{}), cast_range(0.f)
         {}
     };
 
@@ -135,9 +140,10 @@ namespace GeometricPred
      */
     struct PredictionResult
     {
-        math::vector3 cast_position;  // Where to aim
-        HitChance hit_chance;         // Confidence level
-        bool should_cast;             // Simple yes/no recommendation
+        math::vector3 cast_position;        // Where to aim (end position for vectors)
+        math::vector3 first_cast_position;  // Start position for vector spells (Viktor E, Rumble R)
+        HitChance hit_chance;               // Confidence level
+        bool should_cast;                   // Simple yes/no recommendation
 
         // Core metrics
         float hit_chance_float;       // Hit chance as 0-1 float (for telemetry)
@@ -177,7 +183,7 @@ namespace GeometricPred
         const char* edge_case_type;   // "normal", "stasis", "dash", "channeling"
 
         PredictionResult()
-            : cast_position{}, hit_chance(HitChance::Impossible), should_cast(false),
+            : cast_position{}, first_cast_position{}, hit_chance(HitChance::Impossible), should_cast(false),
               hit_chance_float(0.f), reaction_window(0.f), time_to_impact(0.f), distance_to_exit(0.f),
               is_stasis(false), is_dash(false), is_channeling(false), is_immobile(false),
               is_animation_locked(false), is_slowed(false), dash_confidence(1.0f),
@@ -1300,6 +1306,75 @@ namespace GeometricPred
         result.is_slowed = edge_analysis.is_slowed;
 
         // =======================================================================================
+        // VECTOR SPELL OPTIMIZATION (Viktor E, Rumble R, Taliyah W)
+        // =======================================================================================
+        math::vector3 spell_start_pos = input.source->get_position();  // Default: spell originates from champion
+
+        if (input.shape == SpellShape::Vector)
+        {
+            // For vector spells, optimize the start position (first_cast_position)
+            float max_cast_range = input.cast_range > 0.f ? input.cast_range : input.spell_range;
+
+            // If first_cast_position not provided, calculate optimal placement
+            if (Utils::magnitude_2d(input.first_cast_position) < EPSILON)
+            {
+                // Calculate direction from source to predicted target position
+                math::vector3 source_to_target = predicted_pos - input.source->get_position();
+                float dist_to_target = Utils::magnitude_2d(source_to_target);
+
+                if (dist_to_target > EPSILON)
+                {
+                    // Normalize direction
+                    math::vector3 direction = source_to_target / dist_to_target;
+
+                    // Place start position as far forward as possible (within cast_range)
+                    // This maximizes the chance of hitting the target
+                    float forward_distance = std::min(max_cast_range, dist_to_target);
+                    result.first_cast_position = input.source->get_position() + direction * forward_distance;
+                }
+                else
+                {
+                    // Target very close, place at source
+                    result.first_cast_position = input.source->get_position();
+                }
+            }
+            else
+            {
+                // Use provided first_cast_position, but clamp to max range
+                math::vector3 to_first = input.first_cast_position - input.source->get_position();
+                float dist_to_first = Utils::magnitude_2d(to_first);
+
+                if (dist_to_first > max_cast_range)
+                {
+                    // Clamp to max cast range
+                    math::vector3 direction = to_first / dist_to_first;
+                    result.first_cast_position = input.source->get_position() + direction * max_cast_range;
+                }
+                else
+                {
+                    result.first_cast_position = input.first_cast_position;
+                }
+            }
+
+            // Update spell start position for collision checks and escape distance
+            spell_start_pos = result.first_cast_position;
+
+            // Ensure the vector endpoint (predicted_pos) is within spell_range from first_cast
+            math::vector3 vector_direction = predicted_pos - spell_start_pos;
+            float vector_length = Utils::magnitude_2d(vector_direction);
+
+            if (vector_length > input.spell_range)
+            {
+                // Clamp cast_position to spell_range from first_cast_position
+                if (vector_length > EPSILON)
+                {
+                    vector_direction = vector_direction / vector_length;
+                    result.cast_position = spell_start_pos + vector_direction * input.spell_range;
+                }
+            }
+        }
+
+        // =======================================================================================
         // MINION COLLISION CHECK (uses EdgeCaseDetection.h)
         // =======================================================================================
         // Check minion collision for line skillshots (Capsule, Cone, Vector)
@@ -1309,9 +1384,9 @@ namespace GeometricPred
             input.shape == SpellShape::Vector)
         {
             // Use EdgeCases minion collision with health prediction
-            // Champion script decides if spell collides via input parameter
+            // For vector spells, use first_cast_position as origin
             float minion_clear = EdgeCases::compute_minion_block_probability(
-                input.source->get_position(),
+                spell_start_pos,  // Vector uses first_cast_position, others use source position
                 predicted_pos,
                 input.spell_width,
                 true  // This spell collides with minions
@@ -1338,8 +1413,9 @@ namespace GeometricPred
         // =======================================================================================
 
         // Calculate time to impact
+        // For Vector spells, missile travels from first_cast_position
         float time_to_impact = Utils::compute_arrival_time(
-            input.source->get_position(),
+            spell_start_pos,  // Vector uses first_cast_position, others use source position
             predicted_pos,
             input.missile_speed,
             input.cast_delay,
@@ -1383,7 +1459,8 @@ namespace GeometricPred
         else  // Capsule, Line, Vector
         {
             // All treated as linear skillshots for single-target escape distance
-            math::vector3 spell_direction = (predicted_pos - input.source->get_position());
+            // For Vector, spell_start_pos is first_cast_position (calculated above)
+            math::vector3 spell_direction = (predicted_pos - spell_start_pos);
             float spell_length = Utils::magnitude_2d(spell_direction);
             if (spell_length > EPSILON)
                 spell_direction = spell_direction / spell_length;
@@ -1392,7 +1469,7 @@ namespace GeometricPred
 
             distance_to_exit = Utils::calculate_escape_distance_capsule(
                 predicted_pos,
-                input.source->get_position(),
+                spell_start_pos,  // Vector uses first_cast_position, others use source position
                 spell_direction,
                 input.spell_width,
                 input.spell_range,
