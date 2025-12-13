@@ -1527,12 +1527,14 @@ namespace GeometricPred
             return result;
         }
 
-        // Apply terrain, slow, and CSing multipliers
+        // Apply terrain and behavioral multipliers
         reaction_window /= terrain_multiplier;
-        if (result.is_slowed)
-        {
-            reaction_window /= 1.15f;  // Confidence boost for slowed targets
-        }
+
+        // NOTE: Slows are FULLY captured by move_speed in time_needed_to_dodge calculation
+        // Example: 25% slow → 34% more dodge time → 57% less reaction window (geometric amplification)
+        // NO additional multiplier needed - the physics naturally makes slows very effective
+
+        // CSing: Attention factor (NOT captured in physics)
         if (result.is_csing)
         {
             reaction_window /= 1.08f;  // Modest boost for distracted targets (CSing)

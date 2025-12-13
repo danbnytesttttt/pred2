@@ -1928,8 +1928,9 @@ namespace EdgeCases
         if (analysis.forced_movement.has_forced_movement)
             analysis.confidence_multiplier *= 1.4f;  // Forced movement is very predictable
 
-        if (analysis.is_slowed)
-            analysis.confidence_multiplier *= 1.15f;  // Reduced mobility
+        // NOTE: Slows do NOT need confidence multiplier
+        // Slow effect is FULLY captured by reduced move_speed in TTE calculation
+        // 25% slow → 34% more dodge time → 57% less reaction window (natural geometric scaling)
 
         if (analysis.polymorph.is_polymorphed)
             analysis.confidence_multiplier *= 1.25f;  // Limited movement control
