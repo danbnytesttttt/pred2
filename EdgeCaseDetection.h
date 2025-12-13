@@ -1758,11 +1758,14 @@ namespace EdgeCases
      */
     struct JukeInfo
     {
-        bool is_juking;                  // Currently exhibiting juke behavior
-        float direction_variance;        // Variance in movement direction (0-1, higher = more erratic)
-        float confidence_penalty;        // Hit chance reduction factor (0.8-1.0)
+        bool is_juking;                   // Currently exhibiting juke behavior
+        bool is_oscillating;              // Periodic pattern (left-right-left) vs random jitter
+        float direction_variance;         // Variance in movement direction (0-1, higher = more erratic)
+        float confidence_penalty;         // Hit chance reduction factor (0.9-1.0)
+        math::vector3 predicted_velocity; // Average velocity (juking) or current (straight movement)
 
-        JukeInfo() : is_juking(false), direction_variance(0.f), confidence_penalty(1.0f) {}
+        JukeInfo() : is_juking(false), is_oscillating(false), direction_variance(0.f),
+                     confidence_penalty(1.0f), predicted_velocity{} {}
     };
 
     /**
@@ -1771,7 +1774,7 @@ namespace EdgeCases
      */
     struct MovementHistory
     {
-        static constexpr int MAX_SAMPLES = 5;   // Last 5 velocity samples (~250ms window at 20 ticks/s)
+        static constexpr int MAX_SAMPLES = 8;   // Last 8 samples (~400ms window, captures full juke cycle)
         static constexpr float SAMPLE_INTERVAL = 0.05f;  // 50ms between samples
 
         std::vector<math::vector3> velocity_samples;
@@ -1793,6 +1796,24 @@ namespace EdgeCases
                 velocity_samples.erase(velocity_samples.begin());
         }
 
+        // Calculate AVERAGE velocity (center of oscillation pattern)
+        // This is where juking targets spend their time on average
+        math::vector3 calculate_average_velocity() const
+        {
+            if (velocity_samples.empty())
+                return math::vector3(0.f, 0.f, 0.f);
+
+            math::vector3 sum(0.f, 0.f, 0.f);
+            for (const auto& vel : velocity_samples)
+            {
+                sum.x += vel.x;
+                sum.z += vel.z;
+            }
+
+            float count = static_cast<float>(velocity_samples.size());
+            return math::vector3(sum.x / count, 0.f, sum.z / count);
+        }
+
         // Calculate direction variance (0 = straight line, 1 = completely erratic)
         float calculate_direction_variance() const
         {
@@ -1801,26 +1822,55 @@ namespace EdgeCases
 
             // Calculate average direction
             math::vector3 avg_direction(0.f, 0.f, 0.f);
+            int valid_samples = 0;
+
             for (const auto& vel : velocity_samples)
             {
                 float mag = std::sqrt(vel.x * vel.x + vel.z * vel.z);
-                if (mag > 1.f)  // Only consider significant movement
+                if (mag > 10.f)  // Only consider significant movement (>10 u/s)
                 {
                     avg_direction.x += vel.x / mag;
                     avg_direction.z += vel.z / mag;
+                    valid_samples++;
                 }
             }
 
-            float count = static_cast<float>(velocity_samples.size());
-            avg_direction.x /= count;
-            avg_direction.z /= count;
+            if (valid_samples == 0)
+                return 0.f;
+
+            avg_direction.x /= valid_samples;
+            avg_direction.z /= valid_samples;
 
             float avg_mag = std::sqrt(avg_direction.x * avg_direction.x + avg_direction.z * avg_direction.z);
 
             // avg_mag close to 1.0 = consistent direction
             // avg_mag close to 0.0 = directions cancel out (zigzag)
-            // variance = 1 - avg_mag
             return std::clamp(1.f - avg_mag, 0.f, 1.f);
+        }
+
+        // Detect alternating oscillation pattern (left-right-left) vs random jitter
+        // Oscillating patterns are MORE predictable (aim at center)
+        bool is_oscillating_pattern() const
+        {
+            if (velocity_samples.size() < 4)
+                return false;
+
+            // Check last 4 samples for alternating pattern
+            int alternations = 0;
+            for (size_t i = 0; i < velocity_samples.size() - 1 && i < 3; ++i)
+            {
+                const auto& v1 = velocity_samples[velocity_samples.size() - 1 - i];
+                const auto& v2 = velocity_samples[velocity_samples.size() - 2 - i];
+
+                float dot = v1.x * v2.x + v1.z * v2.z;
+
+                // Opposite directions (negative dot product) = reversal
+                if (dot < 0.f)
+                    alternations++;
+            }
+
+            // At least 2 out of 3 transitions are reversals = oscillating
+            return alternations >= 2;
         }
     };
 
@@ -1829,7 +1879,7 @@ namespace EdgeCases
 
     /**
      * Detect if target is juking (zigzag erratic movement to dodge skillshots)
-     * Uses velocity direction variance over recent samples
+     * Uses velocity direction variance + returns AVERAGE velocity for prediction
      */
     inline JukeInfo detect_juke(game_object* target)
     {
@@ -1845,8 +1895,8 @@ namespace EdgeCases
         auto& history = g_movement_history[target_id];
 
         // Update history with current velocity
-        math::vector3 velocity = target->get_velocity();
-        history.update(velocity, current_time);
+        math::vector3 current_velocity = target->get_velocity();
+        history.update(current_velocity, current_time);
 
         // Calculate direction variance
         float variance = history.calculate_direction_variance();
@@ -1854,16 +1904,44 @@ namespace EdgeCases
 
         // Juke detection threshold: variance > 0.5 = significant zigzag
         constexpr float JUKE_THRESHOLD = 0.5f;
+
         if (variance > JUKE_THRESHOLD)
         {
             info.is_juking = true;
 
-            // Confidence penalty scales with variance
-            // variance 0.5 → 0.95x (mild penalty)
-            // variance 0.7 → 0.85x (moderate)
-            // variance 1.0 → 0.70x (severe)
-            info.confidence_penalty = 1.0f - (variance * 0.3f);
-            info.confidence_penalty = std::clamp(info.confidence_penalty, 0.7f, 1.0f);
+            // Check if oscillating pattern (left-right-left) vs random jitter
+            info.is_oscillating = history.is_oscillating_pattern();
+
+            // USE AVERAGE VELOCITY for prediction (center of oscillation)
+            // This is the KEY FIX - we aim at where they ARE on average, not current direction
+            info.predicted_velocity = history.calculate_average_velocity();
+
+            // Confidence penalty - MUCH smaller than before
+            if (info.is_oscillating)
+            {
+                // Oscillating pattern = predictable, aim at center with high confidence
+                // variance 0.5 → 0.97x (small penalty)
+                // variance 0.8 → 0.93x
+                // variance 1.0 → 0.90x (10% max penalty)
+                info.confidence_penalty = 1.0f - (variance * 0.1f);
+                info.confidence_penalty = std::clamp(info.confidence_penalty, 0.90f, 1.0f);
+            }
+            else
+            {
+                // Random jitter = less predictable, larger penalty
+                // variance 0.5 → 0.93x
+                // variance 0.8 → 0.84x
+                // variance 1.0 → 0.80x (20% max penalty)
+                info.confidence_penalty = 1.0f - (variance * 0.2f);
+                info.confidence_penalty = std::clamp(info.confidence_penalty, 0.80f, 1.0f);
+            }
+        }
+        else
+        {
+            // Not juking - use current velocity (normal prediction)
+            info.is_juking = false;
+            info.predicted_velocity = current_velocity;
+            info.confidence_penalty = 1.0f;
         }
 
         return info;

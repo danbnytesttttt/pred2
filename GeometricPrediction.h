@@ -1387,11 +1387,34 @@ namespace GeometricPred
             input.proc_delay
         );
 
-        math::vector3 predicted_pos = predict_linear_path(
-            input.target,
-            prediction_time,
-            animation_lock
-        );
+        // JUKE-AWARE PREDICTION:
+        // If target is juking, use AVERAGE velocity (center of oscillation)
+        // Otherwise use normal path following
+        math::vector3 predicted_pos;
+
+        if (edge_analysis.juke.is_juking)
+        {
+            // Target is juking - predict using AVERAGE velocity (not current velocity)
+            // This aims at the center of their zigzag pattern
+            math::vector3 current_pos = input.target->get_server_position();
+            predicted_pos = current_pos + edge_analysis.juke.predicted_velocity * prediction_time;
+
+            // Ensure prediction stays walkable
+            if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(predicted_pos))
+            {
+                // Fall back to current position if predicted position is in wall
+                predicted_pos = current_pos;
+            }
+        }
+        else
+        {
+            // Normal path following (not juking)
+            predicted_pos = predict_linear_path(
+                input.target,
+                prediction_time,
+                animation_lock
+            );
+        }
 
         result.cast_position = predicted_pos;
         result.predicted_position = predicted_pos;
@@ -1632,14 +1655,19 @@ namespace GeometricPred
             reaction_window /= 1.08f;  // Modest boost for distracted targets (CSing)
         }
 
-        // JUKING: Erratic movement increases prediction uncertainty
-        // High direction variance = zigzag dodging = harder to predict
+        // JUKING: Small uncertainty penalty for remaining variance
+        // NOTE: We already aim at CENTER of juke pattern (average velocity), so penalty is small
         if (edge_analysis.juke.is_juking)
         {
-            // Juke penalty: increases reaction window (makes hit harder)
-            // variance 0.5 → penalty 0.95 → reaction_window *= 1.05 (+5% harder)
-            // variance 0.7 → penalty 0.85 → reaction_window *= 1.18 (+18% harder)
-            // variance 1.0 → penalty 0.70 → reaction_window *= 1.43 (+43% harder)
+            // Oscillating pattern (predictable):
+            //   variance 0.5 → penalty 0.97 → +3% harder
+            //   variance 0.8 → penalty 0.93 → +7% harder
+            //   variance 1.0 → penalty 0.90 → +11% harder (max)
+            //
+            // Random jitter (less predictable):
+            //   variance 0.5 → penalty 0.93 → +7% harder
+            //   variance 0.8 → penalty 0.84 → +19% harder
+            //   variance 1.0 → penalty 0.80 → +25% harder (max)
             reaction_window *= (1.0f / edge_analysis.juke.confidence_penalty);
         }
 
