@@ -123,12 +123,29 @@ namespace EdgeCases
         //          register target as invulnerable (not processed yet)
         // Solution: Aim for 1 FRAME after stasis ends to catch frame-perfect escapes
         //
-        // OLD (40ms): Gave full server tick + jitter → too generous, scripters/pros flash out
-        // NEW (16ms): ~1 client frame @ 60fps → minimal window, catches most escapes
-        // Trade-off: Tight timing may miss on high ping (>50ms), but guarantees hit on LAN/low ping
+        // PING-SCALED BUFFER: Base 16ms + 50% of one-way ping
+        // - Low ping (20ms): 16ms + 5ms = 21ms buffer
+        // - Medium ping (60ms): 16ms + 15ms = 31ms buffer
+        // - High ping (100ms): 16ms + 25ms = 41ms buffer
+        // This accounts for jitter increasing with ping
         // =====================================================================
-        constexpr float SAFETY_BUFFER = 0.016f;  // ~1 frame (16ms @ 60Hz client) - tight timing for guaranteed hits
-        float optimal_cast_delay = time_until_exit - spell_travel_time + SAFETY_BUFFER;
+        constexpr float BASE_BUFFER = 0.016f;  // Base 16ms (1 frame @ 60Hz)
+
+        // Get ping and calculate adaptive buffer
+        float ping_buffer = BASE_BUFFER;
+        if (g_sdk && g_sdk->net_client)
+        {
+            float ping_ms = static_cast<float>(g_sdk->net_client->get_ping());
+            float one_way_ping = ping_ms / 2.0f;  // One-way delay
+
+            // Add 50% of one-way ping as extra buffer (jitter increases with ping)
+            ping_buffer = BASE_BUFFER + (one_way_ping / 1000.f) * 0.5f;
+
+            // Cap at 50ms to avoid being too conservative
+            ping_buffer = std::min(ping_buffer, 0.050f);
+        }
+
+        float optimal_cast_delay = time_until_exit - spell_travel_time + ping_buffer;
 
         // If we need to wait before casting
         if (optimal_cast_delay > 0.f)

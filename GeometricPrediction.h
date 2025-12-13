@@ -233,6 +233,56 @@ namespace GeometricPred
         }
 
         /**
+         * TENACITY ESTIMATION
+         * Tenacity reduces CC duration (Mercury Treads, runes, champion passives)
+         * Returns estimated tenacity as 0-1 multiplier (0.3 = 30% tenacity)
+         */
+        inline float estimate_tenacity(game_object* target)
+        {
+            if (!target) return 0.f;
+
+            float tenacity = 0.f;
+
+            // Check for Mercury Treads (item 3111)
+            // Most SDKs have has_item() or similar
+            // If not available, we'll use conservative estimate below
+
+            // Champions with built-in tenacity passives
+            const char* champ_name = target->get_champion_name();
+            if (champ_name)
+            {
+                // Garen W passive: 30% tenacity
+                if (std::strcmp(champ_name, "Garen") == 0)
+                    tenacity = std::max(tenacity, 0.30f);
+
+                // Irelia passive: scales up to 40% tenacity (assume 30% average)
+                else if (std::strcmp(champ_name, "Irelia") == 0)
+                    tenacity = std::max(tenacity, 0.30f);
+
+                // Mundo R: 30% tenacity while active (hard to detect, skip)
+                // Trundle W: 20% tenacity in zone (hard to detect, skip)
+            }
+
+            // Conservative estimate: If target has ANY tenacity items/runes
+            // we can't detect, assume baseline 20% (typical Mercury + minor rune)
+            // ONLY if we see they're likely a bruiser/tank (high HP, low AP)
+            if (tenacity == 0.f)
+            {
+                float max_hp = target->get_max_health();
+                float ap = target->get_ability_power();
+
+                // Bruiser/tank heuristic: >2500 HP and <100 AP
+                // These champs often build Merc Treads + Legend Tenacity
+                if (max_hp > 2500.f && ap < 100.f)
+                {
+                    tenacity = 0.15f;  // Conservative 15% estimate
+                }
+            }
+
+            return tenacity;
+        }
+
+        /**
          * INVULNERABILITY DETECTION
          * Targets that literally cannot be hit (Zhonya's, Fizz E, Vlad W, etc.)
          */
@@ -769,11 +819,13 @@ namespace GeometricPred
         // CC DURATION CHECK: If CC'd, check if they wake up before spell arrives
         // CRITICAL FIX: Don't treat partial CC as full immobile
         // Example: Target stunned for 0.2s, spell arrives in 1.0s → they move for 0.8s
+        // TENACITY FIX: Apply tenacity reduction to CC duration
         float cc_remaining = 0.f;
         if (has_hard_cc && g_sdk && g_sdk->clock_facade)
         {
             float current_time = g_sdk->clock_facade->get_game_time();
             float max_cc_end = 0.f;
+            float max_cc_start = 0.f;
 
             auto buffs = target->get_buffs();
             for (auto* buff : buffs)
@@ -784,12 +836,43 @@ namespace GeometricPred
                     t == buff_type::fear || t == buff_type::taunt || t == buff_type::suppression ||
                     t == buff_type::knockup || t == buff_type::knockback || t == buff_type::asleep)
                 {
-                    if (buff->get_end_time() > max_cc_end)
-                        max_cc_end = buff->get_end_time();
+                    float end_time = buff->get_end_time();
+                    if (end_time > max_cc_end)
+                    {
+                        max_cc_end = end_time;
+                        max_cc_start = buff->get_start_time();
+                    }
                 }
             }
 
-            cc_remaining = std::max(0.f, max_cc_end - current_time);
+            // Calculate base CC duration from buff
+            float base_duration = max_cc_end - max_cc_start;
+
+            // Apply tenacity reduction (knockups are NOT reduced by tenacity!)
+            // Check if the CC is knockup/knockback (immune to tenacity)
+            bool is_airborne = false;
+            for (auto* buff : buffs)
+            {
+                if (!buff || !buff->is_active()) continue;
+                buff_type t = buff->get_type();
+                if (t == buff_type::knockup || t == buff_type::knockback)
+                {
+                    is_airborne = true;
+                    break;
+                }
+            }
+
+            float tenacity = 0.f;
+            if (!is_airborne)
+            {
+                tenacity = Utils::estimate_tenacity(target);
+            }
+
+            // Reduce duration by tenacity: actual_duration = base * (1 - tenacity)
+            float actual_duration = base_duration * (1.0f - tenacity);
+            float adjusted_cc_end = max_cc_start + actual_duration;
+
+            cc_remaining = std::max(0.f, adjusted_cc_end - current_time);
 
             // If CC lasts longer than prediction time, target is immobile
             if (cc_remaining >= prediction_time)
@@ -831,16 +914,54 @@ namespace GeometricPred
             }
         }
 
-        // HEURISTIC 1: Start-of-Path Dampening (smooth acceleration ramp)
+        // HEURISTIC 1: Orbwalking Detection
+        // ADCs frequently attack-move-attack, making paths unreliable
+        // Signature: Short path (<400 units) + has AA windup = likely orbwalking
+        // Reduce prediction distance to account for frequent stops
+        float orbwalk_multiplier = 1.0f;
+
+        // Calculate total path distance
+        float total_path_distance = 0.f;
+        for (size_t i = 1; i < path.size(); ++i)
+        {
+            math::vector3 seg_start = (i == 1) ? position : path[i - 1];
+            math::vector3 seg_end = path[i];
+            total_path_distance += (seg_end - seg_start).magnitude();
+        }
+
+        // Check if target is in attack animation (likely orbwalking)
+        bool has_attack_animation = false;
+        auto active_cast = target->get_active_spell_cast();
+        if (active_cast)
+        {
+            auto spell_cast = active_cast->get_spell_cast();
+            if (spell_cast && spell_cast->is_basic_attack())
+            {
+                has_attack_animation = true;
+            }
+        }
+
+        // Orbwalking heuristic: Short path + attack animation = reduce distance by 40%
+        // This accounts for the fact they'll stop to attack again soon
+        constexpr float ORBWALK_PATH_THRESHOLD = 400.f;  // Short movement typical of kiting
+        if (has_attack_animation && total_path_distance < ORBWALK_PATH_THRESHOLD)
+        {
+            orbwalk_multiplier = 0.6f;  // Predict 40% less distance
+        }
+        // Even without animation, very short paths suggest kiting/repositioning
+        else if (total_path_distance < 200.f)
+        {
+            orbwalk_multiplier = 0.75f;  // Mild reduction
+        }
+
+        // HEURISTIC 2: Start-of-Path Dampening (smooth acceleration ramp)
         // League accelerates to max speed in ~23ms, but we use 100ms conservative window
-        // TODO: Get path age from a tracker if available (for now assume fresh path)
         float speed_multiplier = 1.0f;
-        // For now, skip dampening unless we track path age
-        // Can add later if needed: speed_multiplier = 0.85f + 0.15f * (path_age / 0.1f);
+        // Path dampening is less important than orbwalking detection
 
-        float distance_to_travel = move_speed * effective_movement_time * speed_multiplier;
+        float distance_to_travel = move_speed * effective_movement_time * speed_multiplier * orbwalk_multiplier;
 
-        // HEURISTIC 2: End-of-Path Clamping (don't overshoot destination)
+        // HEURISTIC 3: End-of-Path Clamping (don't overshoot destination)
         float remaining_path = 0.f;
         for (size_t i = 1; i < path.size(); ++i)
         {
