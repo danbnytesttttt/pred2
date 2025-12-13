@@ -887,6 +887,66 @@ namespace EdgeCases
     }
 
     // =========================================================================
+    // CSING DETECTION (Last-Hit Attention)
+    // =========================================================================
+
+    /**
+     * Detect if target is likely last-hitting a minion
+     *
+     * Indicators:
+     * - Low HP minion in attack range
+     * - Minion killable in 1-2 autos
+     * - No immediate threat (not being harassed)
+     *
+     * When CSing, attention is divided = slightly worse dodging
+     */
+    inline bool is_likely_csing(game_object* target)
+    {
+        if (!target || !target->is_valid() || !g_sdk || !g_sdk->object_manager)
+            return false;
+
+        // Get target's attack range
+        float attack_range = target->get_attack_range();
+        math::vector3 target_pos = target->get_position();
+
+        // Look for low-HP minions nearby
+        auto minions = g_sdk->object_manager->get_minions();
+        for (auto* minion : minions)
+        {
+            if (!minion || !minion->is_valid() || minion->is_dead())
+                continue;
+
+            // Only check enemy minions (target would CS these)
+            if (minion->get_team_id() == target->get_team_id())
+                continue;
+
+            // Check if minion is in attack range
+            float dist_to_minion = (minion->get_position() - target_pos).magnitude();
+            if (dist_to_minion > attack_range + 100.f)  // +100 buffer for moving into range
+                continue;
+
+            // Check if minion is low HP (in last-hit range)
+            float minion_hp = minion->get_hp();
+            float minion_max_hp = minion->get_max_hp();
+            float hp_percent = minion_hp / std::max(1.f, minion_max_hp);
+
+            // Minion below 30% HP = likely CS target
+            if (hp_percent > 0.3f)
+                continue;
+
+            // Additionally check if target can kill it in 1-2 autos
+            float target_ad = target->get_attack_damage();
+            if (minion_hp < target_ad * 2.5f)  // Killable in ~2 autos
+            {
+                // Found low-HP minion in range = likely CSing
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // =========================================================================
     // SPELL SHIELD DETECTION
     // =========================================================================
 
@@ -1756,6 +1816,7 @@ namespace EdgeCases
         std::vector<WindwallInfo> windwalls;
         std::vector<TerrainInfo> terrains;
         bool is_slowed;
+        bool is_csing;          // Target is likely last-hitting minion (attention divided)
         bool has_shield;
         bool is_clone;
         bool blocked_by_windwall;
@@ -1765,7 +1826,7 @@ namespace EdgeCases
         float confidence_multiplier;
         float priority_multiplier;
 
-        EdgeCaseAnalysis() : is_slowed(false), has_shield(false),
+        EdgeCaseAnalysis() : is_slowed(false), is_csing(false), has_shield(false),
             is_clone(false), blocked_by_windwall(false), blocked_by_terrain(false),
             confidence_multiplier(1.0f), priority_multiplier(1.0f) {
         }
@@ -1800,6 +1861,7 @@ namespace EdgeCases
         analysis.windwalls = detect_windwalls();
         analysis.terrains = detect_terrain();
         analysis.is_slowed = is_slowed(target);
+        analysis.is_csing = is_likely_csing(target);
         analysis.has_shield = has_spell_shield(target);
         analysis.is_clone = !is_real_champion(target);
 

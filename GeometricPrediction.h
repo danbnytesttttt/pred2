@@ -158,6 +158,7 @@ namespace GeometricPred
         bool is_immobile;             // Target CC'd
         bool is_animation_locked;     // Target in AA/cast animation
         bool is_slowed;               // Target slowed
+        bool is_csing;                // Target is likely last-hitting (attention divided)
         float dash_confidence;        // Dash-specific confidence multiplier
 
         // Collision tracking
@@ -186,7 +187,7 @@ namespace GeometricPred
             : cast_position{}, first_cast_position{}, hit_chance(HitChance::Impossible), should_cast(false),
               hit_chance_float(0.f), reaction_window(0.f), time_to_impact(0.f), distance_to_exit(0.f),
               is_stasis(false), is_dash(false), is_channeling(false), is_immobile(false),
-              is_animation_locked(false), is_slowed(false), dash_confidence(1.0f),
+              is_animation_locked(false), is_slowed(false), is_csing(false), dash_confidence(1.0f),
               minion_collision(false), windwall_detected(false), spell_shield_detected(false),
               is_clone_target(false), target_current_pos{}, predicted_position{},
               prediction_offset(0.f), distance_to_target(0.f), target_is_moving(false),
@@ -1302,8 +1303,9 @@ namespace GeometricPred
         result.predicted_position = predicted_pos;
         result.prediction_offset = Utils::distance_2d(result.target_current_pos, predicted_pos);
 
-        // Check if target is slowed (confidence boost)
+        // Check if target is slowed or CSing (confidence boost)
         result.is_slowed = edge_analysis.is_slowed;
+        result.is_csing = edge_analysis.is_csing;
 
         // =======================================================================================
         // VECTOR SPELL OPTIMIZATION (Viktor E, Rumble R, Taliyah W)
@@ -1525,11 +1527,15 @@ namespace GeometricPred
             return result;
         }
 
-        // Apply terrain and slow multipliers
+        // Apply terrain, slow, and CSing multipliers
         reaction_window /= terrain_multiplier;
         if (result.is_slowed)
         {
             reaction_window /= 1.15f;  // Confidence boost for slowed targets
+        }
+        if (result.is_csing)
+        {
+            reaction_window /= 1.08f;  // Modest boost for distracted targets (CSing)
         }
 
         // Grade reaction window to hit chance (discrete enum for backwards compatibility)
