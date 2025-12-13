@@ -595,8 +595,9 @@ namespace GeometricPred
         }
 
         /**
-         * ESCAPE DISTANCE CALCULATION (CIRCLE)
+         * ESCAPE DISTANCE CALCULATION (CIRCLE) - TERRAIN AWARE
          * How far must target run to escape a circular AoE?
+         * Checks 8 radial escape directions and returns shortest WALKABLE path
          */
         inline float calculate_escape_distance_circle(
             const math::vector3& target_pos,
@@ -608,7 +609,38 @@ namespace GeometricPred
             float distance_to_center = distance_2d(target_pos, spell_center);
             float distance_to_exit = spell_radius + target_radius - distance_to_center;
 
-            return std::max(0.f, distance_to_exit);
+            // Already outside
+            if (distance_to_exit <= 0.f)
+                return 0.f;
+
+            // No navmesh available - return geometric distance
+            if (!g_sdk || !g_sdk->nav_mesh)
+                return distance_to_exit;
+
+            // Check 8 radial escape directions (N, NE, E, SE, S, SW, W, NW)
+            // Find shortest walkable escape path
+            constexpr int NUM_DIRECTIONS = 8;
+            constexpr float SAFETY_MARGIN = 20.f;
+            float shortest_walkable = 999999.f;
+
+            for (int i = 0; i < NUM_DIRECTIONS; ++i)
+            {
+                float angle = (i * 3.14159f * 2.f) / NUM_DIRECTIONS;
+                math::vector3 escape_dir(std::cos(angle), 0.f, std::sin(angle));
+                math::vector3 escape_point = target_pos + escape_dir * (distance_to_exit + SAFETY_MARGIN);
+
+                if (g_sdk->nav_mesh->is_pathable(escape_point))
+                {
+                    shortest_walkable = std::min(shortest_walkable, distance_to_exit);
+                    break;  // Found a walkable path, geometric distance is accurate
+                }
+            }
+
+            // All directions blocked = trapped (return very high distance)
+            if (shortest_walkable > 99999.f)
+                return 999999.f;
+
+            return shortest_walkable;
         }
 
         /**
@@ -687,9 +719,10 @@ namespace GeometricPred
         }
 
         /**
-         * ESCAPE DISTANCE CALCULATION (CAPSULE)
+         * ESCAPE DISTANCE CALCULATION (CAPSULE) - TERRAIN AWARE
          * How far must target run to escape a line skillshot?
-         * Uses proven point_in_capsule() geometry
+         * Checks all 3 escape paths (lateral, backward, forward) for terrain blocking
+         * Returns shortest WALKABLE escape distance
          */
         inline float calculate_escape_distance_capsule(
             const math::vector3& target_pos,
@@ -706,43 +739,72 @@ namespace GeometricPred
             float effective_radius = (spell_width * 0.5f) + target_radius;
 
             // Check if target is currently inside the spell
-            if (point_in_capsule(target_pos, spell_start, spell_end, effective_radius))
-            {
-                // Target is inside - calculate minimum distance to exit
-
-                // Project target onto spell line
-                math::vector3 to_target = target_pos - spell_start;
-                float proj_length = to_target.dot(spell_direction);
-                proj_length = std::clamp(proj_length, 0.f, spell_range);
-
-                // Find closest point on spell line
-                math::vector3 closest_point = spell_start + spell_direction * proj_length;
-
-                // Lateral distance to line
-                float lateral_dist = distance_2d(target_pos, closest_point);
-
-                // Lateral escape distance (perpendicular)
-                float lateral_escape = effective_radius - lateral_dist;
-
-                // Backward escape distance (to start of capsule)
-                float backward_escape = proj_length + target_radius;
-
-                // CRITICAL FIX: Forward escape distance (to end of capsule)
-                // Target near the front can escape by running forward off the end
-                float forward_escape = (spell_range - proj_length) + target_radius;
-
-                // Return minimum of ALL THREE escape paths (lateral, backward, forward)
-                return std::max(0.f, std::min({lateral_escape, backward_escape, forward_escape}));
-            }
-            else
+            if (!point_in_capsule(target_pos, spell_start, spell_end, effective_radius))
             {
                 // Target is outside spell - already safe
                 return 0.f;
             }
+
+            // Target is inside - calculate all 3 escape options
+
+            // Project target onto spell line
+            math::vector3 to_target = target_pos - spell_start;
+            float proj_length = to_target.dot(spell_direction);
+            proj_length = std::clamp(proj_length, 0.f, spell_range);
+
+            // Find closest point on spell line
+            math::vector3 closest_point = spell_start + spell_direction * proj_length;
+
+            // Lateral distance to line
+            float lateral_dist = distance_2d(target_pos, closest_point);
+
+            // Calculate geometric escape distances
+            float lateral_escape = effective_radius - lateral_dist;
+            float backward_escape = proj_length + target_radius;
+            float forward_escape = (spell_range - proj_length) + target_radius;
+
+            // If no navmesh, return geometric minimum
+            if (!g_sdk || !g_sdk->nav_mesh)
+                return std::max(0.f, std::min({lateral_escape, backward_escape, forward_escape}));
+
+            // TERRAIN-AWARE ESCAPE CALCULATION
+            // Calculate escape endpoints for each direction
+            constexpr float SAFETY_MARGIN = 20.f;
+
+            // Lateral escape (perpendicular to spell direction)
+            math::vector3 perpendicular_dir(-spell_direction.z, 0.f, spell_direction.x);
+            math::vector3 lateral_point = target_pos + perpendicular_dir * (lateral_escape + SAFETY_MARGIN);
+
+            // Backward escape (toward spell origin)
+            math::vector3 backward_point = target_pos - spell_direction * (backward_escape + SAFETY_MARGIN);
+
+            // Forward escape (away from spell origin, past spell end)
+            math::vector3 forward_point = target_pos + spell_direction * (forward_escape + SAFETY_MARGIN);
+
+            // Check which escape paths are walkable
+            bool lateral_walkable = g_sdk->nav_mesh->is_pathable(lateral_point);
+            bool backward_walkable = g_sdk->nav_mesh->is_pathable(backward_point);
+            bool forward_walkable = g_sdk->nav_mesh->is_pathable(forward_point);
+
+            // Build list of viable escapes (only walkable paths)
+            float shortest_walkable = 999999.f;
+
+            if (lateral_walkable)
+                shortest_walkable = std::min(shortest_walkable, lateral_escape);
+            if (backward_walkable)
+                shortest_walkable = std::min(shortest_walkable, backward_escape);
+            if (forward_walkable)
+                shortest_walkable = std::min(shortest_walkable, forward_escape);
+
+            // If all paths blocked = trapped (impossible to dodge)
+            if (shortest_walkable > 99999.f)
+                return 999999.f;
+
+            return std::max(0.f, shortest_walkable);
         }
 
         /**
-         * ESCAPE DISTANCE CALCULATION (CONE)
+         * ESCAPE DISTANCE CALCULATION (CONE) - TERRAIN AWARE
          * How far must target run to escape a cone AoE?
          *
          * Cone = circular sector from origin
@@ -750,6 +812,8 @@ namespace GeometricPred
          * 1. Exiting through cone edge (perpendicular to cone radius)
          * 2. Exiting backward (past cone origin)
          * 3. Exiting forward (beyond cone range)
+         *
+         * Checks all escape paths for terrain blocking
          */
         inline float calculate_escape_distance_cone(
             const math::vector3& target_pos,
@@ -766,10 +830,10 @@ namespace GeometricPred
             math::vector3 to_target = target_pos - cone_origin;
             float distance = magnitude_2d(to_target);
 
-            // SAFETY: If at origin, already escaped (impossible to be outside a cone at its origin)
+            // SAFETY: If at origin, minimum escape distance
             constexpr float MIN_SAFE_DISTANCE = 0.01f;
             if (distance < MIN_SAFE_DISTANCE)
-                return target_radius;  // Minimum escape distance
+                return target_radius;
 
             // Normalize to_target for angle calculations
             math::vector3 to_target_norm = to_target / distance;
@@ -779,20 +843,50 @@ namespace GeometricPred
             float cos_angle = std::clamp(dot_product, -1.f, 1.f);
             float actual_angle = std::acos(cos_angle);
 
-            // ESCAPE OPTION 1: Exit through side of cone (perpendicular escape)
-            // Distance = distance_from_center * sin(angle_difference)
-            // angle_difference = actual_angle - cone_half_angle
+            // Calculate geometric escape distances
             float angle_to_edge = std::max(0.f, actual_angle - cone_half_angle);
             float side_escape = distance * std::sin(angle_to_edge) + target_radius;
-
-            // ESCAPE OPTION 2: Exit backward (past cone origin)
             float backward_escape = distance + target_radius;
-
-            // ESCAPE OPTION 3: Exit forward (beyond cone range)
             float forward_escape = cone_range - distance + target_radius;
 
-            // Return shortest escape path
-            return std::max(0.f, std::min({side_escape, backward_escape, forward_escape}));
+            // If no navmesh, return geometric minimum
+            if (!g_sdk || !g_sdk->nav_mesh)
+                return std::max(0.f, std::min({side_escape, backward_escape, forward_escape}));
+
+            // TERRAIN-AWARE ESCAPE CALCULATION
+            constexpr float SAFETY_MARGIN = 20.f;
+
+            // Side escape (perpendicular to radial direction)
+            // Calculate perpendicular direction to to_target
+            math::vector3 perpendicular_dir(-to_target_norm.z, 0.f, to_target_norm.x);
+            math::vector3 side_point = target_pos + perpendicular_dir * (side_escape + SAFETY_MARGIN);
+
+            // Backward escape (toward cone origin)
+            math::vector3 backward_point = target_pos - to_target_norm * (backward_escape + SAFETY_MARGIN);
+
+            // Forward escape (away from cone origin, beyond range)
+            math::vector3 forward_point = target_pos + to_target_norm * (forward_escape + SAFETY_MARGIN);
+
+            // Check which escape paths are walkable
+            bool side_walkable = g_sdk->nav_mesh->is_pathable(side_point);
+            bool backward_walkable = g_sdk->nav_mesh->is_pathable(backward_point);
+            bool forward_walkable = g_sdk->nav_mesh->is_pathable(forward_point);
+
+            // Build list of viable escapes
+            float shortest_walkable = 999999.f;
+
+            if (side_walkable)
+                shortest_walkable = std::min(shortest_walkable, side_escape);
+            if (backward_walkable)
+                shortest_walkable = std::min(shortest_walkable, backward_escape);
+            if (forward_walkable)
+                shortest_walkable = std::min(shortest_walkable, forward_escape);
+
+            // If all paths blocked = trapped
+            if (shortest_walkable > 99999.f)
+                return 999999.f;
+
+            return std::max(0.f, shortest_walkable);
         }
 
     } // namespace Utils
@@ -1511,24 +1605,22 @@ namespace GeometricPred
         float reaction_window = time_to_impact - time_needed_to_dodge - effective_reaction_reduction;
         result.reaction_window = reaction_window;
 
-        // Terrain blocking multiplier
-        float terrain_multiplier = Utils::get_terrain_blocking_multiplier(
-            predicted_pos,
-            result.cast_position,
-            distance_to_exit
-        );
+        // TERRAIN HANDLING:
+        // Terrain blocking is FULLY captured in distance_to_exit calculation
+        // - Escape distance functions check if paths are walkable
+        // - Blocked paths are excluded from shortest escape calculation
+        // - If ALL paths blocked, distance_to_exit = 999999 → time_needed_to_dodge = huge → reaction_window = very negative
+        // - This naturally results in Undodgeable hit chance
+        // NO additional terrain multiplier needed - already baked into physics
 
-        // Trapped = forced Undodgeable
-        if (terrain_multiplier >= 1.9f)
+        // Trapped by terrain = impossible escape distance
+        if (distance_to_exit > 99999.f)
         {
             result.hit_chance = HitChance::Undodgeable;
             result.should_cast = true;
             result.hit_chance_float = 1.0f;
             return result;
         }
-
-        // Apply terrain and behavioral multipliers
-        reaction_window /= terrain_multiplier;
 
         // NOTE: Slows are FULLY captured by move_speed in time_needed_to_dodge calculation
         // Example: 25% slow → 34% more dodge time → 57% less reaction window (geometric amplification)

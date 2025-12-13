@@ -360,15 +360,16 @@ namespace GeometricPred
         float reaction_window = time_to_impact - time_needed_to_dodge - effective_reaction_reduction;
         result.reaction_window = reaction_window;
 
-        // Terrain blocking multiplier
-        float terrain_multiplier = Utils::get_terrain_blocking_multiplier(
-            predicted_pos,
-            result.cast_position,
-            distance_to_exit
-        );
+        // TERRAIN HANDLING:
+        // Terrain blocking is FULLY captured in distance_to_exit calculation
+        // - Escape distance functions check if paths are walkable
+        // - Blocked paths are excluded from shortest escape calculation
+        // - If ALL paths blocked, distance_to_exit = 999999 → time_needed_to_dodge = huge → reaction_window = very negative
+        // - This naturally results in Undodgeable hit chance
+        // NO additional terrain multiplier needed - already baked into physics
 
-        // Trapped = forced Undodgeable
-        if (terrain_multiplier >= 1.9f)
+        // Trapped by terrain = impossible escape distance
+        if (distance_to_exit > 99999.f)
         {
             result.hit_chance = HitChance::Undodgeable;
             result.should_cast = true;
@@ -376,12 +377,9 @@ namespace GeometricPred
             return result;
         }
 
-        // Apply terrain and slow multipliers
-        reaction_window /= terrain_multiplier;
-        if (result.is_slowed)
-        {
-            reaction_window /= 1.15f;  // Confidence boost for slowed targets
-        }
+        // NOTE: Slows are FULLY captured by move_speed in time_needed_to_dodge calculation
+        // Example: 25% slow → 34% more dodge time → 57% less reaction window (geometric amplification)
+        // NO additional multiplier needed - the physics naturally makes slows very effective
 
         // Grade reaction window to hit chance
         if (reaction_window <= REACTION_UNDODGEABLE)
