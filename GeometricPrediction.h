@@ -1036,7 +1036,17 @@ namespace GeometricPred
             return result;
         }
 
-        // 3. WINDWALL DETECTION
+        // 3. UNTARGETABILITY DETECTION (Fizz E, Vlad W, Yi Q, etc.)
+        // CRITICAL: Cannot hit untargetable targets - spell will fail
+        if (edge_analysis.untargetability.is_untargetable)
+        {
+            result.block_reason = "Target is untargetable (" + edge_analysis.untargetability.ability_name + ")";
+            result.hit_chance = HitChance::Impossible;
+            result.should_cast = false;  // Spell will fail
+            return result;
+        }
+
+        // 4. WINDWALL DETECTION
         if (edge_analysis.blocked_by_windwall)
         {
             result.block_reason = "Windwall blocks spell path";
@@ -1046,7 +1056,7 @@ namespace GeometricPred
             return result;
         }
 
-        // 4. STASIS HANDLING
+        // 5. STASIS HANDLING
         if (edge_analysis.stasis.is_in_stasis)
         {
             float current_time = g_sdk->clock_facade ? g_sdk->clock_facade->get_game_time() : 0.f;
@@ -1087,7 +1097,7 @@ namespace GeometricPred
             return result;
         }
 
-        // 5. DASH HANDLING (if enabled)
+        // 6. DASH HANDLING (if enabled)
         if (PredictionSettings::get().enable_dash_prediction && edge_analysis.dash.is_dashing)
         {
             float current_time = g_sdk->clock_facade ? g_sdk->clock_facade->get_game_time() : 0.f;
@@ -1127,7 +1137,7 @@ namespace GeometricPred
             }
         }
 
-        // 6. CHANNEL/RECALL DETECTION
+        // 7. CHANNEL/RECALL DETECTION
         if (edge_analysis.channel.is_channeling || edge_analysis.channel.is_recalling)
         {
             // High priority stationary target
@@ -1141,7 +1151,7 @@ namespace GeometricPred
             return result;
         }
 
-        // 7. FORCED MOVEMENT DETECTION (Charm, Taunt, Fear)
+        // 8. FORCED MOVEMENT DETECTION (Charm, Taunt, Fear)
         // These CCs force target to walk in predictable direction - very easy to hit
         if (edge_analysis.forced_movement.has_forced_movement)
         {

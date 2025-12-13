@@ -305,6 +305,31 @@ namespace EdgeCases
     };
 
     /**
+     * Untargetability information
+     * Abilities that make champions completely immune to targeted spells
+     */
+    struct UntargetabilityInfo
+    {
+        bool is_untargetable;
+        float duration_remaining;
+        std::string ability_name;  // "fizz_e", "vlad_w", "yi_q", etc.
+
+        UntargetabilityInfo() : is_untargetable(false), duration_remaining(0.f), ability_name("") {}
+    };
+
+    /**
+     * Revive passive information
+     * Detects if target will revive after death (GA, Zilean R, Anivia passive, etc.)
+     */
+    struct ReviveInfo
+    {
+        bool has_revive;
+        std::string revive_type;  // "guardian_angel", "zilean_r", "anivia_passive", "zac_passive"
+
+        ReviveInfo() : has_revive(false), revive_type("") {}
+    };
+
+    /**
      * Detect forced movement CCs (charm, taunt, fear)
      * Returns direction target will be forced to walk
      */
@@ -397,6 +422,188 @@ namespace EdgeCases
                     }
                     break;
                 }
+            }
+        }
+
+        return info;
+    }
+
+    /**
+     * Detect if target is untargetable (Fizz E, Vlad W, Yi Q, etc.)
+     * Untargetable champions cannot be hit by ANY spells - don't cast!
+     */
+    inline UntargetabilityInfo detect_untargetability(game_object* target)
+    {
+        UntargetabilityInfo info;
+
+        if (!target || !target->is_valid())
+            return info;
+
+        // First check SDK's is_targetable() if available
+        // Note: Some SDKs have this, others don't - handle both cases
+        if (!target->is_targetable())
+        {
+            info.is_untargetable = true;
+            info.ability_name = "generic_untargetable";
+            return info;
+        }
+
+        if (!g_sdk || !g_sdk->clock_facade)
+            return info;
+
+        float current_time = g_sdk->clock_facade->get_game_time();
+
+        // Check for specific untargetability buffs
+        auto check_buff = [&](const std::string& name, const std::string& ability)
+        {
+            std::string buff_name = name;  // Make mutable copy for API
+            auto buff = target->get_buff_by_name(buff_name);
+            if (buff && buff->is_active())
+            {
+                float end = buff->get_end_time();
+                float duration_left = end - current_time;
+
+                // Untargetability is typically short (< 3s for most abilities)
+                if (duration_left > 0.f && duration_left < 5.0f)
+                {
+                    info.is_untargetable = true;
+                    info.duration_remaining = duration_left;
+                    info.ability_name = ability;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Fizz E (Playful/Trickster) - becomes untargetable
+        if (check_buff("fizzejump", "fizz_e")) return info;
+        if (check_buff("fizzetrickster", "fizz_e")) return info;
+
+        // Vladimir W (Sanguine Pool) - becomes untargetable
+        if (check_buff("vladimirw", "vlad_w")) return info;
+        if (check_buff("vladimirsanguinepool", "vlad_w")) return info;
+
+        // Master Yi Q (Alpha Strike) - becomes untargetable
+        if (check_buff("alphastrike", "yi_q")) return info;
+        if (check_buff("yialphastrike", "yi_q")) return info;
+
+        // Elise E (Rappel) - becomes untargetable
+        if (check_buff("elisespideredescent", "elise_e")) return info;
+        if (check_buff("elisee", "elise_e")) return info;
+
+        // Maokai W (Twisted Advance) - briefly untargetable during dash
+        if (check_buff("maokaiwdash", "maokai_w")) return info;
+
+        // Kayn R (Umbral Trespass) - untargetable inside enemy
+        if (check_buff("kaynr", "kayn_r")) return info;
+        if (check_buff("kaynrjumpinside", "kayn_r")) return info;
+
+        // Xayah R (Featherstorm) - becomes untargetable
+        if (check_buff("xayahr", "xayah_r")) return info;
+        if (check_buff("xayahrknockup", "xayah_r")) return info;
+
+        // Shaco R (briefly untargetable during cast)
+        if (check_buff("shacorcast", "shaco_r")) return info;
+
+        // Kled E (Jousting) - very brief untargetability
+        if (check_buff("klede", "kled_e")) return info;
+
+        // Camille R (very brief during dash)
+        if (check_buff("camillerdash", "camille_r")) return info;
+
+        return info;
+    }
+
+    /**
+     * Detect if target has revive passive ready (GA, Zilean R, Anivia, Zac)
+     * These targets will revive after death - affects target priority
+     */
+    inline ReviveInfo detect_revive(game_object* target)
+    {
+        ReviveInfo info;
+
+        if (!target || !target->is_valid())
+            return info;
+
+        if (!g_sdk || !g_sdk->clock_facade)
+            return info;
+
+        float current_time = g_sdk->clock_facade->get_game_time();
+
+        // Check for revive buffs
+        auto check_buff = [&](const std::string& name, const std::string& type, float min_duration = 5.0f)
+        {
+            std::string buff_name = name;  // Make mutable copy for API
+            auto buff = target->get_buff_by_name(buff_name);
+            if (buff && buff->is_active())
+            {
+                float end = buff->get_end_time();
+                float duration_left = end - current_time;
+
+                // Revive passives have LONG duration when ready (> 5s)
+                // This distinguishes "GA ready" from "GA reviving" (which is short stasis)
+                if (duration_left > min_duration)
+                {
+                    info.has_revive = true;
+                    info.revive_type = type;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Guardian Angel (item) - long duration "willrevive" buff when ready
+        if (check_buff("willrevive", "guardian_angel", 5.0f)) return info;
+
+        // Zilean R (Chronoshift) - prevents next death
+        if (check_buff("chronoshift", "zilean_r", 3.0f)) return info;
+        if (check_buff("zileanrrewind", "zilean_r", 3.0f)) return info;
+
+        // Check champion-specific passives by champion name
+        std::string char_name = target->get_char_name();
+
+        // Anivia passive (Rebirth) - becomes egg then revives
+        if (char_name.find("Anivia") != std::string::npos)
+        {
+            // Anivia passive is ready if she doesn't have "rebirthcooldown" buff
+            std::string cooldown_buff = "rebirthcooldown";
+            auto cd_buff = target->get_buff_by_name(cooldown_buff);
+            if (!cd_buff || !cd_buff->is_active())
+            {
+                info.has_revive = true;
+                info.revive_type = "anivia_passive";
+                return info;
+            }
+        }
+
+        // Zac passive (Cell Division) - splits into bloblets
+        if (char_name.find("Zac") != std::string::npos)
+        {
+            // Zac passive is ready if he doesn't have cooldown buff
+            std::string cooldown_buff = "zacrebirthready";
+            auto ready_buff = target->get_buff_by_name(cooldown_buff);
+            // "zacrebirthready" means passive is UP (confusing naming)
+            if (ready_buff && ready_buff->is_active())
+            {
+                info.has_revive = true;
+                info.revive_type = "zac_passive";
+                return info;
+            }
+        }
+
+        // Renata Glasc W (Bailout) - ally revive
+        if (check_buff("renatawactive", "renata_w", 2.0f)) return info;
+
+        // Sion passive (Glory in Death) - zombie form
+        // Note: Sion passive always activates on death, no cooldown
+        if (char_name.find("Sion") != std::string::npos)
+        {
+            // Check if not already dead/passive used
+            if (!target->is_dead())
+            {
+                info.has_revive = true;
+                info.revive_type = "sion_passive";
+                return info;
             }
         }
 
@@ -1060,6 +1267,8 @@ namespace EdgeCases
         DashInfo dash;
         ChannelInfo channel;
         ForcedMovementInfo forced_movement;
+        UntargetabilityInfo untargetability;
+        ReviveInfo revive;
         std::vector<WindwallInfo> windwalls;
         bool is_slowed;
         bool has_shield;
@@ -1097,6 +1306,8 @@ namespace EdgeCases
 
         analysis.channel = detect_channel(target);
         analysis.forced_movement = detect_forced_movement(target, source);
+        analysis.untargetability = detect_untargetability(target);
+        analysis.revive = detect_revive(target);
         analysis.windwalls = detect_windwalls();
         analysis.is_slowed = is_slowed(target);
         analysis.has_shield = has_spell_shield(target);
@@ -1150,6 +1361,21 @@ namespace EdgeCases
 
         if (analysis.is_clone)
             analysis.priority_multiplier *= 0.1f;  // Don't target clones
+
+        // CRITICAL: Untargetable targets cannot be hit by ANY spell
+        // Severely penalize to prevent wasted casts
+        if (analysis.untargetability.is_untargetable)
+        {
+            analysis.confidence_multiplier *= 0.05f;  // Almost zero confidence
+            analysis.priority_multiplier *= 0.01f;    // Extremely low priority
+        }
+
+        // Revive passives: Lower priority (they'll come back, prefer other targets)
+        // But don't block entirely - sometimes want to force them to use GA/passive
+        if (analysis.revive.has_revive)
+        {
+            analysis.priority_multiplier *= 0.6f;  // 40% lower priority
+        }
 
         return analysis;
     }
