@@ -241,38 +241,9 @@ namespace GeometricPred
         {
             if (!target) return 0.f;
 
-            float tenacity = 0.f;
-
-            // Check for Mercury Treads (item 3111)
-            // Most SDKs have has_item() or similar
-            // If not available, we'll use conservative estimate below
-
-            // Champions with built-in tenacity passives
-            const char* champ_name = target->get_champion_name();
-            if (champ_name)
-            {
-                // Garen W passive: 30% tenacity
-                if (std::strcmp(champ_name, "Garen") == 0)
-                    tenacity = std::max(tenacity, 0.30f);
-
-                // Mundo R: 30% tenacity while active (hard to detect, skip)
-                // Trundle W: 20% tenacity in zone (hard to detect, skip)
-            }
-
-            // High HP targets likely have tenacity items (Mercury Treads, Legend Tenacity)
-            // Use max HP threshold only - don't exclude AP bruisers
-            if (tenacity == 0.f)
-            {
-                float max_hp = target->get_max_health();
-
-                // High HP heuristic: likely bruiser/tank with tenacity items
-                if (max_hp > 3000.f)
-                {
-                    tenacity = 0.15f;  // Conservative 15% estimate
-                }
-            }
-
-            return tenacity;
+            // Use SDK to get actual tenacity value
+            // Includes: Mercury Treads, Legend Tenacity, champion passives, etc.
+            return target->get_percent_cc_reduction();
         }
 
         /**
