@@ -1670,15 +1670,12 @@ namespace EdgeCases
             }
         }
 
-        // Each minion blocks approximately 30% chance
-        // Multiple minions: P(hit) = 0.7^n
-        // 1 minion: 0.70 (70% hit chance)
-        // 2 minions: 0.49 (49% hit chance)
-        // 3+ minions: very low (<35%)
-        if (blocking_minions == 0)
-            return 1.0f;
+        // Deterministic collision: either blocked or clear
+        // Geometry check already accounts for hitboxes and predicted movement
+        if (blocking_minions > 0)
+            return 0.0f;  // Blocked by minion(s)
 
-        return std::pow(0.7f, static_cast<float>(blocking_minions));
+        return 1.0f;  // Clear path
     }
 
     // =========================================================================

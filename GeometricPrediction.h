@@ -1338,14 +1338,16 @@ namespace GeometricPred
         if (input.shape == SpellShape::Capsule)
         {
             // Use EdgeCases minion collision with health prediction
-            float minion_prob = EdgeCases::compute_minion_block_probability(
+            // Champion script decides if spell collides via input parameter
+            float minion_clear = EdgeCases::compute_minion_block_probability(
                 input.source->get_position(),
                 predicted_pos,
                 input.spell_width,
                 true  // This spell collides with minions
             );
 
-            if (minion_prob < 0.5f)
+            // Deterministic check: 0.0 = blocked, 1.0 = clear
+            if (minion_clear == 0.0f)
             {
                 result.block_reason = "Minion blocks spell path";
                 result.hit_chance = HitChance::MinionBlocked;
