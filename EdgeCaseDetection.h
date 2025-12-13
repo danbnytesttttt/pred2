@@ -722,6 +722,248 @@ namespace EdgeCases
     }
 
     // =========================================================================
+    // TERRAIN CREATION DETECTION (Anivia W, Jarvan R, Trundle E, Azir R)
+    // =========================================================================
+
+    /**
+     * Terrain information
+     * Terrain restricts enemy movement and can trap them
+     */
+    struct TerrainInfo
+    {
+        bool exists;
+        math::vector3 position;
+        float radius;                  // Affected area radius
+        float end_time;
+        std::string source_champion;   // "anivia", "jarvan", "trundle", "azir"
+        bool blocks_projectiles;       // true for Azir R, false for most terrain
+
+        TerrainInfo() : exists(false), position{}, radius(0.f),
+            end_time(0.f), source_champion(""), blocks_projectiles(false) {
+        }
+    };
+
+    /**
+     * Detect active terrain that restricts movement
+     * Terrain can trap enemies or block pathing, increasing hit chance
+     */
+    inline std::vector<TerrainInfo> detect_terrain()
+    {
+        std::vector<TerrainInfo> terrains;
+
+        if (!g_sdk || !g_sdk->object_manager)
+            return terrains;
+
+        auto* local_player = g_sdk->object_manager->get_local_player();
+        if (!local_player || !local_player->is_valid())
+            return terrains;
+
+        int local_team = local_player->get_team_id();
+        float current_time = 0.f;
+        if (g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
+
+        // Object names for terrain-creating abilities
+        static const char* ANIVIA_WALL_NAMES[] = {
+            "Anivia_Base_W_Wall",
+            "AniviaWall"
+        };
+
+        static const char* JARVAN_ARENA_NAMES[] = {
+            "Jarvan_Base_R_TerraArena",
+            "JarvanCataclysm"
+        };
+
+        static const char* TRUNDLE_PILLAR_NAMES[] = {
+            "Trundle_Base_E_Pillar",
+            "TrundlePillar"
+        };
+
+        static const char* AZIR_WALL_NAMES[] = {
+            "Azir_Base_R_SoldierWall",
+            "AzirWall"
+        };
+
+        static const char* TALIYAH_WALL_NAMES[] = {
+            "Taliyah_Base_R_Wall",
+            "TaliyahWall"
+        };
+
+        static const char* VEIGAR_CAGE_NAMES[] = {
+            "Veigar_Base_E_Cage",
+            "VeigarEventHorizon"
+        };
+
+        // Search through minions/objects for terrain entities
+        auto minions = g_sdk->object_manager->get_minions();
+        for (auto* obj : minions)
+        {
+            if (!obj || !obj->is_valid() || !obj->is_visible())
+                continue;
+
+            // Skip allied terrain (unless we also want to track it)
+            if (obj->get_team_id() == local_team)
+                continue;
+
+            std::string name = obj->get_name();
+            if (name.empty())
+                continue;
+
+            TerrainInfo terrain;
+            terrain.exists = false;
+
+            // Check for Anivia W (Crystallize)
+            for (const char* terrain_name : ANIVIA_WALL_NAMES)
+            {
+                if (name.find(terrain_name) != std::string::npos)
+                {
+                    terrain.exists = true;
+                    terrain.position = obj->get_position();
+                    terrain.radius = 400.f;  // Wall width
+                    terrain.end_time = current_time + 5.0f;  // 5 second duration
+                    terrain.source_champion = "anivia";
+                    terrain.blocks_projectiles = false;
+                    break;
+                }
+            }
+
+            // Check for Jarvan R (Cataclysm)
+            if (!terrain.exists)
+            {
+                for (const char* terrain_name : JARVAN_ARENA_NAMES)
+                {
+                    if (name.find(terrain_name) != std::string::npos)
+                    {
+                        terrain.exists = true;
+                        terrain.position = obj->get_position();
+                        terrain.radius = 325.f;  // Arena radius
+                        terrain.end_time = current_time + 3.5f;  // 3.5 second duration
+                        terrain.source_champion = "jarvan";
+                        terrain.blocks_projectiles = false;
+                        break;
+                    }
+                }
+            }
+
+            // Check for Trundle E (Pillar of Ice)
+            if (!terrain.exists)
+            {
+                for (const char* terrain_name : TRUNDLE_PILLAR_NAMES)
+                {
+                    if (name.find(terrain_name) != std::string::npos)
+                    {
+                        terrain.exists = true;
+                        terrain.position = obj->get_position();
+                        terrain.radius = 188.f;  // Pillar radius
+                        terrain.end_time = current_time + 6.0f;  // 6 second duration
+                        terrain.source_champion = "trundle";
+                        terrain.blocks_projectiles = false;
+                        break;
+                    }
+                }
+            }
+
+            // Check for Azir R (Emperor's Divide) - BLOCKS PROJECTILES
+            if (!terrain.exists)
+            {
+                for (const char* terrain_name : AZIR_WALL_NAMES)
+                {
+                    if (name.find(terrain_name) != std::string::npos)
+                    {
+                        terrain.exists = true;
+                        terrain.position = obj->get_position();
+                        terrain.radius = 520.f;  // Wall length
+                        terrain.end_time = current_time + 5.0f;  // 5 second duration
+                        terrain.source_champion = "azir";
+                        terrain.blocks_projectiles = true;  // Azir wall blocks projectiles!
+                        break;
+                    }
+                }
+            }
+
+            // Check for Taliyah R (Weaver's Wall)
+            if (!terrain.exists)
+            {
+                for (const char* terrain_name : TALIYAH_WALL_NAMES)
+                {
+                    if (name.find(terrain_name) != std::string::npos)
+                    {
+                        terrain.exists = true;
+                        terrain.position = obj->get_position();
+                        terrain.radius = 2000.f;  // Very long wall
+                        terrain.end_time = current_time + 5.0f;  // 5 second duration
+                        terrain.source_champion = "taliyah";
+                        terrain.blocks_projectiles = true;  // Taliyah wall blocks projectiles
+                        break;
+                    }
+                }
+            }
+
+            // Check for Veigar E (Event Horizon) - not true terrain but restricts movement
+            if (!terrain.exists)
+            {
+                for (const char* terrain_name : VEIGAR_CAGE_NAMES)
+                {
+                    if (name.find(terrain_name) != std::string::npos)
+                    {
+                        terrain.exists = true;
+                        terrain.position = obj->get_position();
+                        terrain.radius = 375.f;  // Cage radius
+                        terrain.end_time = current_time + 3.0f;  // 3 second duration
+                        terrain.source_champion = "veigar";
+                        terrain.blocks_projectiles = false;
+                        break;
+                    }
+                }
+            }
+
+            if (terrain.exists)
+            {
+                terrains.push_back(terrain);
+            }
+        }
+
+        return terrains;
+    }
+
+    /**
+     * Check if target is trapped by terrain (limited escape options)
+     * Returns confidence boost if target is near terrain
+     */
+    inline float get_terrain_confidence_boost(
+        game_object* target,
+        const std::vector<TerrainInfo>& terrains)
+    {
+        if (!target || !target->is_valid() || terrains.empty())
+            return 1.0f;  // No boost
+
+        math::vector3 target_pos = target->get_position();
+        float min_distance = 999999.f;
+
+        for (const auto& terrain : terrains)
+        {
+            if (!terrain.exists)
+                continue;
+
+            float dist = (target_pos - terrain.position).magnitude();
+
+            // If target is inside/near terrain, they have restricted movement
+            if (dist < terrain.radius + 200.f)  // Within terrain + buffer
+            {
+                min_distance = std::min(min_distance, dist);
+            }
+        }
+
+        // Closer to terrain = more restricted movement = higher confidence
+        if (min_distance < 300.f)
+            return 1.3f;  // 30% boost - very restricted
+        else if (min_distance < 600.f)
+            return 1.15f;  // 15% boost - somewhat restricted
+        else
+            return 1.0f;  // No boost
+    }
+
+    // =========================================================================
     // WINDWALL DETECTION (Yasuo W, Samira W, Braum E)
     // =========================================================================
 
@@ -742,6 +984,33 @@ namespace EdgeCases
             width(0.f), end_time(0.f), source_champion(""), is_circle(false) {
         }
     };
+
+    /**
+     * Windwall cache for performance optimization
+     * Windwall detection scans all minions - cache results to avoid repeated scans
+     */
+    struct WindwallCache
+    {
+        std::vector<WindwallInfo> cached_windwalls;
+        float last_update_time;
+        constexpr static float CACHE_DURATION = 0.1f;  // 100ms cache (refresh 10x/sec)
+
+        WindwallCache() : last_update_time(-999.f) {}
+
+        bool is_valid(float current_time) const
+        {
+            return (current_time - last_update_time) < CACHE_DURATION;
+        }
+
+        void update(const std::vector<WindwallInfo>& windwalls, float current_time)
+        {
+            cached_windwalls = windwalls;
+            last_update_time = current_time;
+        }
+    };
+
+    // Global windwall cache (static for persistence across calls)
+    static WindwallCache g_windwall_cache;
 
     /**
      * Get Yasuo W width based on ability rank
@@ -769,9 +1038,22 @@ namespace EdgeCases
     /**
      * Detect active windwalls that can block projectiles
      * Uses game object names from actual game data dumps
+     * PERFORMANCE: Cached for 100ms to avoid repeated minion scans
      */
     inline std::vector<WindwallInfo> detect_windwalls()
     {
+        // Get current time first for cache validation
+        float current_time = 0.f;
+        if (g_sdk && g_sdk->clock_facade)
+            current_time = g_sdk->clock_facade->get_game_time();
+
+        // Check cache validity
+        if (g_windwall_cache.is_valid(current_time))
+        {
+            return g_windwall_cache.cached_windwalls;
+        }
+
+        // Cache miss - perform full detection
         std::vector<WindwallInfo> windwalls;
 
         if (!g_sdk || !g_sdk->object_manager)
@@ -782,9 +1064,6 @@ namespace EdgeCases
             return windwalls;
 
         int local_team = local_player->get_team_id();
-        float current_time = 0.f;
-        if (g_sdk->clock_facade)
-            current_time = g_sdk->clock_facade->get_game_time();
 
         // Object names that indicate projectile-blocking walls
         // From game data dumps - these are the actual blocking objects
@@ -931,6 +1210,9 @@ namespace EdgeCases
                 windwalls.push_back(wall);
             }
         }
+
+        // Update cache with new results
+        g_windwall_cache.update(windwalls, current_time);
 
         return windwalls;
     }
@@ -1270,17 +1552,19 @@ namespace EdgeCases
         UntargetabilityInfo untargetability;
         ReviveInfo revive;
         std::vector<WindwallInfo> windwalls;
+        std::vector<TerrainInfo> terrains;
         bool is_slowed;
         bool has_shield;
         bool is_clone;
         bool blocked_by_windwall;
+        bool blocked_by_terrain;
 
         // Confidence and priority adjustments
         float confidence_multiplier;
         float priority_multiplier;
 
         EdgeCaseAnalysis() : is_slowed(false), has_shield(false),
-            is_clone(false), blocked_by_windwall(false),
+            is_clone(false), blocked_by_windwall(false), blocked_by_terrain(false),
             confidence_multiplier(1.0f), priority_multiplier(1.0f) {
         }
     };
@@ -1309,6 +1593,7 @@ namespace EdgeCases
         analysis.untargetability = detect_untargetability(target);
         analysis.revive = detect_revive(target);
         analysis.windwalls = detect_windwalls();
+        analysis.terrains = detect_terrain();
         analysis.is_slowed = is_slowed(target);
         analysis.has_shield = has_spell_shield(target);
         analysis.is_clone = !is_real_champion(target);
@@ -1321,6 +1606,37 @@ namespace EdgeCases
                 target->get_position(),
                 analysis.windwalls
             );
+
+            // Check terrain blocking (Azir R, Taliyah R)
+            for (const auto& terrain : analysis.terrains)
+            {
+                if (terrain.blocks_projectiles)
+                {
+                    // Simple check: if terrain is between source and target
+                    math::vector3 to_target = target->get_position() - source->get_position();
+                    float dist_to_target = to_target.magnitude();
+                    if (dist_to_target > 1.0f)
+                    {
+                        math::vector3 dir = to_target / dist_to_target;
+                        math::vector3 to_terrain = terrain.position - source->get_position();
+                        float proj = to_terrain.dot(dir);
+
+                        // If terrain is between us and target
+                        if (proj > 0.f && proj < dist_to_target)
+                        {
+                            math::vector3 closest = source->get_position() + dir * proj;
+                            float perp_dist = (terrain.position - closest).magnitude();
+
+                            // If projectile path passes through terrain
+                            if (perp_dist < terrain.radius)
+                            {
+                                analysis.blocked_by_terrain = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Calculate adjustments
@@ -1358,6 +1674,13 @@ namespace EdgeCases
 
         if (analysis.blocked_by_windwall)
             analysis.confidence_multiplier *= 0.2f;  // Will be blocked by windwall
+
+        if (analysis.blocked_by_terrain)
+            analysis.confidence_multiplier *= 0.1f;  // Will be blocked by terrain (Azir R, Taliyah R)
+
+        // Terrain confidence boost (target trapped/restricted movement)
+        float terrain_boost = get_terrain_confidence_boost(target, analysis.terrains);
+        analysis.confidence_multiplier *= terrain_boost;
 
         if (analysis.is_clone)
             analysis.priority_multiplier *= 0.1f;  // Don't target clones
