@@ -52,12 +52,7 @@ namespace GeometricPred
     constexpr float REACTION_MEDIUM = 0.4f;        // 400ms window
     // Anything > 0.4s = Low confidence
 
-    // Path prediction heuristics
-    constexpr float PATH_START_DAMPENING = 0.85f;  // Slow start (acceleration phase)
-    constexpr float PATH_START_DURATION = 0.1f;    // 100ms ramp to full speed
-    constexpr float PATH_STALE_THRESHOLD = 0.2f;   // Animation locks > 200ms make paths stale
-    constexpr float PATH_STALE_RANGE = 0.4f;       // Staleness ramp duration
-    constexpr float PATH_STALE_MAX_REDUCTION = 0.5f; // Max 50% distance reduction
+    // Path prediction - use SDK data, no arbitrary heuristics
 
     // Minion collision constants
     constexpr float MINION_SEARCH_RADIUS = 150.f;  // Search radius around spell path
@@ -867,21 +862,18 @@ namespace GeometricPred
             effective_movement_time = std::max(0.f, prediction_time - animation_lock_time);
             if (effective_movement_time <= 0.f)
                 return position;  // Lock lasts longer than prediction time
-
-            // PATH STALENESS: Long locks make paths unreliable
-            if (animation_lock_time > PATH_STALE_THRESHOLD)
-            {
-                float staleness_factor = 1.0f - std::min(
-                    (animation_lock_time - PATH_STALE_THRESHOLD) / PATH_STALE_RANGE,
-                    PATH_STALE_MAX_REDUCTION);
-                effective_movement_time *= staleness_factor;
-            }
         }
 
-        // Path prediction: trust the path from SDK
-        // If target is orbwalking, their path will naturally be short
-        // No need for arbitrary distance multipliers
-        float distance_to_travel = move_speed * effective_movement_time;
+        // Use SDK velocity for accurate distance prediction
+        // Accounts for actual movement state (accelerating, decelerating, turning)
+        math::vector3 velocity = target->get_velocity();
+        float actual_speed = velocity.magnitude();
+
+        // Fallback to move_speed if velocity is zero (just started moving)
+        if (actual_speed < 1.f)
+            actual_speed = move_speed;
+
+        float distance_to_travel = actual_speed * effective_movement_time;
 
         // End-of-Path Clamping (don't overshoot destination)
         float remaining_path = 0.f;
