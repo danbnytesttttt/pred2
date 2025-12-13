@@ -1211,6 +1211,9 @@ namespace EdgeCases
     /**
      * Get Yasuo W width based on ability rank
      * Width scales: 320 / 390 / 460 / 530 / 600
+     *
+     * NOTE: Patch 14.X values - may need update if Riot changes ability scaling
+     * SDK doesn't expose spell width directly, so we use level-based lookup
      */
     inline float get_yasuo_wall_width(game_object* yasuo)
     {
@@ -1224,6 +1227,7 @@ namespace EdgeCases
             int level = w_spell->get_level();
             if (level >= 1 && level <= 5)
             {
+                // Patch 14.X - Yasuo W width per level
                 static const float widths[] = { 320.f, 390.f, 460.f, 530.f, 600.f };
                 return widths[level - 1];
             }
@@ -1585,24 +1589,29 @@ namespace EdgeCases
                 // Estimate incoming DPS based on minion type and game time
                 // Melee minions: ~100 HP at 0min, ~1500 HP at 30min (linear scaling)
                 // Typical lane DPS: ~50-150 depending on game time (minion autos, tower, champion)
-                constexpr float LANE_BASE_DPS = 50.f;   // Base lane DPS
-                constexpr float TOWER_DPS = 250.f;      // Tower shot DPS
-                constexpr float TOWER_RANGE = 900.f;    // Tower aggro range
+                constexpr float LANE_BASE_DPS = 50.f;   // Base lane DPS (fallback)
                 float estimated_dps = LANE_BASE_DPS;
 
                 // Higher DPS if minion is under tower (tower shots = massive burst)
-                if (g_sdk && g_sdk->nav_mesh)
+                if (g_sdk && g_sdk->object_manager)
                 {
-                    // Check if minion is near an enemy tower
+                    // Check if minion is near an enemy tower - use SDK for actual tower stats
                     auto towers = g_sdk->object_manager->get_enemy_turrets();
                     for (auto* tower : towers)
                     {
                         if (tower && tower->is_valid() && !tower->is_dead())
                         {
+                            float tower_range = tower->get_attack_range();  // Actual tower range from SDK
                             float dist_to_tower = (minion->get_position() - tower->get_position()).magnitude();
-                            if (dist_to_tower < TOWER_RANGE)
+
+                            if (dist_to_tower < tower_range)
                             {
-                                estimated_dps = TOWER_DPS;  // Tower shots = very high DPS
+                                // Calculate actual tower DPS from SDK
+                                float tower_damage = tower->get_attack_damage();
+                                float tower_attack_delay = tower->get_attack_delay();
+                                float tower_dps = (tower_attack_delay > 0.f) ? (tower_damage / tower_attack_delay) : 250.f;
+
+                                estimated_dps = tower_dps;
                                 break;
                             }
                         }
