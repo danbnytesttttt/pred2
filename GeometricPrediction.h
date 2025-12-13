@@ -1142,11 +1142,13 @@ namespace GeometricPred
         auto edge_analysis = EdgeCases::analyze_target(input.target, input.source);
 
         // 1. CLONE DETECTION
-        // Report clone detection but let champion script decide
         if (edge_analysis.is_clone)
         {
+            result.block_reason = "Target is a clone";
+            result.hit_chance = HitChance::Clone;
+            result.should_cast = false;
             result.is_clone_target = true;
-            // Don't block - continue with normal prediction
+            return result;
         }
 
         // 2. SPELL SHIELD DETECTION
@@ -1168,11 +1170,13 @@ namespace GeometricPred
         }
 
         // 4. WINDWALL DETECTION
-        // Report windwall but let champion script decide (wall may expire, AOE may hit others)
         if (edge_analysis.blocked_by_windwall)
         {
+            result.block_reason = "Windwall blocks spell path";
+            result.hit_chance = HitChance::Windwalled;
+            result.should_cast = false;
             result.windwall_detected = true;
-            // Don't block - continue with normal prediction
+            return result;
         }
 
         // 5. STASIS HANDLING
@@ -1341,17 +1345,18 @@ namespace GeometricPred
                 true  // This spell collides with minions
             );
 
-            // Report minion collision probability but let champion script decide threshold
-            if (minion_prob < 1.0f)
+            if (minion_prob < 0.5f)
             {
+                result.block_reason = "Minion blocks spell path";
+                result.hit_chance = HitChance::MinionBlocked;
+                result.should_cast = false;
                 result.minion_collision = true;
-                result.minion_block_probability = 1.0f - minion_prob;
 
-                if (PredictionSettings::get().enable_telemetry && minion_prob < 0.5f)
+                if (PredictionSettings::get().enable_telemetry)
                 {
                     PredictionTelemetry::TelemetryLogger::log_rejection_collision();
                 }
-                // Continue with prediction - champion script decides acceptable collision risk
+                return result;
             }
         }
 
