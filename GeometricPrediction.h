@@ -1632,6 +1632,17 @@ namespace GeometricPred
             reaction_window /= 1.08f;  // Modest boost for distracted targets (CSing)
         }
 
+        // JUKING: Erratic movement increases prediction uncertainty
+        // High direction variance = zigzag dodging = harder to predict
+        if (edge_analysis.juke.is_juking)
+        {
+            // Juke penalty: increases reaction window (makes hit harder)
+            // variance 0.5 → penalty 0.95 → reaction_window *= 1.05 (+5% harder)
+            // variance 0.7 → penalty 0.85 → reaction_window *= 1.18 (+18% harder)
+            // variance 1.0 → penalty 0.70 → reaction_window *= 1.43 (+43% harder)
+            reaction_window *= (1.0f / edge_analysis.juke.confidence_penalty);
+        }
+
         // Grade reaction window to hit chance (discrete enum for backwards compatibility)
         if (reaction_window <= REACTION_UNDODGEABLE)
             result.hit_chance = HitChance::Undodgeable;

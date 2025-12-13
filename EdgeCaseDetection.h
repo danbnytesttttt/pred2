@@ -1748,6 +1748,127 @@ namespace EdgeCases
     // CLONE DETECTION
     // =========================================================================
 
+    // =========================================================================
+    // JUKE / ERRATIC MOVEMENT DETECTION
+    // =========================================================================
+
+    /**
+     * Juke detection via velocity direction variance
+     * Tracks recent movement patterns to detect zigzag / erratic dodging
+     */
+    struct JukeInfo
+    {
+        bool is_juking;                  // Currently exhibiting juke behavior
+        float direction_variance;        // Variance in movement direction (0-1, higher = more erratic)
+        float confidence_penalty;        // Hit chance reduction factor (0.8-1.0)
+
+        JukeInfo() : is_juking(false), direction_variance(0.f), confidence_penalty(1.0f) {}
+    };
+
+    /**
+     * Per-target movement history for juke detection
+     * Tracks last N velocity samples to detect direction changes
+     */
+    struct MovementHistory
+    {
+        static constexpr int MAX_SAMPLES = 5;   // Last 5 velocity samples (~250ms window at 20 ticks/s)
+        static constexpr float SAMPLE_INTERVAL = 0.05f;  // 50ms between samples
+
+        std::vector<math::vector3> velocity_samples;
+        float last_sample_time;
+
+        MovementHistory() : last_sample_time(-999.f) {}
+
+        void update(const math::vector3& velocity, float current_time)
+        {
+            // Only sample every 50ms to avoid noise
+            if (current_time - last_sample_time < SAMPLE_INTERVAL)
+                return;
+
+            velocity_samples.push_back(velocity);
+            last_sample_time = current_time;
+
+            // Keep only last N samples
+            if (velocity_samples.size() > MAX_SAMPLES)
+                velocity_samples.erase(velocity_samples.begin());
+        }
+
+        // Calculate direction variance (0 = straight line, 1 = completely erratic)
+        float calculate_direction_variance() const
+        {
+            if (velocity_samples.size() < 3)
+                return 0.f;  // Not enough data
+
+            // Calculate average direction
+            math::vector3 avg_direction(0.f, 0.f, 0.f);
+            for (const auto& vel : velocity_samples)
+            {
+                float mag = std::sqrt(vel.x * vel.x + vel.z * vel.z);
+                if (mag > 1.f)  // Only consider significant movement
+                {
+                    avg_direction.x += vel.x / mag;
+                    avg_direction.z += vel.z / mag;
+                }
+            }
+
+            float count = static_cast<float>(velocity_samples.size());
+            avg_direction.x /= count;
+            avg_direction.z /= count;
+
+            float avg_mag = std::sqrt(avg_direction.x * avg_direction.x + avg_direction.z * avg_direction.z);
+
+            // avg_mag close to 1.0 = consistent direction
+            // avg_mag close to 0.0 = directions cancel out (zigzag)
+            // variance = 1 - avg_mag
+            return std::clamp(1.f - avg_mag, 0.f, 1.f);
+        }
+    };
+
+    // Global movement history cache (per target)
+    static std::unordered_map<uint32_t, MovementHistory> g_movement_history;
+
+    /**
+     * Detect if target is juking (zigzag erratic movement to dodge skillshots)
+     * Uses velocity direction variance over recent samples
+     */
+    inline JukeInfo detect_juke(game_object* target)
+    {
+        JukeInfo info;
+
+        if (!target || !target->is_valid() || !g_sdk || !g_sdk->clock_facade)
+            return info;
+
+        uint32_t target_id = target->get_network_id();
+        float current_time = g_sdk->clock_facade->get_game_time();
+
+        // Get or create movement history for this target
+        auto& history = g_movement_history[target_id];
+
+        // Update history with current velocity
+        math::vector3 velocity = target->get_velocity();
+        history.update(velocity, current_time);
+
+        // Calculate direction variance
+        float variance = history.calculate_direction_variance();
+        info.direction_variance = variance;
+
+        // Juke detection threshold: variance > 0.5 = significant zigzag
+        constexpr float JUKE_THRESHOLD = 0.5f;
+        if (variance > JUKE_THRESHOLD)
+        {
+            info.is_juking = true;
+
+            // Confidence penalty scales with variance
+            // variance 0.5 → 0.95x (mild penalty)
+            // variance 0.7 → 0.85x (moderate)
+            // variance 1.0 → 0.70x (severe)
+            info.confidence_penalty = 1.0f - (variance * 0.3f);
+            info.confidence_penalty = std::clamp(info.confidence_penalty, 0.7f, 1.0f);
+        }
+
+        return info;
+    }
+
     /**
      * Check if object is a clone (Shaco, Wukong, LeBlanc)
      * Returns true if it's a real champion, false if clone
@@ -1813,6 +1934,7 @@ namespace EdgeCases
         PolymorphInfo polymorph;
         KnockbackInfo knockback;
         GroundedInfo grounded;
+        JukeInfo juke;          // Erratic zigzag movement (dodging behavior)
         std::vector<WindwallInfo> windwalls;
         std::vector<TerrainInfo> terrains;
         bool is_slowed;
@@ -1858,6 +1980,7 @@ namespace EdgeCases
         analysis.polymorph = detect_polymorph(target);
         analysis.knockback = detect_knockback(target);
         analysis.grounded = detect_grounded(target);
+        analysis.juke = detect_juke(target);
         analysis.windwalls = detect_windwalls();
         analysis.terrains = detect_terrain();
         analysis.is_slowed = is_slowed(target);
