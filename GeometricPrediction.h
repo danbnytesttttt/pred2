@@ -1142,23 +1142,19 @@ namespace GeometricPred
         auto edge_analysis = EdgeCases::analyze_target(input.target, input.source);
 
         // 1. CLONE DETECTION
+        // Report clone detection but let champion script decide
         if (edge_analysis.is_clone)
         {
-            result.block_reason = "Target is a clone";
-            result.hit_chance = HitChance::Clone;
-            result.should_cast = false;
             result.is_clone_target = true;
-            return result;
+            // Don't block - continue with normal prediction
         }
 
         // 2. SPELL SHIELD DETECTION
+        // Report shield presence but let champion script decide whether to cast
         if (edge_analysis.has_shield)
         {
-            result.block_reason = "Target has spell shield";
-            result.hit_chance = HitChance::SpellShielded;
-            result.should_cast = false;  // Don't waste spell
             result.spell_shield_detected = true;
-            return result;
+            // Don't block - continue with normal prediction
         }
 
         // 3. UNTARGETABILITY DETECTION (Fizz E, Vlad W, Yi Q, etc.)
@@ -1172,13 +1168,11 @@ namespace GeometricPred
         }
 
         // 4. WINDWALL DETECTION
+        // Report windwall but let champion script decide (wall may expire, AOE may hit others)
         if (edge_analysis.blocked_by_windwall)
         {
-            result.block_reason = "Windwall blocks spell path";
-            result.hit_chance = HitChance::Windwalled;
-            result.should_cast = false;
             result.windwall_detected = true;
-            return result;
+            // Don't block - continue with normal prediction
         }
 
         // 5. STASIS HANDLING
@@ -1239,27 +1233,17 @@ namespace GeometricPred
                 input.proc_delay
             );
 
-            // Validate timing
-            if (EdgeCases::validate_dash_timing(edge_analysis.dash, spell_arrival, current_time))
-            {
-                result.cast_position = dash_end;
-                result.predicted_position = dash_end;
-                result.hit_chance = HitChance::Dashing;
-                result.should_cast = true;
-                result.is_dash = true;
-                result.dash_confidence = edge_analysis.dash.confidence_multiplier;
-                result.edge_case_type = "dash";
-                result.hit_chance_float = edge_analysis.dash.confidence_multiplier;
-                return result;
-            }
-            else
-            {
-                // Spell arrives before dash ends - don't predict to endpoint
-                result.block_reason = "Spell arrives before dash completes";
-                result.hit_chance = HitChance::Low;
-                result.should_cast = false;
-                return result;
-            }
+            // Every dash has an endpoint - predict to it regardless of timing
+            // Champion script can decide if confidence is high enough to cast
+            result.cast_position = dash_end;
+            result.predicted_position = dash_end;
+            result.hit_chance = HitChance::Dashing;
+            result.should_cast = true;
+            result.is_dash = true;
+            result.dash_confidence = edge_analysis.dash.confidence_multiplier;
+            result.edge_case_type = "dash";
+            result.hit_chance_float = edge_analysis.dash.confidence_multiplier;
+            return result;
         }
 
         // 7. CHANNEL/RECALL DETECTION
@@ -1357,18 +1341,17 @@ namespace GeometricPred
                 true  // This spell collides with minions
             );
 
-            if (minion_prob < 0.5f)
+            // Report minion collision probability but let champion script decide threshold
+            if (minion_prob < 1.0f)
             {
-                result.block_reason = "Minion blocks spell path";
-                result.hit_chance = HitChance::MinionBlocked;
-                result.should_cast = false;
                 result.minion_collision = true;
+                result.minion_block_probability = 1.0f - minion_prob;
 
-                if (PredictionSettings::get().enable_telemetry)
+                if (PredictionSettings::get().enable_telemetry && minion_prob < 0.5f)
                 {
                     PredictionTelemetry::TelemetryLogger::log_rejection_collision();
                 }
-                return result;
+                // Continue with prediction - champion script decides acceptable collision risk
             }
         }
 
@@ -1489,25 +1472,10 @@ namespace GeometricPred
         // This provides much better granularity (0.39s vs 0.41s are now distinguishable)
         result.hit_chance_float = reaction_window_to_confidence(reaction_window);
 
-        // Simple recommendation: Cast on Medium or higher (or use conservative mode)
-        if (PredictionSettings::get().prefer_safe_shots)
-        {
-            // Conservative mode: only cast VeryHigh/Undodgeable
-            result.should_cast = (
-                result.hit_chance == HitChance::VeryHigh ||
-                result.hit_chance == HitChance::Undodgeable
-            );
-        }
-        else
-        {
-            // Normal mode: cast Medium or higher
-            result.should_cast = (
-                result.hit_chance == HitChance::Medium ||
-                result.hit_chance == HitChance::High ||
-                result.hit_chance == HitChance::VeryHigh ||
-                result.hit_chance == HitChance::Undodgeable
-            );
-        }
+        // Champion script controls casting decision based on user-configured thresholds
+        // Typical thresholds: Medium = 50%+, High = 75%+, VeryHigh = 90%+
+        // System provides hit_chance and hit_chance_float - script decides when to cast
+        result.should_cast = true;  // Let champion script make the final decision
 
         // =======================================================================================
         // TELEMETRY LOGGING
