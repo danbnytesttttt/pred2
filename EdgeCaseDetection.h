@@ -285,6 +285,125 @@ namespace EdgeCases
     };
 
     /**
+     * Forced movement information (charm, taunt, fear)
+     * These CCs force the target to move in a predictable direction
+     */
+    struct ForcedMovementInfo
+    {
+        bool has_forced_movement;
+        bool is_charm;   // Walks toward source (Ahri E, Evelynn W, Rakan W)
+        bool is_taunt;   // Walks toward source (Galio E, Rammus E, Shen E)
+        bool is_fear;    // Runs away from source (Fiddlesticks Q, Hecarim R, Shaco W)
+        float duration_remaining;
+        math::vector3 forced_direction;  // Normalized direction they're forced to walk
+        game_object* cc_source;          // Who applied the CC
+
+        ForcedMovementInfo() : has_forced_movement(false), is_charm(false),
+            is_taunt(false), is_fear(false), duration_remaining(0.f),
+            forced_direction{}, cc_source(nullptr) {
+        }
+    };
+
+    /**
+     * Detect forced movement CCs (charm, taunt, fear)
+     * Returns direction target will be forced to walk
+     */
+    inline ForcedMovementInfo detect_forced_movement(game_object* target, game_object* source = nullptr)
+    {
+        ForcedMovementInfo info;
+
+        if (!target || !target->is_valid())
+            return info;
+
+        if (!g_sdk || !g_sdk->clock_facade)
+            return info;
+
+        float current_time = g_sdk->clock_facade->get_game_time();
+
+        // Check for charm
+        if (target->has_buff_of_type(buff_type::charm))
+        {
+            info.has_forced_movement = true;
+            info.is_charm = true;
+
+            // Find charm source from buffs
+            auto buffs = target->get_buffs();
+            for (auto* buff : buffs)
+            {
+                if (buff && buff->is_active() && buff->get_type() == buff_type::charm)
+                {
+                    info.duration_remaining = std::max(0.f, buff->get_end_time() - current_time);
+                    info.cc_source = buff->get_caster();
+
+                    if (info.cc_source && info.cc_source->is_valid())
+                    {
+                        // Charm: walk toward caster
+                        math::vector3 to_caster = info.cc_source->get_position() - target->get_position();
+                        float dist = to_caster.magnitude();
+                        if (dist > 0.001f)
+                            info.forced_direction = to_caster / dist;  // Normalize
+                    }
+                    break;
+                }
+            }
+        }
+        // Check for taunt
+        else if (target->has_buff_of_type(buff_type::taunt))
+        {
+            info.has_forced_movement = true;
+            info.is_taunt = true;
+
+            auto buffs = target->get_buffs();
+            for (auto* buff : buffs)
+            {
+                if (buff && buff->is_active() && buff->get_type() == buff_type::taunt)
+                {
+                    info.duration_remaining = std::max(0.f, buff->get_end_time() - current_time);
+                    info.cc_source = buff->get_caster();
+
+                    if (info.cc_source && info.cc_source->is_valid())
+                    {
+                        // Taunt: walk toward caster
+                        math::vector3 to_caster = info.cc_source->get_position() - target->get_position();
+                        float dist = to_caster.magnitude();
+                        if (dist > 0.001f)
+                            info.forced_direction = to_caster / dist;
+                    }
+                    break;
+                }
+            }
+        }
+        // Check for fear
+        else if (target->has_buff_of_type(buff_type::fear))
+        {
+            info.has_forced_movement = true;
+            info.is_fear = true;
+
+            auto buffs = target->get_buffs();
+            for (auto* buff : buffs)
+            {
+                if (buff && buff->is_active() && buff->get_type() == buff_type::fear)
+                {
+                    info.duration_remaining = std::max(0.f, buff->get_end_time() - current_time);
+                    info.cc_source = buff->get_caster();
+
+                    if (info.cc_source && info.cc_source->is_valid())
+                    {
+                        // Fear: run away from caster
+                        math::vector3 away_from_caster = target->get_position() - info.cc_source->get_position();
+                        float dist = away_from_caster.magnitude();
+                        if (dist > 0.001f)
+                            info.forced_direction = away_from_caster / dist;
+                    }
+                    break;
+                }
+            }
+        }
+
+        return info;
+    }
+
+    /**
      * Detect channeling or recall
      */
     inline ChannelInfo detect_channel(game_object* target)
@@ -741,8 +860,14 @@ namespace EdgeCases
                 name.find("YellowTrinket") != std::string::npos)
                 continue;
 
-            // Check if minion is between source and target
+            // PERFORMANCE: Skip minions too far away (only check within 2000 units)
             math::vector3 minion_pos = minion->get_position();
+            float dist_to_source = (minion_pos - source_pos).magnitude();
+            constexpr float MINION_RELEVANCE_RANGE = 2000.f;
+            if (dist_to_source > MINION_RELEVANCE_RANGE)
+                continue;
+
+            // Check if minion is between source and target
             math::vector3 to_minion = minion_pos - source_pos;
             float distance_along_path = to_minion.dot(direction);
 
@@ -775,21 +900,24 @@ namespace EdgeCases
                 // Estimate incoming DPS based on minion type and game time
                 // Melee minions: ~100 HP at 0min, ~1500 HP at 30min (linear scaling)
                 // Typical lane DPS: ~50-150 depending on game time (minion autos, tower, champion)
-                float estimated_dps = 50.f;  // Base DPS (conservative)
+                constexpr float LANE_BASE_DPS = 50.f;   // Base lane DPS
+                constexpr float TOWER_DPS = 250.f;      // Tower shot DPS
+                constexpr float TOWER_RANGE = 900.f;    // Tower aggro range
+                float estimated_dps = LANE_BASE_DPS;
 
                 // Higher DPS if minion is under tower (tower shots = massive burst)
                 if (g_sdk && g_sdk->nav_mesh)
                 {
-                    // Check if minion is near an enemy tower (within ~900 units)
+                    // Check if minion is near an enemy tower
                     auto towers = g_sdk->object_manager->get_enemy_turrets();
                     for (auto* tower : towers)
                     {
                         if (tower && tower->is_valid() && !tower->is_dead())
                         {
                             float dist_to_tower = (minion->get_position() - tower->get_position()).magnitude();
-                            if (dist_to_tower < 900.f)
+                            if (dist_to_tower < TOWER_RANGE)
                             {
-                                estimated_dps = 250.f;  // Tower shots = very high DPS
+                                estimated_dps = TOWER_DPS;  // Tower shots = very high DPS
                                 break;
                             }
                         }
@@ -931,6 +1059,7 @@ namespace EdgeCases
         StasisInfo stasis;
         DashInfo dash;
         ChannelInfo channel;
+        ForcedMovementInfo forced_movement;
         std::vector<WindwallInfo> windwalls;
         bool is_slowed;
         bool has_shield;
@@ -967,6 +1096,7 @@ namespace EdgeCases
         }
 
         analysis.channel = detect_channel(target);
+        analysis.forced_movement = detect_forced_movement(target, source);
         analysis.windwalls = detect_windwalls();
         analysis.is_slowed = is_slowed(target);
         analysis.has_shield = has_spell_shield(target);
@@ -991,12 +1121,18 @@ namespace EdgeCases
         if (analysis.channel.is_channeling || analysis.channel.is_recalling)
             analysis.priority_multiplier *= 2.5f;  // High value interrupts
 
+        if (analysis.forced_movement.has_forced_movement)
+            analysis.priority_multiplier *= 2.8f;  // Forced movement = very predictable
+
         // CONFIDENCE MULTIPLIERS
         if (analysis.stasis.is_in_stasis)
             analysis.confidence_multiplier *= 1.5f;  // Very confident on stasis exit
 
         if (analysis.channel.is_channeling || analysis.channel.is_recalling)
             analysis.confidence_multiplier *= 1.3f;  // Target is stationary
+
+        if (analysis.forced_movement.has_forced_movement)
+            analysis.confidence_multiplier *= 1.4f;  // Forced movement is very predictable
 
         if (analysis.is_slowed)
             analysis.confidence_multiplier *= 1.15f;  // Reduced mobility

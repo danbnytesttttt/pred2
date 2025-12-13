@@ -62,6 +62,13 @@ namespace GeometricPred
     // Minion collision constants
     constexpr float MINION_SEARCH_RADIUS = 150.f;  // Search radius around spell path
     constexpr float MINION_HITBOX_RADIUS = 65.f;   // Average minion collision radius
+    constexpr float MINION_RELEVANCE_RANGE = 2000.f;  // Only check minions within this range
+    constexpr float LANE_BASE_DPS = 50.f;          // Estimated minion + champion poke DPS
+    constexpr float TOWER_DPS = 250.f;             // Tower shot DPS estimate
+    constexpr float TOWER_AGGRO_RANGE = 900.f;     // Tower aggro/attack range
+
+    // AOE prediction constants
+    constexpr float AOE_MOVEMENT_BUFFER = 500.f;   // Extra range to account for target movement during cast
 
     // =========================================================================
     // ENUMS
@@ -1134,6 +1141,44 @@ namespace GeometricPred
             return result;
         }
 
+        // 7. FORCED MOVEMENT DETECTION (Charm, Taunt, Fear)
+        // These CCs force target to walk in predictable direction - very easy to hit
+        if (edge_analysis.forced_movement.has_forced_movement)
+        {
+            // Calculate arrival time
+            float time_to_impact = Utils::compute_arrival_time(
+                input.source->get_position(),
+                input.target->get_position(),
+                input.missile_speed,
+                input.cast_delay,
+                input.proc_delay
+            );
+
+            // Predict forced movement
+            float move_speed = input.target->get_move_speed();
+            float movement_time = std::min(time_to_impact, edge_analysis.forced_movement.duration_remaining);
+            float movement_distance = move_speed * movement_time;
+
+            // Target walks in forced direction
+            math::vector3 forced_pos = input.target->get_server_position() +
+                edge_analysis.forced_movement.forced_direction * movement_distance;
+
+            result.cast_position = forced_pos;
+            result.predicted_position = forced_pos;
+            result.hit_chance = HitChance::VeryHigh;  // Very predictable movement
+            result.should_cast = true;
+            result.hit_chance_float = 0.92f;  // Slightly lower than guaranteed (they might flash)
+
+            if (edge_analysis.forced_movement.is_charm)
+                result.edge_case_type = "charm";
+            else if (edge_analysis.forced_movement.is_taunt)
+                result.edge_case_type = "taunt";
+            else if (edge_analysis.forced_movement.is_fear)
+                result.edge_case_type = "fear";
+
+            return result;
+        }
+
         // =======================================================================================
         // NORMAL PREDICTION (Linear path following + geometric TTE)
         // =======================================================================================
@@ -1699,7 +1744,7 @@ namespace GeometricPred
 
             // Skip enemies out of range
             float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
-            if (dist > spell_range + 500.f)  // +500 for movement during cast
+            if (dist > spell_range + AOE_MOVEMENT_BUFFER)  // Account for movement during cast
                 continue;
 
             // Get individual prediction
@@ -1752,10 +1797,16 @@ namespace GeometricPred
         math::vector3 to_centroid = centroid - source_pos;
         float dist_to_centroid = Utils::magnitude_2d(to_centroid);
 
-        if (dist_to_centroid > spell_range)
+        // CRITICAL FIX: Prevent division by zero if centroid == source
+        if (dist_to_centroid < EPSILON)
+        {
+            // All enemies at source position - cast at max range in arbitrary direction
+            centroid = source_pos + math::vector3(spell_range, 0.f, 0.f);
+        }
+        else if (dist_to_centroid > spell_range)
         {
             // Normalize and scale to max range
-            to_centroid = to_centroid / dist_to_centroid;  // Normalize (2D would be better but this is safe)
+            to_centroid = to_centroid / dist_to_centroid;  // Safe - dist_to_centroid > 0
             centroid = source_pos + to_centroid * spell_range;
         }
 
