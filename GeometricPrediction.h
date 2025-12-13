@@ -55,15 +55,12 @@ namespace GeometricPred
     // Path prediction - use SDK data, no arbitrary heuristics
 
     // Minion collision constants
-    constexpr float MINION_SEARCH_RADIUS = 150.f;  // Search radius around spell path
-    constexpr float MINION_HITBOX_RADIUS = 65.f;   // Average minion collision radius
-    constexpr float MINION_RELEVANCE_RANGE = 2000.f;  // Only check minions within this range
-    constexpr float LANE_BASE_DPS = 50.f;          // Estimated minion + champion poke DPS
-    constexpr float TOWER_DPS = 250.f;             // Tower shot DPS estimate
-    constexpr float TOWER_AGGRO_RANGE = 900.f;     // Tower aggro/attack range
+    constexpr float MINION_SEARCH_RADIUS = 150.f;  // Search radius around spell path (algorithm parameter)
+    constexpr float MINION_RELEVANCE_RANGE = 2000.f;  // Only check minions within this range (performance optimization)
+    constexpr float LANE_BASE_DPS = 50.f;          // Fallback DPS estimate when health prediction SDK unavailable
 
-    // AOE prediction constants
-    constexpr float AOE_MOVEMENT_BUFFER = 500.f;   // Extra range to account for target movement during cast
+    // AOE prediction - calculate movement buffer based on spell parameters
+    constexpr float AOE_MAX_MOVE_SPEED = 450.f;  // Assume max 450 MS for range filtering (high but not unrealistic)
 
     // =========================================================================
     // ENUMS
@@ -475,8 +472,9 @@ namespace GeometricPred
                 math::vector3 closest_point = spell_start + spell_dir * proj_length;
                 float lateral_dist = distance_2d(minion_pos, closest_point);
 
-                // Check collision: spell radius + minion hitbox
-                float collision_radius = spell_width * 0.5f + MINION_HITBOX_RADIUS;
+                // Check collision: spell radius + actual minion bounding radius from SDK
+                float minion_radius = minion->get_bounding_radius();
+                float collision_radius = spell_width * 0.5f + minion_radius;
                 if (lateral_dist < collision_radius)
                 {
                     return true;  // Minion blocks the spell
@@ -1519,15 +1517,20 @@ namespace GeometricPred
         std::vector<math::vector3> predicted_positions;
         std::vector<float> hit_chances;
 
+        // Calculate movement buffer based on spell parameters
+        // Buffer = max_move_speed * (cast_delay + max_travel_time)
+        float max_travel_time = (missile_speed > 0.f) ? (spell_range / missile_speed) : 0.f;
+        float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
+
         auto enemies = g_sdk->object_manager->get_enemy_heroes();
         for (auto* enemy : enemies)
         {
             if (!enemy || !enemy->is_valid() || enemy->is_dead())
                 continue;
 
-            // Skip enemies out of range
+            // Skip enemies out of range (accounting for movement during cast + travel)
             float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
-            if (dist > spell_range + AOE_MOVEMENT_BUFFER)  // Account for movement during cast
+            if (dist > spell_range + movement_buffer)
                 continue;
 
             // Get individual prediction
@@ -1667,15 +1670,19 @@ namespace GeometricPred
         std::vector<math::vector3> predicted_positions;
         std::vector<float> hit_chances;
 
+        // Calculate movement buffer based on spell parameters
+        float max_travel_time = (missile_speed > 0.f) ? (spell_range / missile_speed) : 0.f;
+        float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
+
         auto enemies = g_sdk->object_manager->get_enemy_heroes();
         for (auto* enemy : enemies)
         {
             if (!enemy || !enemy->is_valid() || enemy->is_dead())
                 continue;
 
-            // Skip enemies out of range
+            // Skip enemies out of range (accounting for movement during cast + travel)
             float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
-            if (dist > spell_range + spell_width + AOE_MOVEMENT_BUFFER)
+            if (dist > spell_range + spell_width + movement_buffer)
                 continue;
 
             // Get individual prediction
@@ -1829,6 +1836,10 @@ namespace GeometricPred
         std::vector<math::vector3> predicted_positions;
         std::vector<float> hit_chances;
 
+        // Calculate movement buffer based on spell parameters
+        float max_travel_time = (missile_speed > 0.f) ? (spell_range / missile_speed) : 0.f;
+        float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
+
         auto enemies = g_sdk->object_manager->get_enemy_heroes();
         for (auto* enemy : enemies)
         {
@@ -1836,7 +1847,7 @@ namespace GeometricPred
                 continue;
 
             float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
-            if (dist > spell_range + AOE_MOVEMENT_BUFFER)
+            if (dist > spell_range + movement_buffer)
                 continue;
 
             PredictionInput input;
@@ -1988,6 +1999,10 @@ namespace GeometricPred
         std::vector<math::vector3> predicted_positions;
         std::vector<float> hit_chances;
 
+        // Calculate movement buffer based on spell parameters
+        float max_travel_time = (missile_speed > 0.f) ? ((max_range + line_length) / missile_speed) : 0.f;
+        float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
+
         auto enemies = g_sdk->object_manager->get_enemy_heroes();
         for (auto* enemy : enemies)
         {
@@ -1995,7 +2010,7 @@ namespace GeometricPred
                 continue;
 
             float dist = Utils::distance_2d(source->get_position(), enemy->get_position());
-            if (dist > max_range + line_length + AOE_MOVEMENT_BUFFER)
+            if (dist > max_range + line_length + movement_buffer)
                 continue;
 
             PredictionInput input;
