@@ -105,6 +105,18 @@ namespace PredictionTelemetry
         float actual_pos_z = 0.f;            // Where target actually was at arrival Z
         float prediction_error = 0.f;        // Distance between predicted and actual position
         float time_to_outcome = 0.f;         // Time from cast to outcome
+
+        // =====================================================================
+        // PATH STABILITY TRACKING (Priority 1)
+        // =====================================================================
+        float baseline_hc = 0.f;             // Hit chance before path stability adjustment
+        float persistence = 0.f;             // Path stability score [0, 1]
+        float calibrated_hc = 0.f;           // Hit chance after path stability calibration
+        float time_stable = 0.f;             // Time since meaningful intent change
+        float delta_theta = 0.f;             // Direction change (radians)
+        float delta_short_horizon = 0.f;     // Short-horizon position drift (units)
+        bool baseline_would_cast = false;    // Would baseline policy cast?
+        bool new_would_cast = false;         // Would new policy cast?
     };
 
     struct SessionStats

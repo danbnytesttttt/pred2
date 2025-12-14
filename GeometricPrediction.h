@@ -31,6 +31,7 @@
 #include "EdgeCaseDetection.h"
 #include "PredictionSettings.h"
 #include "PredictionTelemetry.h"
+#include "PathStability.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -179,6 +180,11 @@ namespace GeometricPred
         float stasis_wait_time;       // How long to wait before casting (stasis)
         float computation_time_ms;    // How long prediction took
 
+        // Path stability (Priority 1)
+        float baseline_hc;            // Hit chance before path stability
+        float persistence;            // Path stability score [0, 1]
+        float calibrated_hc;          // Hit chance after path stability
+
         // Debug
         const char* block_reason;     // Why we can't cast (if Impossible)
         const char* edge_case_type;   // "normal", "stasis", "dash", "channeling"
@@ -192,6 +198,7 @@ namespace GeometricPred
               is_clone_target(false), target_current_pos{}, predicted_position{},
               prediction_offset(0.f), distance_to_target(0.f), target_is_moving(false),
               target_velocity(0.f), stasis_wait_time(0.f), computation_time_ms(0.f),
+              baseline_hc(0.f), persistence(1.f), calibrated_hc(0.f),
               block_reason(nullptr), edge_case_type("normal")
         {}
     };
@@ -1703,6 +1710,43 @@ namespace GeometricPred
         // This provides much better granularity (0.39s vs 0.41s are now distinguishable)
         result.hit_chance_float = reaction_window_to_confidence(reaction_window);
 
+        // =====================================================================================
+        // PATH STABILITY CALIBRATION (Priority 1)
+        // =====================================================================================
+        // Apply path stability as a probability feature, not a hard gate.
+        // Adjusts hit chance based on how long target has been on consistent path.
+
+        float baseline_hc = result.hit_chance_float;  // Store baseline for telemetry
+        float persistence = 1.0f;  // Default to full confidence
+        float calibrated_hc = baseline_hc;  // Default to baseline
+
+        if (g_sdk && g_sdk->clock_facade)
+        {
+            float current_time = g_sdk->clock_facade->get_game_time();
+
+            // Update tracker and get persistence score
+            persistence = PathStability::update_and_get_persistence(
+                input.target,
+                time_to_impact,
+                current_time
+            );
+
+            // Apply calibration (contextual floor based on t_impact)
+            calibrated_hc = PathStability::apply_calibrator(
+                baseline_hc,
+                persistence,
+                time_to_impact
+            );
+        }
+
+        // Use calibrated hit chance for decision making
+        result.hit_chance_float = calibrated_hc;
+
+        // Store both for telemetry/analysis
+        result.baseline_hc = baseline_hc;
+        result.persistence = persistence;
+        result.calibrated_hc = calibrated_hc;
+
         // Champion script controls casting decision based on user-configured thresholds
         // Typical thresholds: Medium = 50%+, High = 75%+, VeryHigh = 90%+
         // System provides hit_chance and hit_chance_float - script decides when to cast
@@ -1764,6 +1808,27 @@ namespace GeometricPred
             event.final_arrival_time = result.time_to_impact;
             event.dodge_time = result.reaction_window;
             event.effective_move_speed = move_speed;
+
+            // Path stability data (Priority 1)
+            event.baseline_hc = result.baseline_hc;
+            event.persistence = result.persistence;
+            event.calibrated_hc = result.calibrated_hc;
+
+            // Get tracker for detailed metrics
+            auto* tracker = PathStability::get_tracker(input.target);
+            if (tracker)
+            {
+                event.time_stable = tracker->time_since_meaningful_change;
+                event.delta_theta = tracker->get_delta_theta();
+                event.delta_short_horizon = tracker->get_delta_short_horizon();
+            }
+
+            // Decision tracking (baseline vs new)
+            // Note: Actual cast decision is made by champion script based on threshold
+            // We log what both policies would recommend at typical 75% threshold
+            constexpr float TYPICAL_THRESHOLD = 0.75f;
+            event.baseline_would_cast = (result.baseline_hc >= TYPICAL_THRESHOLD);
+            event.new_would_cast = (result.calibrated_hc >= TYPICAL_THRESHOLD);
 
             PredictionTelemetry::TelemetryLogger::log_prediction(event);
         }
