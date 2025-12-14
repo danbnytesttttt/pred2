@@ -45,21 +45,25 @@ namespace PathStability
         {}
 
         /**
-         * Check if intent has changed meaningfully (with hysteresis).
+         * Check if intent has changed meaningfully (with hysteresis + cumulative drift detection).
          * Uses both direction change and short-horizon drift.
+         *
+         * @param prev - Previous frame's intent (for frame-to-frame comparison)
+         * @param ref - Reference intent from last reset (for cumulative drift detection)
          */
-        bool has_changed_meaningfully(const IntentSignature& prev) const
+        bool has_changed_meaningfully(const IntentSignature& prev, const IntentSignature& ref) const
         {
             if (!is_valid || !prev.is_valid)
                 return false;
 
-            // Direction change (angle between unit vectors)
-            float dot = first_segment_dir.dot(prev.first_segment_dir);
-            dot = std::clamp(dot, -1.f, 1.f);
-            float angle_change = std::acos(dot);
+            // ===================================================================
+            // FRAME-TO-FRAME CHANGE (for immediate direction shifts)
+            // ===================================================================
+            float dot_prev = first_segment_dir.dot(prev.first_segment_dir);
+            dot_prev = std::clamp(dot_prev, -1.f, 1.f);
+            float angle_change_prev = std::acos(dot_prev);
 
-            // Short-horizon position drift
-            float pos_drift = short_horizon_pos.distance(prev.short_horizon_pos);
+            float pos_drift_prev = short_horizon_pos.distance(prev.short_horizon_pos);
 
             // Hysteresis thresholds
             constexpr float ANGLE_SMALL = 25.f * (3.14159f / 180.f);  // 25 degrees
@@ -67,15 +71,37 @@ namespace PathStability
             constexpr float DRIFT_SMALL = 30.f;  // units
             constexpr float DRIFT_BIG = 80.f;    // units
 
-            // Big change = definitely new intent
-            if (angle_change > ANGLE_BIG || pos_drift > DRIFT_BIG)
+            // ===================================================================
+            // CUMULATIVE DRIFT CHECK (prevents hysteresis lock-in on gradual rotation)
+            // ===================================================================
+            if (ref.is_valid)
+            {
+                float dot_ref = first_segment_dir.dot(ref.first_segment_dir);
+                dot_ref = std::clamp(dot_ref, -1.f, 1.f);
+                float angle_change_ref = std::acos(dot_ref);
+
+                float pos_drift_ref = short_horizon_pos.distance(ref.short_horizon_pos);
+
+                // If cumulative drift from reference exceeds BIG threshold, reset
+                // This catches gradual rotation (e.g., 0° -> 35° -> 70° over time)
+                if (angle_change_ref > ANGLE_BIG || pos_drift_ref > DRIFT_BIG)
+                    return true;
+            }
+
+            // ===================================================================
+            // FRAME-TO-FRAME HYSTERESIS (filters micro-jitter)
+            // ===================================================================
+
+            // Big immediate change = definitely new intent
+            if (angle_change_prev > ANGLE_BIG || pos_drift_prev > DRIFT_BIG)
                 return true;
 
-            // Small change = definitely same intent
-            if (angle_change < ANGLE_SMALL && pos_drift < DRIFT_SMALL)
+            // Small immediate change = definitely same intent
+            if (angle_change_prev < ANGLE_SMALL && pos_drift_prev < DRIFT_SMALL)
                 return false;
 
-            // Medium change = stay with previous decision (hysteresis)
+            // Medium change = hysteresis (stay with previous decision)
+            // NOTE: Cumulative check above prevents lock-in
             return false;
         }
     };
@@ -89,6 +115,7 @@ namespace PathStability
     public:
         IntentSignature current_intent;
         IntentSignature previous_intent;
+        IntentSignature reference_intent;   // Intent at last reset (for cumulative drift detection)
 
         float time_since_meaningful_change;  // Time intent has been stable
         float last_update_time;
@@ -153,6 +180,7 @@ namespace PathStability
                 time_since_meaningful_change = 0.f;
                 current_intent = IntentSignature();  // Clear signature
                 previous_intent = IntentSignature();
+                reference_intent = IntentSignature();
             }
 
             // Reset on death (includes respawn detection)
@@ -161,6 +189,7 @@ namespace PathStability
                 time_since_meaningful_change = 0.f;
                 current_intent = IntentSignature();
                 previous_intent = IntentSignature();
+                reference_intent = IntentSignature();
             }
 
             // Reset on large gap (>2s since last update = target was out of range/vision)
@@ -170,6 +199,7 @@ namespace PathStability
                 time_since_meaningful_change = 0.f;
                 current_intent = IntentSignature();
                 previous_intent = IntentSignature();
+                reference_intent = IntentSignature();
             }
 
             // Update state tracking
@@ -192,10 +222,11 @@ namespace PathStability
             if (just_exited_windup)
             {
                 // Check if direction changed meaningfully post-windup
-                if (current_intent.has_changed_meaningfully(pre_windup_intent))
+                if (current_intent.has_changed_meaningfully(pre_windup_intent, reference_intent))
                 {
                     // Meaningful intent change after windup - reset stability
                     time_since_meaningful_change = 0.f;
+                    reference_intent = current_intent;  // Update reference to new intent
                 }
                 // else: direction consistent, don't reset
             }
@@ -216,10 +247,11 @@ namespace PathStability
             else
             {
                 // Normal stability accumulation
-                if (current_intent.has_changed_meaningfully(previous_intent))
+                if (current_intent.has_changed_meaningfully(previous_intent, reference_intent))
                 {
-                    // Intent changed - reset timer
+                    // Intent changed - reset timer and update reference
                     time_since_meaningful_change = 0.f;
+                    reference_intent = current_intent;  // Update reference to new intent
                 }
                 else
                 {

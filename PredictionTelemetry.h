@@ -700,13 +700,15 @@ namespace PredictionTelemetry
                         // Classify miss reason based on distance
                         if (miss_distance > effective_radius * 3.0f)
                         {
-                            // Very far = likely path changed or dashed
+                            // Far miss (>3x radius) = likely path changed significantly or target dashed
                             reason = PredictionEvent::MissReason::PATH_CHANGED;
                         }
                         else
                         {
-                            // Close miss = probably minor path adjustment
-                            reason = PredictionEvent::MissReason::PATH_CHANGED;
+                            // Close miss (1-3x radius) = unclear reason (could be prediction error,
+                            // minor path adjustment, timing variance, etc.)
+                            // Mark as UNKNOWN to distinguish from far PATH_CHANGED misses
+                            reason = PredictionEvent::MissReason::UNKNOWN;
                         }
                     }
                 }
