@@ -299,10 +299,9 @@ namespace PathStability
                     if (seg_length > 50.f) // Non-trivial segment
                     {
                         math::vector3 dir = path[i] - current_pos;
-                        float mag = std::sqrt(dir.x * dir.x + dir.z * dir.z);
-                        // FIX P0-1: Use small epsilon instead of mag > 1.f to avoid div-by-zero
-                        // SDK distance() is also XZ-only, so seg_length and mag measure same projection
+                        // seg_length is XZ distance (SDK). mag is same projection; epsilon is div-by-zero guard.
                         // League movement/prediction is XZ-plane. Y is elevation and ignored for intent.
+                        float mag = std::sqrt(dir.x * dir.x + dir.z * dir.z);
                         if (mag > 0.1f)  // 10x SDK comparison epsilon, avoid jitter
                         {
                             sig.first_segment_dir = math::vector3(dir.x / mag, 0.f, dir.z / mag);
