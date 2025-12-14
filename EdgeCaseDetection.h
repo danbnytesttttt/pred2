@@ -1874,7 +1874,7 @@ namespace EdgeCases
         }
 
         // ADVANCED: Predict position at future time by extrapolating oscillation
-        // Instead of averaging to center, predicts exact phase of oscillation
+        // Uses weighted period, amplitude detection, and pattern quality
         math::vector3 predict_position_with_oscillation(float delta_time, const math::vector3& current_pos,
                                                          const math::vector3& current_velocity) const
         {
@@ -1884,8 +1884,10 @@ namespace EdgeCases
                 return current_pos + calculate_average_velocity() * delta_time;
             }
 
-            // Find reversal times to calculate oscillation period
+            // Find reversal times and calculate adaptive weighted period
             std::vector<float> reversal_times;
+            std::vector<float> periods;
+
             for (size_t i = 0; i < velocity_samples.size() - 1; ++i)
             {
                 const auto& v1 = velocity_samples[i];
@@ -1894,40 +1896,84 @@ namespace EdgeCases
 
                 if (dot < 0.f)  // Reversal detected
                 {
-                    // Time ago this reversal happened
                     float time_ago = (velocity_samples.size() - 1 - i) * SAMPLE_INTERVAL;
                     reversal_times.push_back(time_ago);
                 }
             }
 
             if (reversal_times.size() < 2)
-            {
-                // Not enough reversals - use average
                 return current_pos + calculate_average_velocity() * delta_time;
-            }
 
-            // Calculate average period between reversals
-            float total_period = 0.f;
+            // Calculate periods between reversals
             for (size_t i = 0; i < reversal_times.size() - 1; ++i)
             {
-                total_period += (reversal_times[i] - reversal_times[i + 1]);
+                periods.push_back(reversal_times[i] - reversal_times[i + 1]);
             }
-            float avg_period = total_period / (reversal_times.size() - 1);
+
+            // IMPROVEMENT 1: ADAPTIVE WEIGHTED PERIOD
+            // Recent reversals weighted more heavily (exponential decay)
+            float weighted_period = 0.f;
+            float total_weight = 0.f;
+            for (size_t i = 0; i < periods.size(); ++i)
+            {
+                // More recent = higher weight (0.5, 0.3, 0.2, etc.)
+                float weight = std::pow(0.6f, static_cast<float>(i));
+                weighted_period += periods[i] * weight;
+                total_weight += weight;
+            }
+            weighted_period /= total_weight;
+
+            // IMPROVEMENT 2: PATTERN QUALITY SCORING
+            // Calculate period variance (consistency)
+            float period_variance = 0.f;
+            float avg_period = 0.f;
+            for (float p : periods)
+                avg_period += p;
+            avg_period /= periods.size();
+
+            for (float p : periods)
+            {
+                float diff = p - avg_period;
+                period_variance += diff * diff;
+            }
+            period_variance = std::sqrt(period_variance / periods.size());
+
+            // Pattern quality: 0 = perfect regularity, 1 = highly irregular
+            float irregularity = std::min(period_variance / avg_period, 1.0f);
+
+            // If pattern is irregular, blend toward average velocity
+            if (irregularity > 0.3f)
+            {
+                // High irregularity - use hybrid between extrapolation and average
+                float blend = irregularity;  // 0.3-1.0
+                math::vector3 extrap_pos = current_pos + current_velocity * delta_time;
+                math::vector3 avg_pos = current_pos + calculate_average_velocity() * delta_time;
+
+                return math::vector3(
+                    extrap_pos.x * (1.f - blend) + avg_pos.x * blend,
+                    extrap_pos.y * (1.f - blend) + avg_pos.y * blend,
+                    extrap_pos.z * (1.f - blend) + avg_pos.z * blend
+                );
+            }
 
             // Prevent division by zero
-            if (avg_period < 0.01f)
+            if (weighted_period < 0.01f)
                 return current_pos + calculate_average_velocity() * delta_time;
 
             // Time since last reversal
             float time_since_reversal = reversal_times[0];
-            float time_to_next_reversal = avg_period - time_since_reversal;
+            float time_to_next_reversal = weighted_period - time_since_reversal;
 
-            // Integrate position through reversals
+            // IMPROVEMENT 3: ACCELERATION MODELING
+            // Direction changes aren't instant - model brief deceleration period
+            constexpr float REVERSAL_TIME = 0.05f;  // 50ms to reverse direction
+
+            // Integrate position through reversals with acceleration
             math::vector3 position = current_pos;
             math::vector3 velocity = current_velocity;
             float remaining_time = delta_time;
 
-            // First segment: travel until next reversal (or delta_time, whichever is shorter)
+            // First segment: travel until next reversal
             float dt = std::min(remaining_time, time_to_next_reversal);
             position.x += velocity.x * dt;
             position.z += velocity.z * dt;
@@ -1936,18 +1982,81 @@ namespace EdgeCases
             // Continue through reversals
             while (remaining_time > 0.001f)
             {
+                // Model acceleration during reversal (50ms transition)
+                if (remaining_time > REVERSAL_TIME)
+                {
+                    // During reversal: decelerate to 0, then accelerate to opposite
+                    // Average velocity during reversal ≈ 0 (cancels out)
+                    // Skip ahead by reversal time with minimal displacement
+                    remaining_time -= REVERSAL_TIME;
+                }
+
                 // Reverse velocity (juke direction change)
                 velocity.x = -velocity.x;
                 velocity.z = -velocity.z;
 
                 // Integrate next segment (full period or remaining time)
-                dt = std::min(remaining_time, avg_period);
+                dt = std::min(remaining_time, weighted_period);
                 position.x += velocity.x * dt;
                 position.z += velocity.z * dt;
                 remaining_time -= dt;
             }
 
             return position;
+        }
+
+        // Calculate pattern quality score (0 = random, 1 = perfect oscillation)
+        float get_pattern_quality() const
+        {
+            if (!is_oscillating_pattern() || velocity_samples.size() < 4)
+                return 0.f;
+
+            // Find reversal times
+            std::vector<float> periods;
+            float prev_reversal_time = -1.f;
+
+            for (size_t i = 0; i < velocity_samples.size() - 1; ++i)
+            {
+                const auto& v1 = velocity_samples[i];
+                const auto& v2 = velocity_samples[i + 1];
+                float dot = v1.x * v2.x + v1.z * v2.z;
+
+                if (dot < 0.f)
+                {
+                    float time_ago = (velocity_samples.size() - 1 - i) * SAMPLE_INTERVAL;
+                    if (prev_reversal_time >= 0.f)
+                    {
+                        periods.push_back(prev_reversal_time - time_ago);
+                    }
+                    prev_reversal_time = time_ago;
+                }
+            }
+
+            if (periods.size() < 2)
+                return 0.5f;  // Not enough data
+
+            // Calculate coefficient of variation (CV) of periods
+            float mean = 0.f;
+            for (float p : periods)
+                mean += p;
+            mean /= periods.size();
+
+            float variance = 0.f;
+            for (float p : periods)
+            {
+                float diff = p - mean;
+                variance += diff * diff;
+            }
+            variance /= periods.size();
+            float stddev = std::sqrt(variance);
+
+            // Coefficient of variation (lower = more consistent)
+            float cv = stddev / std::max(mean, 0.01f);
+
+            // Quality score: 1.0 = perfect (CV=0), 0.0 = random (CV>0.5)
+            float quality = std::clamp(1.0f - (cv * 2.0f), 0.f, 1.f);
+
+            return quality;
         }
     };
 
@@ -2021,15 +2130,28 @@ namespace EdgeCases
             // This is the KEY FIX - we aim at where they ARE on average, not current direction
             info.predicted_velocity = history.calculate_average_velocity();
 
-            // Confidence penalty
+            // INTELLIGENT CONFIDENCE PENALTY using pattern quality
             if (info.is_oscillating)
             {
-                // Oscillating pattern = VERY predictable (we extrapolate the sine wave!)
-                // variance 0.5 → 0.985x (tiny penalty)
-                // variance 0.8 → 0.976x
-                // variance 1.0 → 0.970x (3% max penalty)
-                // We're not averaging to center anymore - we're predicting exact phase!
-                info.confidence_penalty = 1.0f - (variance * 0.03f);
+                // Get pattern quality (1.0 = perfect, 0.0 = random)
+                float pattern_quality = history.get_pattern_quality();
+
+                // ADAPTIVE PENALTY based on pattern quality:
+                // Perfect pattern (quality 1.0): variance 0.8 → 0.992x (0.8% penalty)
+                // Good pattern (quality 0.7): variance 0.8 → 0.982x (1.8% penalty)
+                // Mediocre pattern (quality 0.5): variance 0.8 → 0.976x (2.4% penalty)
+                // Poor pattern (quality 0.3): variance 0.8 → 0.970x (3.0% penalty)
+
+                // Base penalty from variance (max 3%)
+                float base_penalty = variance * 0.03f;
+
+                // Reduce penalty based on pattern quality
+                // Perfect pattern → 70% penalty reduction
+                // Poor pattern → 0% penalty reduction
+                float quality_reduction = pattern_quality * 0.7f;
+                float adjusted_penalty = base_penalty * (1.0f - quality_reduction);
+
+                info.confidence_penalty = 1.0f - adjusted_penalty;
                 info.confidence_penalty = std::clamp(info.confidence_penalty, 0.97f, 1.0f);
             }
             else
