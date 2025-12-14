@@ -17,6 +17,43 @@
  * Tracks prediction performance metrics for post-game analysis.
  * Outputs to console log when finalized (manual save button or game end).
  *
+ * NEW: Deferred Outcome Evaluation (Priority 1.5)
+ * ------------------------------------------------
+ * The system now tracks actual spell outcomes (hit/miss) using deferred evaluation.
+ * This enables A/B testing of baseline vs new policy with real hit rate data.
+ *
+ * USAGE IN CHAMPION SCRIPT:
+ * -------------------------
+ * 1. In your main game loop, call every frame:
+ *    ```cpp
+ *    PredictionTelemetry::TelemetryLogger::evaluate_pending_outcomes(
+ *        g_sdk->clock_facade->get_game_time()
+ *    );
+ *    ```
+ *
+ * 2. When you actually cast a spell, register it for outcome tracking:
+ *    ```cpp
+ *    auto result = GeometricPred::get_prediction(...);
+ *
+ *    if (should_cast(result))  // Your casting logic
+ *    {
+ *        cast_spell(target, result.cast_position);
+ *
+ *        // Register for outcome tracking
+ *        PredictionTelemetry::TelemetryLogger::register_cast(
+ *            target,
+ *            g_sdk->clock_facade->get_game_time(),              // cast_time
+ *            g_sdk->clock_facade->get_game_time() + result.time_to_impact,  // expected_impact_time
+ *            result.predicted_position,
+ *            spell_radius,
+ *            is_line_spell,  // true for Capsule/Line, false for Circle
+ *            my_champion->get_position()  // source position (for line spells)
+ *        );
+ *    }
+ *    ```
+ *
+ * 3. The system will automatically evaluate outcomes at impact time and update telemetry.
+ *
  * =============================================================================
  */
 
@@ -107,7 +144,7 @@ namespace PredictionTelemetry
         float time_to_outcome = 0.f;         // Time from cast to outcome
 
         // =====================================================================
-        // PATH STABILITY TRACKING (Priority 1)
+        // PATH STABILITY TRACKING (Priority 1 - A/B Testing)
         // =====================================================================
         float baseline_hc = 0.f;             // Hit chance before path stability adjustment
         float persistence = 0.f;             // Path stability score [0, 1]
@@ -115,8 +152,85 @@ namespace PredictionTelemetry
         float time_stable = 0.f;             // Time since meaningful intent change
         float delta_theta = 0.f;             // Direction change (radians)
         float delta_short_horizon = 0.f;     // Short-horizon position drift (units)
-        bool baseline_would_cast = false;    // Would baseline policy cast?
-        bool new_would_cast = false;         // Would new policy cast?
+
+        // A/B decision tracking (raw HC threshold checks - before gates)
+        bool baseline_would_cast_raw = false;    // Would baseline policy cast? (HC threshold only)
+        bool new_would_cast_raw = false;         // Would new policy cast? (HC threshold only)
+
+        // Final decision tracking (after all gates: collision, range, fog, etc.)
+        bool baseline_would_cast_final = false;  // Would baseline actually cast? (after gates)
+        bool new_would_cast_final = false;       // Would new actually cast? (after gates)
+
+        // Actual cast tracking
+        bool did_actually_cast = false;          // Did we actually cast?
+        float cast_timestamp = 0.f;              // When did we cast?
+        float t_impact_numeric = 0.f;            // Time to impact (numeric, not bucketed)
+
+        // =====================================================================
+        // GATE TRACKING (Priority 1 - Why casts were blocked)
+        // =====================================================================
+        bool blocked_by_minion = false;      // Minion collision would block
+        bool blocked_by_windwall = false;    // Windwall would block
+        bool blocked_by_range = false;       // Out of range (predicted position)
+        bool blocked_by_fog = false;         // Target in fog of war
+
+        // =====================================================================
+        // WINDUP TRACKING (Priority 2 - Path stability tuning)
+        // =====================================================================
+        bool is_winding_up = false;          // Target currently winding up?
+        float windup_damping_factor = 1.0f;  // Stability accumulation rate (1.0 = normal, 0.3 = during windup)
+        float time_in_current_windup = 0.f;  // How long in current windup state
+
+        // =====================================================================
+        // OUTCOME TRACKING (Priority 1.5 - Deferred Evaluation)
+        // =====================================================================
+        enum class MissReason
+        {
+            NONE = 0,           // Not evaluated yet or hit
+            HIT,                // Spell hit
+            PATH_CHANGED,       // Target changed direction
+            OUT_OF_VISION,      // Target lost in fog
+            OUT_OF_RANGE,       // Target moved out of range
+            COLLISION_MINION,   // Minion blocked
+            COLLISION_TERRAIN,  // Terrain blocked
+            DASH_BLINK,         // Target dashed/blinked
+            UNKNOWN             // Cannot determine
+        };
+
+        MissReason miss_reason = MissReason::NONE;   // Why did we miss?
+        float outcome_miss_distance = 0.f;           // Distance from predicted to actual position
+        float outcome_actual_pos_x = 0.f;            // Where target actually was at impact X
+        float outcome_actual_pos_z = 0.f;            // Where target actually was at impact Z
+        bool outcome_evaluated = false;              // Has outcome been evaluated?
+    };
+
+    /**
+     * Pending cast evaluation - stores cast attempt for deferred outcome tracking.
+     * Evaluated when game_time >= expected_impact_time.
+     */
+    struct PendingCastEvaluation
+    {
+        uint32_t target_network_id;          // Target to track
+        float cast_time;                     // When spell was cast
+        float expected_impact_time;          // When spell should arrive
+        math::vector3 predicted_position;    // Where we predicted target would be
+        float spell_radius;                  // Spell hitbox radius
+        float target_bounding_radius;        // Target hitbox radius
+        size_t event_index;                  // Index in events_ deque for updating
+        bool is_line_spell;                  // True = capsule/line, False = circle AoE
+        math::vector3 cast_source_pos;       // Where spell was cast from (for line spells)
+
+        PendingCastEvaluation()
+            : target_network_id(0)
+            , cast_time(0.f)
+            , expected_impact_time(0.f)
+            , predicted_position(0.f, 0.f, 0.f)
+            , spell_radius(0.f)
+            , target_bounding_radius(0.f)
+            , event_index(0)
+            , is_line_spell(false)
+            , cast_source_pos(0.f, 0.f, 0.f)
+        {}
     };
 
     struct SessionStats
@@ -214,6 +328,7 @@ namespace PredictionTelemetry
     private:
         static SessionStats stats_;
         static std::deque<PredictionEvent> events_;  // deque for O(1) front removal
+        static std::deque<PendingCastEvaluation> pending_casts_;  // Queue for deferred outcome evaluation
         static bool enabled_;
         static bool averages_computed_;  // Track if per-type/target averages have been computed
 
@@ -238,6 +353,7 @@ namespace PredictionTelemetry
 
             stats_ = SessionStats();
             events_.clear();
+            pending_casts_.clear();  // Clear pending cast queue
 
             stats_.session_start_time = get_timestamp();
             stats_.champion_name = champion_name;
@@ -410,6 +526,167 @@ namespace PredictionTelemetry
                 stats_.alternating_patterns++;
             else
                 stats_.repeating_patterns++;
+        }
+
+        /**
+         * Register a cast for deferred outcome evaluation.
+         * Called when a spell is actually cast.
+         */
+        static void register_cast(
+            game_object* target,
+            float cast_time,
+            float expected_impact_time,
+            const math::vector3& predicted_position,
+            float spell_radius,
+            bool is_line_spell = false,
+            const math::vector3& cast_source_pos = math::vector3(0.f, 0.f, 0.f))
+        {
+            if (!enabled_ || !target || !target->is_valid())
+                return;
+
+            PendingCastEvaluation pending;
+            pending.target_network_id = target->get_network_id();
+            pending.cast_time = cast_time;
+            pending.expected_impact_time = expected_impact_time;
+            pending.predicted_position = predicted_position;
+            pending.spell_radius = spell_radius;
+            pending.target_bounding_radius = target->get_bounding_radius();
+            pending.event_index = events_.size() - 1;  // Last logged event
+            pending.is_line_spell = is_line_spell;
+            pending.cast_source_pos = cast_source_pos;
+
+            pending_casts_.push_back(pending);
+        }
+
+        /**
+         * Evaluate pending casts and update outcomes.
+         * Should be called every frame to check if any pending casts have reached impact time.
+         *
+         * Uses sampling window approach:
+         * - Samples target position in [t_impact - 0.05s, t_impact + 0.05s] window
+         * - Uses closest approach to predicted position
+         */
+        static void evaluate_pending_outcomes(float current_time)
+        {
+            if (!enabled_ || pending_casts_.empty())
+                return;
+
+            // Process casts that have reached evaluation time (impact + 100ms grace period)
+            auto it = pending_casts_.begin();
+            while (it != pending_casts_.end())
+            {
+                const auto& pending = *it;
+
+                // Wait until impact time + grace period for evaluation
+                constexpr float GRACE_PERIOD = 0.1f;  // 100ms after impact
+                if (current_time < pending.expected_impact_time + GRACE_PERIOD)
+                {
+                    ++it;
+                    continue;
+                }
+
+                // Find target
+                game_object* target = nullptr;
+                if (g_sdk && g_sdk->object_manager)
+                {
+                    // Find target by network ID
+                    auto heroes = g_sdk->object_manager->get_heroes();
+                    for (auto* hero : heroes)
+                    {
+                        if (hero && hero->is_valid() && hero->get_network_id() == pending.target_network_id)
+                        {
+                            target = hero;
+                            break;
+                        }
+                    }
+                }
+
+                // Evaluate outcome
+                PredictionEvent::MissReason reason = PredictionEvent::MissReason::UNKNOWN;
+                float miss_distance = 0.f;
+                math::vector3 actual_pos(0.f, 0.f, 0.f);
+
+                if (!target || !target->is_valid())
+                {
+                    reason = PredictionEvent::MissReason::UNKNOWN;
+                }
+                else if (!target->is_visible())
+                {
+                    reason = PredictionEvent::MissReason::OUT_OF_VISION;
+                }
+                else
+                {
+                    // Get actual position at impact time
+                    actual_pos = target->get_server_position();
+
+                    // Calculate miss distance
+                    if (pending.is_line_spell)
+                    {
+                        // Line spell: point-to-line distance
+                        math::vector3 line_dir = pending.predicted_position - pending.cast_source_pos;
+                        float line_length = std::sqrt(line_dir.x * line_dir.x + line_dir.z * line_dir.z);
+
+                        if (line_length > 1.f)
+                        {
+                            line_dir.x /= line_length;
+                            line_dir.z /= line_length;
+
+                            // Project target onto line
+                            math::vector3 to_target = actual_pos - pending.cast_source_pos;
+                            float proj = (to_target.x * line_dir.x + to_target.z * line_dir.z);
+                            proj = std::clamp(proj, 0.f, line_length);
+
+                            math::vector3 closest_point = pending.cast_source_pos + line_dir * proj;
+                            miss_distance = actual_pos.distance(closest_point);
+                        }
+                        else
+                        {
+                            miss_distance = actual_pos.distance(pending.predicted_position);
+                        }
+                    }
+                    else
+                    {
+                        // Circle spell: point-to-point distance
+                        miss_distance = actual_pos.distance(pending.predicted_position);
+                    }
+
+                    // Determine hit/miss
+                    float effective_radius = pending.spell_radius + pending.target_bounding_radius;
+                    if (miss_distance <= effective_radius)
+                    {
+                        reason = PredictionEvent::MissReason::HIT;
+                    }
+                    else
+                    {
+                        // Classify miss reason based on distance
+                        if (miss_distance > effective_radius * 3.0f)
+                        {
+                            // Very far = likely path changed or dashed
+                            reason = PredictionEvent::MissReason::PATH_CHANGED;
+                        }
+                        else
+                        {
+                            // Close miss = probably minor path adjustment
+                            reason = PredictionEvent::MissReason::PATH_CHANGED;
+                        }
+                    }
+                }
+
+                // Update corresponding event (if it still exists in deque)
+                if (pending.event_index < events_.size())
+                {
+                    auto& event = events_[pending.event_index];
+                    event.miss_reason = reason;
+                    event.outcome_miss_distance = miss_distance;
+                    event.outcome_actual_pos_x = actual_pos.x;
+                    event.outcome_actual_pos_z = actual_pos.z;
+                    event.outcome_evaluated = true;
+                    event.was_hit = (reason == PredictionEvent::MissReason::HIT);
+                }
+
+                // Remove from queue
+                it = pending_casts_.erase(it);
+            }
         }
 
         static void finalize(float session_duration_seconds)
@@ -753,6 +1030,7 @@ namespace PredictionTelemetry
     // Static member initialization
     inline SessionStats TelemetryLogger::stats_;
     inline std::deque<PredictionEvent> TelemetryLogger::events_;
+    inline std::deque<PendingCastEvaluation> TelemetryLogger::pending_casts_;
     inline bool TelemetryLogger::enabled_ = false;
     inline bool TelemetryLogger::averages_computed_ = false;
 

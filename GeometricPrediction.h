@@ -1813,6 +1813,7 @@ namespace GeometricPred
             event.baseline_hc = result.baseline_hc;
             event.persistence = result.persistence;
             event.calibrated_hc = result.calibrated_hc;
+            event.t_impact_numeric = time_to_impact;
 
             // Get tracker for detailed metrics
             auto* tracker = PathStability::get_tracker(input.target);
@@ -1821,14 +1822,41 @@ namespace GeometricPred
                 event.time_stable = tracker->time_since_meaningful_change;
                 event.delta_theta = tracker->get_delta_theta();
                 event.delta_short_horizon = tracker->get_delta_short_horizon();
+
+                // Windup tracking (Priority 2)
+                event.is_winding_up = input.target->is_winding_up() || input.target->is_channeling();
+                event.windup_damping_factor = event.is_winding_up ? 0.3f : 1.0f;
             }
 
-            // Decision tracking (baseline vs new)
-            // Note: Actual cast decision is made by champion script based on threshold
-            // We log what both policies would recommend at typical 75% threshold
+            // =====================================================================
+            // A/B DECISION TRACKING (Priority 1)
+            // =====================================================================
+            // Log both RAW HC decisions (threshold only) and FINAL decisions (after gates)
             constexpr float TYPICAL_THRESHOLD = 0.75f;
-            event.baseline_would_cast = (result.baseline_hc >= TYPICAL_THRESHOLD);
-            event.new_would_cast = (result.calibrated_hc >= TYPICAL_THRESHOLD);
+
+            // Raw decisions (HC threshold only, before gates)
+            event.baseline_would_cast_raw = (result.baseline_hc >= TYPICAL_THRESHOLD);
+            event.new_would_cast_raw = (result.calibrated_hc >= TYPICAL_THRESHOLD);
+
+            // Gate tracking
+            event.blocked_by_minion = result.minion_collision;
+            event.blocked_by_windwall = result.windwall_detected;
+
+            // Range check: predicted position must be within spell range
+            float predicted_distance = Utils::distance_2d(input.source->get_position(), result.predicted_position);
+            event.blocked_by_range = (predicted_distance > input.spell_range);
+
+            // Fog check: target must be visible
+            event.blocked_by_fog = !input.target->is_visible();
+
+            // Final decisions (after all gates)
+            bool passes_gates = !event.blocked_by_minion
+                             && !event.blocked_by_windwall
+                             && !event.blocked_by_range
+                             && !event.blocked_by_fog;
+
+            event.baseline_would_cast_final = event.baseline_would_cast_raw && passes_gates;
+            event.new_would_cast_final = event.new_would_cast_raw && passes_gates;
 
             PredictionTelemetry::TelemetryLogger::log_prediction(event);
         }
