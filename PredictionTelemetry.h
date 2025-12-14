@@ -4,6 +4,7 @@
 #include <vector>
 #include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <chrono>
 #include <sstream>
@@ -246,6 +247,11 @@ namespace PredictionTelemetry
         math::vector3 best_actual_pos = math::vector3(0.f, 0.f, 0.f);     // Target pos at best sample
         bool saw_target_visible = false;                 // Did we see target visible in any sample?
 
+        // S-2 FIX: Track which samples had visibility (bitmask)
+        // Prevents false HIT labels when target enters fog at impact time
+        // Bit 0 = sample -50ms, Bit 1 = sample 0ms (impact), Bit 2 = sample +50ms
+        uint8_t samples_with_visibility = 0;
+
         PendingCastEvaluation()
             : prediction_id(0)
             , target_network_id(0)
@@ -360,6 +366,7 @@ namespace PredictionTelemetry
         int stale_prediction_casts = 0;               // Cast >100ms after prediction
         int invalid_spell_radius = 0;                 // Spell radius out of bounds
         int time_rollback_events = 0;                 // Game time rolled backward
+        int duplicate_register_cast_calls = 0;        // Duplicate register_cast() with same prediction_id
     };
 
     class TelemetryLogger
@@ -375,6 +382,10 @@ namespace PredictionTelemetry
         // P0-A: Eviction-proof storage for cast events
         // Casts stored here cannot be evicted until outcome finalized
         static std::unordered_map<uint64_t, PredictionEvent> cast_events_;  // key = prediction_id
+
+        // S-3: Active pending IDs - prevents duplicate register_cast() calls
+        // prediction_id is a cast-unique key; registering it twice is always a bug
+        static std::unordered_set<uint64_t> active_pending_ids_;
 
         // Simple FNV-1a hash for champion names (32-bit)
         static uint32_t hash_champion_name(const std::string& name)
@@ -410,6 +421,7 @@ namespace PredictionTelemetry
             events_.clear();
             pending_casts_.clear();  // Clear pending cast queue
             cast_events_.clear();    // P0-A: Clear eviction-proof cast storage
+            active_pending_ids_.clear();  // S-3: Clear active pending IDs
             next_prediction_id_ = 1;     // Reset prediction ID counter
 
             // P0-D: Reset path stability trackers for new game
@@ -618,6 +630,14 @@ namespace PredictionTelemetry
             if (!enabled_ || !target || !target->is_valid() || prediction_id == 0)
                 return;
 
+            // S-3 FIX: Block duplicate register_cast() calls
+            // prediction_id is cast-unique; registering it twice is always a bug
+            if (active_pending_ids_.count(prediction_id) > 0)
+            {
+                stats_.duplicate_register_cast_calls++;
+                return;  // Abort - duplicate registration
+            }
+
             // Validation: Spell radius sanity check
             if (spell_radius < 1.f || spell_radius > 500.f)
             {
@@ -694,6 +714,9 @@ namespace PredictionTelemetry
             pending.cast_source_pos = cast_source_pos;
 
             pending_casts_.push_back(pending);
+
+            // S-3: Mark prediction_id as active
+            active_pending_ids_.insert(prediction_id);
         }
 
         /**
@@ -774,14 +797,20 @@ namespace PredictionTelemetry
             PredictionEvent::MissReason reason = PredictionEvent::MissReason::UNKNOWN;
             float effective_radius = pending.spell_radius + pending.target_bounding_radius;
 
-            if (!pending.saw_target_visible)
+            // S-2 FIX: Conservative labeling - require visibility at impact time (sample 1)
+            // Sample indices: 0 = -50ms, 1 = impact, 2 = +50ms
+            // Bit 1 = (1 << 1) = 0b010 = visibility at impact time
+            bool visible_at_impact = (pending.samples_with_visibility & (1 << 1)) != 0;
+
+            if (!visible_at_impact)
             {
-                // Target was never visible during any sample
+                // Target not visible at impact time - cannot confirm ground truth
+                // Even if visible in other samples, we don't have reliable data at actual impact
                 reason = PredictionEvent::MissReason::OUT_OF_VISION;
             }
             else if (pending.min_miss_distance <= effective_radius)
             {
-                // Hit: target was within effective radius in at least one sample
+                // Hit: target was within effective radius AND visible at impact
                 reason = PredictionEvent::MissReason::HIT;
             }
             else
@@ -811,6 +840,16 @@ namespace PredictionTelemetry
                 event.outcome_actual_pos_z = pending.best_actual_pos.z;
                 event.outcome_evaluated = true;
                 event.was_hit = (reason == PredictionEvent::MissReason::HIT);
+
+                // S-1 FIX: Finalize-then-erase pattern to prevent memory leak
+                // Persist to export buffer for final reporting
+                events_.push_back(event);
+
+                // CRITICAL: Remove from eviction-proof storage to prevent unbounded growth
+                cast_events_.erase(it);
+
+                // S-3: Remove from active pending IDs
+                active_pending_ids_.erase(pending.prediction_id);
             }
             else
             {
@@ -853,6 +892,7 @@ namespace PredictionTelemetry
                 if (current_time > pending.expected_impact_time + MAX_PENDING_DURATION)
                 {
                     // Timeout - finalize with whatever samples we have
+                    // Note: finalize_outcome() will remove from active_pending_ids_
                     finalize_outcome(pending);
                     it = pending_casts_.erase(it);
                     stats_.pending_casts_timed_out++;
@@ -904,6 +944,10 @@ namespace PredictionTelemetry
                         }
 
                         pending.saw_target_visible = true;
+
+                        // S-2 FIX: Track which sample had visibility (bitmask)
+                        // This enables conservative labeling (require visibility at impact)
+                        pending.samples_with_visibility |= (1 << pending.sample_index);
                     }
                 }
 
@@ -1333,6 +1377,7 @@ namespace PredictionTelemetry
     inline std::deque<PredictionEvent> TelemetryLogger::events_;
     inline std::deque<PendingCastEvaluation> TelemetryLogger::pending_casts_;
     inline std::unordered_map<uint64_t, PredictionEvent> TelemetryLogger::cast_events_;
+    inline std::unordered_set<uint64_t> TelemetryLogger::active_pending_ids_;
     inline uint64_t TelemetryLogger::next_prediction_id_ = 1;
     inline bool TelemetryLogger::enabled_ = false;
     inline bool TelemetryLogger::averages_computed_ = false;
