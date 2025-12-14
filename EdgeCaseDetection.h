@@ -1774,7 +1774,8 @@ namespace EdgeCases
      */
     struct MovementHistory
     {
-        static constexpr int MAX_SAMPLES = 8;   // Last 8 samples (~400ms window, captures full juke cycle)
+        static constexpr int MAX_SAMPLES = 30;  // Last 30 samples (~1.5s window for 5+ juke cycles)
+        static constexpr int MIN_SAMPLES_FOR_PREDICTION = 8;  // Need at least 400ms for initial detection
         static constexpr float SAMPLE_INTERVAL = 0.05f;  // 50ms between samples
 
         std::vector<math::vector3> velocity_samples;
@@ -2118,6 +2119,31 @@ namespace EdgeCases
             // This is the KEY FIX - we aim at where they ARE on average, not current direction
             info.predicted_velocity = history.calculate_average_velocity();
 
+            // SAMPLE-COUNT-BASED CONFIDENCE SCALING
+            // More samples = more juke cycles observed = higher confidence
+            // 8 samples (400ms) = minimum for detection, but low confidence (2 cycles)
+            // 15 samples (750ms) = medium confidence (3-4 cycles)
+            // 30 samples (1500ms) = high confidence (5-7 cycles)
+            float sample_confidence_multiplier = 1.0f;
+            int num_samples = history.velocity_samples.size();
+
+            if (num_samples < MovementHistory::MIN_SAMPLES_FOR_PREDICTION)
+            {
+                // Not enough data yet - very low confidence
+                sample_confidence_multiplier = 0.70f;
+            }
+            else if (num_samples < MovementHistory::MAX_SAMPLES)
+            {
+                // Gradually increase confidence as we observe more cycles
+                // 8 samples → 0.85x (cautious)
+                // 15 samples → 0.925x (getting confident)
+                // 30 samples → 1.0x (full confidence)
+                float progress = (num_samples - MovementHistory::MIN_SAMPLES_FOR_PREDICTION) /
+                                 (float)(MovementHistory::MAX_SAMPLES - MovementHistory::MIN_SAMPLES_FOR_PREDICTION);
+                sample_confidence_multiplier = 0.85f + (0.15f * progress);
+            }
+            // else: num_samples >= MAX_SAMPLES → multiplier stays 1.0x (full confidence)
+
             // INTELLIGENT CONFIDENCE PENALTY using pattern quality
             if (info.is_oscillating)
             {
@@ -2141,6 +2167,13 @@ namespace EdgeCases
 
                 info.confidence_penalty = 1.0f - adjusted_penalty;
                 info.confidence_penalty = std::clamp(info.confidence_penalty, 0.97f, 1.0f);
+
+                // Apply sample-count-based scaling
+                // Example: Perfect pattern with only 10 samples:
+                //   Pattern penalty: 0.992x
+                //   Sample multiplier: 0.864x
+                //   Combined: 0.857x (needs more observation time!)
+                info.confidence_penalty *= sample_confidence_multiplier;
             }
             else
             {
@@ -2150,6 +2183,9 @@ namespace EdgeCases
                 // variance 1.0 → 0.80x (20% max penalty)
                 info.confidence_penalty = 1.0f - (variance * 0.2f);
                 info.confidence_penalty = std::clamp(info.confidence_penalty, 0.80f, 1.0f);
+
+                // Apply sample-count-based scaling (even more important for random jitter!)
+                info.confidence_penalty *= sample_confidence_multiplier;
             }
         }
         else
