@@ -167,6 +167,8 @@ namespace PredictionTelemetry
         float cast_timestamp = 0.f;              // When did we cast?
         float t_impact_numeric = 0.f;            // Time to impact (numeric, not bucketed)
         float persistence_at_cast = 0.f;         // Persistence when actually cast (vs at prediction)
+        float prediction_age_ms = 0.f;           // How old was prediction when cast? (ms)
+        bool prediction_was_stale = false;       // Was prediction >100ms old at cast?
 
         // Cast-time gate snapshot (actual conditions when cast button pressed)
         bool blocked_by_minion_at_cast = false;
@@ -220,6 +222,8 @@ namespace PredictionTelemetry
     {
         uint64_t prediction_id;              // ID of prediction to update (joins with PredictionEvent)
         uint32_t target_network_id;          // Target to track
+        uint8_t target_team;                 // Target team (for network_id reuse validation)
+        uint32_t target_champion_hash;       // Target champion name hash (for reuse validation)
         float cast_time;                     // When spell was cast
         float expected_impact_time;          // When spell should arrive
         math::vector3 predicted_position;    // Where we predicted target would be
@@ -245,6 +249,8 @@ namespace PredictionTelemetry
         PendingCastEvaluation()
             : prediction_id(0)
             , target_network_id(0)
+            , target_team(0)
+            , target_champion_hash(0)
             , cast_time(0.f)
             , expected_impact_time(0.f)
             , predicted_position(0.f, 0.f, 0.f)
@@ -343,6 +349,17 @@ namespace PredictionTelemetry
         std::string session_start_time;
         std::string champion_name;
         float session_duration_seconds = 0.f;
+
+        // =====================================================================
+        // DATA INTEGRITY COUNTERS (Red-Team Audit)
+        // =====================================================================
+        int outcomes_lost_to_event_eviction = 0;      // Events evicted before outcome finalized
+        int pending_casts_timed_out = 0;              // Pending casts that exceeded timeout
+        int prediction_id_target_mismatches = 0;      // Wrong target for prediction_id
+        int network_id_reuse_detected = 0;            // Network ID recycled (death/respawn)
+        int stale_prediction_casts = 0;               // Cast >100ms after prediction
+        int invalid_spell_radius = 0;                 // Spell radius out of bounds
+        int time_rollback_events = 0;                 // Game time rolled backward
     };
 
     class TelemetryLogger
@@ -354,6 +371,21 @@ namespace PredictionTelemetry
         static uint64_t next_prediction_id_;         // Monotonic counter for unique prediction IDs
         static bool enabled_;
         static bool averages_computed_;  // Track if per-type/target averages have been computed
+
+        // P0-A: Eviction-proof storage for cast events
+        // Casts stored here cannot be evicted until outcome finalized
+        static std::unordered_map<uint64_t, PredictionEvent> cast_events_;  // key = prediction_id
+
+        // Simple FNV-1a hash for champion names (32-bit)
+        static uint32_t hash_champion_name(const std::string& name)
+        {
+            uint32_t hash = 2166136261u;
+            for (char c : name) {
+                hash ^= static_cast<uint8_t>(c);
+                hash *= 16777619u;
+            }
+            return hash;
+        }
 
         static auto get_timestamp()
         {
@@ -377,7 +409,11 @@ namespace PredictionTelemetry
             stats_ = SessionStats();
             events_.clear();
             pending_casts_.clear();  // Clear pending cast queue
+            cast_events_.clear();    // P0-A: Clear eviction-proof cast storage
             next_prediction_id_ = 1;     // Reset prediction ID counter
+
+            // P0-D: Reset path stability trackers for new game
+            PathStability::g_target_trackers.clear();
 
             stats_.session_start_time = get_timestamp();
             stats_.champion_name = champion_name;
@@ -582,26 +618,73 @@ namespace PredictionTelemetry
             if (!enabled_ || !target || !target->is_valid() || prediction_id == 0)
                 return;
 
-            // Mark the corresponding prediction event as actually cast
-            for (auto& event : events_)
+            // Validation: Spell radius sanity check
+            if (spell_radius < 1.f || spell_radius > 500.f)
             {
-                if (event.prediction_id == prediction_id)
-                {
-                    event.did_actually_cast = true;
-                    event.cast_timestamp = cast_time;
-                    if (persistence_at_cast > 0.f)
-                        event.persistence_at_cast = persistence_at_cast;
+                stats_.invalid_spell_radius++;
+                return;  // Abort - bad data from champion script
+            }
 
-                    // Note: Cast-time gates could be added here if champion script provides them
-                    // For now, we rely on prediction-time gates (which is suboptimal but acceptable)
-                    break;
+            // Find the prediction event (search both events_ and cast_events_)
+            PredictionEvent* found_event = nullptr;
+
+            // First check cast_events_ (faster, smaller)
+            auto cast_it = cast_events_.find(prediction_id);
+            if (cast_it != cast_events_.end())
+            {
+                found_event = &cast_it->second;
+            }
+            else
+            {
+                // Fallback to events_ (linear scan)
+                for (auto& event : events_)
+                {
+                    if (event.prediction_id == prediction_id)
+                    {
+                        found_event = &event;
+                        break;
+                    }
                 }
             }
+
+            if (!found_event)
+            {
+                // Prediction event not found - shouldn't happen
+                return;
+            }
+
+            // Validation: Target mismatch detection
+            if (found_event->target_name != target->get_champion_name())
+            {
+                stats_.prediction_id_target_mismatches++;
+                return;  // Abort - wrong target for this prediction_id
+            }
+
+            // Mark event as actually cast
+            found_event->did_actually_cast = true;
+            found_event->cast_timestamp = cast_time;
+            if (persistence_at_cast > 0.f)
+                found_event->persistence_at_cast = persistence_at_cast;
+
+            // Track prediction age (stale prediction detection)
+            float age = cast_time - found_event->timestamp;
+            found_event->prediction_age_ms = age * 1000.f;
+            if (age > 0.1f)  // >100ms stale
+            {
+                found_event->prediction_was_stale = true;
+                stats_.stale_prediction_casts++;
+            }
+
+            // P0-A: Copy event to eviction-proof storage for outcome joining
+            // This prevents event eviction from events_ before outcome finalized
+            cast_events_[prediction_id] = *found_event;
 
             // Register for outcome tracking
             PendingCastEvaluation pending;
             pending.prediction_id = prediction_id;
             pending.target_network_id = target->get_network_id();
+            pending.target_team = static_cast<uint8_t>(target->get_team());
+            pending.target_champion_hash = hash_champion_name(target->get_champion_name());
             pending.cast_time = cast_time;
             pending.expected_impact_time = expected_impact_time;
             pending.predicted_position = predicted_position;
@@ -716,22 +799,24 @@ namespace PredictionTelemetry
                 }
             }
 
-            // Update corresponding event (linear scan - acceptable for telemetry)
-            // NOTE: Linear O(events_.size()) scan. Alternative would be unordered_map
-            // with cleanup on deque eviction, but adds complexity. For telemetry
-            // with typical 1000 events and <30 pending casts, this is acceptable.
-            for (auto& event : events_)
+            // P0-A: Update event in eviction-proof storage (O(1) lookup)
+            // Cast events are guaranteed to exist in cast_events_ until finalized
+            auto it = cast_events_.find(pending.prediction_id);
+            if (it != cast_events_.end())
             {
-                if (event.prediction_id == pending.prediction_id)
-                {
-                    event.miss_reason = reason;
-                    event.outcome_miss_distance = pending.min_miss_distance;
-                    event.outcome_actual_pos_x = pending.best_actual_pos.x;
-                    event.outcome_actual_pos_z = pending.best_actual_pos.z;
-                    event.outcome_evaluated = true;
-                    event.was_hit = (reason == PredictionEvent::MissReason::HIT);
-                    break;
-                }
+                auto& event = it->second;
+                event.miss_reason = reason;
+                event.outcome_miss_distance = pending.min_miss_distance;
+                event.outcome_actual_pos_x = pending.best_actual_pos.x;
+                event.outcome_actual_pos_z = pending.best_actual_pos.z;
+                event.outcome_evaluated = true;
+                event.was_hit = (reason == PredictionEvent::MissReason::HIT);
+            }
+            else
+            {
+                // Event not found - should never happen with eviction-proof storage
+                // But track for diagnostics
+                stats_.outcomes_lost_to_event_eviction++;
             }
         }
 
@@ -763,6 +848,17 @@ namespace PredictionTelemetry
             {
                 auto& pending = *it;
 
+                // P0-C: Timeout check - prevent stuck pending casts
+                constexpr float MAX_PENDING_DURATION = 1.0f;  // 1 second past expected impact
+                if (current_time > pending.expected_impact_time + MAX_PENDING_DURATION)
+                {
+                    // Timeout - finalize with whatever samples we have
+                    finalize_outcome(pending);
+                    it = pending_casts_.erase(it);
+                    stats_.pending_casts_timed_out++;
+                    continue;
+                }
+
                 // Determine which sample we should take based on current time
                 float sample_time = pending.expected_impact_time + kSampleOffsets[pending.sample_index];
 
@@ -778,23 +874,37 @@ namespace PredictionTelemetry
 
                 if (target && target->is_valid() && target->is_visible())
                 {
-                    // Target visible: sample position and calculate distance
-                    math::vector3 actual_pos = target->get_server_position();
-                    float miss_distance = calculate_miss_distance(
-                        actual_pos,
-                        pending.predicted_position,
-                        pending.is_line_spell,
-                        pending.cast_source_pos
-                    );
+                    // P0-B: Validate target identity (network_id reuse protection)
+                    uint8_t current_team = static_cast<uint8_t>(target->get_team());
+                    uint32_t current_hash = hash_champion_name(target->get_champion_name());
 
-                    // Track best (minimum) miss distance
-                    if (miss_distance < pending.min_miss_distance)
+                    if (current_team != pending.target_team || current_hash != pending.target_champion_hash)
                     {
-                        pending.min_miss_distance = miss_distance;
-                        pending.best_actual_pos = actual_pos;
+                        // Network ID reused for different entity (death/respawn)
+                        // Treat as lost vision
+                        pending.saw_target_visible = false;
+                        stats_.network_id_reuse_detected++;
                     }
+                    else
+                    {
+                        // Target identity validated - sample position and calculate distance
+                        math::vector3 actual_pos = target->get_server_position();
+                        float miss_distance = calculate_miss_distance(
+                            actual_pos,
+                            pending.predicted_position,
+                            pending.is_line_spell,
+                            pending.cast_source_pos
+                        );
 
-                    pending.saw_target_visible = true;
+                        // Track best (minimum) miss distance
+                        if (miss_distance < pending.min_miss_distance)
+                        {
+                            pending.min_miss_distance = miss_distance;
+                            pending.best_actual_pos = actual_pos;
+                        }
+
+                        pending.saw_target_visible = true;
+                    }
                 }
 
                 // Advance to next sample
@@ -839,6 +949,73 @@ namespace PredictionTelemetry
             {
                 stats_.avg_target_velocity = stats_.total_target_velocity / stats_.valid_predictions;
                 stats_.avg_prediction_offset = stats_.total_prediction_offset / stats_.valid_predictions;
+            }
+
+            // =====================================================================
+            // CANARY METRICS (Red-Team Audit - Data Integrity Checks)
+            // =====================================================================
+
+            // Count casts and outcomes from cast_events_ (eviction-proof storage)
+            int total_casts = 0;
+            int total_outcomes = 0;
+            for (const auto& [id, event] : cast_events_)
+            {
+                if (event.did_actually_cast) total_casts++;
+                if (event.outcome_evaluated) total_outcomes++;
+            }
+
+            // Canary 1: Cast-to-outcome ratio (should be ~1.0)
+            float cast_outcome_ratio = (total_casts > 0) ? (float)total_outcomes / total_casts : 0.f;
+
+            // Canary 2: Pending casts should drain (should be 0)
+            int remaining_pending = static_cast<int>(pending_casts_.size());
+
+            // Log alerts for data quality issues
+            if (g_sdk)
+            {
+                if (cast_outcome_ratio < 0.95f && total_casts > 10)
+                {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[ALERT] Cast-outcome ratio low: %.2f (%d casts, %d outcomes)",
+                        cast_outcome_ratio, total_casts, total_outcomes);
+                    g_sdk->log_console(msg);
+                }
+
+                if (remaining_pending > 10)
+                {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[ALERT] Pending casts not drained: %d remaining", remaining_pending);
+                    g_sdk->log_console(msg);
+                }
+
+                if (stats_.prediction_id_target_mismatches > 0)
+                {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[ALERT] Prediction ID target mismatches: %d",
+                        stats_.prediction_id_target_mismatches);
+                    g_sdk->log_console(msg);
+                }
+
+                if (stats_.stale_prediction_casts > total_casts * 0.3f && total_casts > 10)
+                {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[ALERT] High stale prediction rate: %.1f%% (%d/%d)",
+                        100.f * stats_.stale_prediction_casts / total_casts,
+                        stats_.stale_prediction_casts, total_casts);
+                    g_sdk->log_console(msg);
+                }
+
+                // Log summary of data integrity counters
+                char msg[512];
+                snprintf(msg, sizeof(msg),
+                    "[Telemetry] Data Integrity: casts=%d outcomes=%d ratio=%.2f evictions=%d timeouts=%d mismatches=%d reuse=%d stale=%d",
+                    total_casts, total_outcomes, cast_outcome_ratio,
+                    stats_.outcomes_lost_to_event_eviction,
+                    stats_.pending_casts_timed_out,
+                    stats_.prediction_id_target_mismatches,
+                    stats_.network_id_reuse_detected,
+                    stats_.stale_prediction_casts);
+                g_sdk->log_console(msg);
             }
 
             // Write full report
@@ -1155,6 +1332,7 @@ namespace PredictionTelemetry
     inline SessionStats TelemetryLogger::stats_;
     inline std::deque<PredictionEvent> TelemetryLogger::events_;
     inline std::deque<PendingCastEvaluation> TelemetryLogger::pending_casts_;
+    inline std::unordered_map<uint64_t, PredictionEvent> TelemetryLogger::cast_events_;
     inline uint64_t TelemetryLogger::next_prediction_id_ = 1;
     inline bool TelemetryLogger::enabled_ = false;
     inline bool TelemetryLogger::averages_computed_ = false;
