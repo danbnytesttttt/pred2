@@ -92,6 +92,12 @@ namespace PathStability
 
         float time_since_meaningful_change;  // Time intent has been stable
         float last_update_time;
+        float last_update_frame_time;       // Frame time of last update (to prevent multi-update per frame)
+
+        // State change tracking (for resets)
+        bool was_visible;                    // Previous visibility state
+        bool was_alive;                      // Previous alive state
+        float last_seen_time;                // Last time target was updated (for gap detection)
 
         // Windup state tracking
         bool was_in_windup;
@@ -100,6 +106,10 @@ namespace PathStability
         TargetBehaviorTracker()
             : time_since_meaningful_change(0.f)
             , last_update_time(-999.f)
+            , last_update_frame_time(-999.f)
+            , was_visible(true)
+            , was_alive(true)
+            , last_seen_time(-999.f)
             , was_in_windup(false)
         {}
 
@@ -112,10 +122,64 @@ namespace PathStability
             if (!target || !target->is_valid())
                 return;
 
+            // Skip if already updated this frame (prevent multi-call inflation)
+            // Using 1ms epsilon (covers up to 1000 FPS)
+            constexpr float FRAME_EPSILON = 0.001f;
+            if (current_time - last_update_frame_time < FRAME_EPSILON)
+                return;
+
+            last_update_frame_time = current_time;
+
             float delta_time = (last_update_time > 0.f)
                 ? (current_time - last_update_time)
                 : 0.05f; // Default 50ms if first update
+
+            // Clamp delta_time to prevent negative (time rollback) or huge (freeze) values
+            // Max 0.25s = 4 FPS minimum, prevents massive jumps from pauses
+            delta_time = std::clamp(delta_time, 0.f, 0.25f);
+
             last_update_time = current_time;
+
+            // =====================================================================
+            // STATE CHANGE RESETS (Critical for data integrity)
+            // =====================================================================
+
+            bool is_visible_now = target->is_visible();
+            bool is_alive_now = !target->is_dead();
+
+            // Reset on visibility loss (target entered fog)
+            if (!is_visible_now && was_visible)
+            {
+                time_since_meaningful_change = 0.f;
+                current_intent = IntentSignature();  // Clear signature
+                previous_intent = IntentSignature();
+            }
+
+            // Reset on death (includes respawn detection)
+            if (!is_alive_now || (!was_alive && is_alive_now))
+            {
+                time_since_meaningful_change = 0.f;
+                current_intent = IntentSignature();
+                previous_intent = IntentSignature();
+            }
+
+            // Reset on large gap (>2s since last update = target was out of range/vision)
+            constexpr float MAX_GAP = 2.0f;
+            if (last_seen_time > 0.f && (current_time - last_seen_time) > MAX_GAP)
+            {
+                time_since_meaningful_change = 0.f;
+                current_intent = IntentSignature();
+                previous_intent = IntentSignature();
+            }
+
+            // Update state tracking
+            was_visible = is_visible_now;
+            was_alive = is_alive_now;
+            last_seen_time = current_time;
+
+            // =====================================================================
+            // INTENT CHANGE DETECTION
+            // =====================================================================
 
             // Calculate current intent signature
             previous_intent = current_intent;

@@ -185,6 +185,9 @@ namespace GeometricPred
         float persistence;            // Path stability score [0, 1]
         float calibrated_hc;          // Hit chance after path stability
 
+        // Telemetry linking
+        uint64_t prediction_id;       // Unique ID for linking with telemetry and cast tracking
+
         // Debug
         const char* block_reason;     // Why we can't cast (if Impossible)
         const char* edge_case_type;   // "normal", "stasis", "dash", "channeling"
@@ -199,6 +202,7 @@ namespace GeometricPred
               prediction_offset(0.f), distance_to_target(0.f), target_is_moving(false),
               target_velocity(0.f), stasis_wait_time(0.f), computation_time_ms(0.f),
               baseline_hc(0.f), persistence(1.f), calibrated_hc(0.f),
+              prediction_id(0),
               block_reason(nullptr), edge_case_type("normal")
         {}
     };
@@ -1858,7 +1862,8 @@ namespace GeometricPred
             event.baseline_would_cast_final = event.baseline_would_cast_raw && passes_gates;
             event.new_would_cast_final = event.new_would_cast_raw && passes_gates;
 
-            PredictionTelemetry::TelemetryLogger::log_prediction(event);
+            // Log prediction and get assigned ID
+            result.prediction_id = PredictionTelemetry::TelemetryLogger::log_prediction(event);
         }
 
         return result;

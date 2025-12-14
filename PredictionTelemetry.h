@@ -61,6 +61,7 @@ namespace PredictionTelemetry
 {
     struct PredictionEvent
     {
+        uint64_t prediction_id = 0;          // Unique ID for joining with casts/outcomes
         float timestamp = 0.f;
         std::string target_name = "";
         std::string spell_type = "";
@@ -165,6 +166,13 @@ namespace PredictionTelemetry
         bool did_actually_cast = false;          // Did we actually cast?
         float cast_timestamp = 0.f;              // When did we cast?
         float t_impact_numeric = 0.f;            // Time to impact (numeric, not bucketed)
+        float persistence_at_cast = 0.f;         // Persistence when actually cast (vs at prediction)
+
+        // Cast-time gate snapshot (actual conditions when cast button pressed)
+        bool blocked_by_minion_at_cast = false;
+        bool blocked_by_windwall_at_cast = false;
+        bool blocked_by_range_at_cast = false;
+        bool blocked_by_fog_at_cast = false;
 
         // =====================================================================
         // GATE TRACKING (Priority 1 - Why casts were blocked)
@@ -210,24 +218,24 @@ namespace PredictionTelemetry
      */
     struct PendingCastEvaluation
     {
+        uint64_t prediction_id;              // ID of prediction to update (joins with PredictionEvent)
         uint32_t target_network_id;          // Target to track
         float cast_time;                     // When spell was cast
         float expected_impact_time;          // When spell should arrive
         math::vector3 predicted_position;    // Where we predicted target would be
         float spell_radius;                  // Spell hitbox radius
         float target_bounding_radius;        // Target hitbox radius
-        size_t event_index;                  // Index in events_ deque for updating
         bool is_line_spell;                  // True = capsule/line, False = circle AoE
         math::vector3 cast_source_pos;       // Where spell was cast from (for line spells)
 
         PendingCastEvaluation()
-            : target_network_id(0)
+            : prediction_id(0)
+            , target_network_id(0)
             , cast_time(0.f)
             , expected_impact_time(0.f)
             , predicted_position(0.f, 0.f, 0.f)
             , spell_radius(0.f)
             , target_bounding_radius(0.f)
-            , event_index(0)
             , is_line_spell(false)
             , cast_source_pos(0.f, 0.f, 0.f)
         {}
@@ -329,6 +337,7 @@ namespace PredictionTelemetry
         static SessionStats stats_;
         static std::deque<PredictionEvent> events_;  // deque for O(1) front removal
         static std::deque<PendingCastEvaluation> pending_casts_;  // Queue for deferred outcome evaluation
+        static uint64_t next_prediction_id_;         // Monotonic counter for unique prediction IDs
         static bool enabled_;
         static bool averages_computed_;  // Track if per-type/target averages have been computed
 
@@ -354,6 +363,7 @@ namespace PredictionTelemetry
             stats_ = SessionStats();
             events_.clear();
             pending_casts_.clear();  // Clear pending cast queue
+            next_prediction_id_ = 1;     // Reset prediction ID counter
 
             stats_.session_start_time = get_timestamp();
             stats_.champion_name = champion_name;
@@ -367,9 +377,13 @@ namespace PredictionTelemetry
             }
         }
 
-        static void log_prediction(const PredictionEvent& event)
+        static uint64_t log_prediction(PredictionEvent& event)
         {
-            if (!enabled_) return;
+            if (!enabled_) return 0;
+
+            // Assign unique prediction ID
+            event.prediction_id = next_prediction_id_++;
+            uint64_t assigned_id = event.prediction_id;
 
             stats_.total_predictions++;
             stats_.valid_predictions++; // Assuming valid if logged
@@ -461,6 +475,8 @@ namespace PredictionTelemetry
                 events_.pop_front();  // O(1) removal
             }
             events_.push_back(event);
+
+            return assigned_id;
         }
 
         static void log_invalid_prediction(const std::string& reason)
@@ -531,27 +547,50 @@ namespace PredictionTelemetry
         /**
          * Register a cast for deferred outcome evaluation.
          * Called when a spell is actually cast.
+         * Also marks the corresponding PredictionEvent as actually cast.
+         *
+         * @param prediction_id - ID from the PredictionEvent to link this cast
+         * @param persistence_at_cast - Path stability persistence at cast time (optional, pass 0 if unknown)
          */
         static void register_cast(
+            uint64_t prediction_id,
             game_object* target,
             float cast_time,
             float expected_impact_time,
             const math::vector3& predicted_position,
             float spell_radius,
             bool is_line_spell = false,
-            const math::vector3& cast_source_pos = math::vector3(0.f, 0.f, 0.f))
+            const math::vector3& cast_source_pos = math::vector3(0.f, 0.f, 0.f),
+            float persistence_at_cast = 0.f)
         {
             if (!enabled_ || !target || !target->is_valid())
                 return;
 
+            // Mark the corresponding prediction event as actually cast
+            for (auto& event : events_)
+            {
+                if (event.prediction_id == prediction_id)
+                {
+                    event.did_actually_cast = true;
+                    event.cast_timestamp = cast_time;
+                    if (persistence_at_cast > 0.f)
+                        event.persistence_at_cast = persistence_at_cast;
+
+                    // Note: Cast-time gates could be added here if champion script provides them
+                    // For now, we rely on prediction-time gates (which is suboptimal but acceptable)
+                    break;
+                }
+            }
+
+            // Register for outcome tracking
             PendingCastEvaluation pending;
+            pending.prediction_id = prediction_id;
             pending.target_network_id = target->get_network_id();
             pending.cast_time = cast_time;
             pending.expected_impact_time = expected_impact_time;
             pending.predicted_position = predicted_position;
             pending.spell_radius = spell_radius;
             pending.target_bounding_radius = target->get_bounding_radius();
-            pending.event_index = events_.size() - 1;  // Last logged event
             pending.is_line_spell = is_line_spell;
             pending.cast_source_pos = cast_source_pos;
 
@@ -672,16 +711,21 @@ namespace PredictionTelemetry
                     }
                 }
 
-                // Update corresponding event (if it still exists in deque)
-                if (pending.event_index < events_.size())
+                // Find corresponding event by prediction_id
+                bool event_found = false;
+                for (auto& event : events_)
                 {
-                    auto& event = events_[pending.event_index];
-                    event.miss_reason = reason;
-                    event.outcome_miss_distance = miss_distance;
-                    event.outcome_actual_pos_x = actual_pos.x;
-                    event.outcome_actual_pos_z = actual_pos.z;
-                    event.outcome_evaluated = true;
-                    event.was_hit = (reason == PredictionEvent::MissReason::HIT);
+                    if (event.prediction_id == pending.prediction_id)
+                    {
+                        event.miss_reason = reason;
+                        event.outcome_miss_distance = miss_distance;
+                        event.outcome_actual_pos_x = actual_pos.x;
+                        event.outcome_actual_pos_z = actual_pos.z;
+                        event.outcome_evaluated = true;
+                        event.was_hit = (reason == PredictionEvent::MissReason::HIT);
+                        event_found = true;
+                        break;
+                    }
                 }
 
                 // Remove from queue
@@ -1031,6 +1075,7 @@ namespace PredictionTelemetry
     inline SessionStats TelemetryLogger::stats_;
     inline std::deque<PredictionEvent> TelemetryLogger::events_;
     inline std::deque<PendingCastEvaluation> TelemetryLogger::pending_casts_;
+    inline uint64_t TelemetryLogger::next_prediction_id_ = 1;
     inline bool TelemetryLogger::enabled_ = false;
     inline bool TelemetryLogger::averages_computed_ = false;
 
