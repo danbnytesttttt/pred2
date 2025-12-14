@@ -310,8 +310,10 @@ namespace PathStability
                 }
             }
 
-            // Short-horizon predicted position (0.2s ahead, simple linear)
-            constexpr float SHORT_HORIZON = 0.2f;
+            // Short-horizon predicted position (0.3s ahead, simple linear)
+            // Tuned to balance fast spells (~0.2s) and slow spells (~0.8s)
+            // Longer horizon captures intent better for slow spells without excessive noise for fast spells
+            constexpr float SHORT_HORIZON = 0.3f;
             sig.short_horizon_pos = current_pos + current_vel * SHORT_HORIZON;
 
             return sig;
@@ -380,11 +382,14 @@ namespace PathStability
     inline float apply_calibrator(float base_hc, float persistence, float t_impact)
     {
         // Contextual floor: fast spells are less sensitive to path changes
-        float floor;
-        if (t_impact < 0.25f)
-            floor = 0.65f; // Fast spell - higher floor
-        else
-            floor = 0.45f; // Slow spell - lower floor
+        // Smooth transition from fast (0.65) to slow (0.45) over 0.20s-0.30s range
+        constexpr float FLOOR_FAST = 0.65f;
+        constexpr float FLOOR_SLOW = 0.45f;
+        constexpr float TRANSITION_START = 0.20f;
+        constexpr float TRANSITION_DURATION = 0.10f;
+
+        float t = std::clamp((t_impact - TRANSITION_START) / TRANSITION_DURATION, 0.f, 1.f);
+        float floor = FLOOR_FAST + (FLOOR_SLOW - FLOOR_FAST) * t;
 
         // Apply calibration: finalHC = baseHC * (floor + (1-floor) * persistence)
         float calibrated = base_hc * (floor + (1.f - floor) * persistence);
