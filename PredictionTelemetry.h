@@ -577,7 +577,9 @@ namespace PredictionTelemetry
             const math::vector3& cast_source_pos = math::vector3(0.f, 0.f, 0.f),
             float persistence_at_cast = 0.f)
         {
-            if (!enabled_ || !target || !target->is_valid())
+            // FIX P0-3: Validate prediction_id != 0 (returned when telemetry disabled)
+            // Prevents orphan pending casts that never resolve
+            if (!enabled_ || !target || !target->is_valid() || prediction_id == 0)
                 return;
 
             // Mark the corresponding prediction event as actually cast

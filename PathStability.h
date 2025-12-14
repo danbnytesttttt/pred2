@@ -215,6 +215,13 @@ namespace PathStability
             previous_intent = current_intent;
             current_intent = calculate_intent_signature(target, current_time);
 
+            // FIX P0-2: Initialize reference_intent on first valid intent
+            // Ensures cumulative drift detection works from the start
+            if (current_intent.is_valid && !reference_intent.is_valid)
+            {
+                reference_intent = current_intent;
+            }
+
             // Windup state machine
             bool in_windup_now = target->is_winding_up() || target->is_channeling();
             bool just_exited_windup = was_in_windup && !in_windup_now;
@@ -293,7 +300,9 @@ namespace PathStability
                     {
                         math::vector3 dir = path[i] - current_pos;
                         float mag = std::sqrt(dir.x * dir.x + dir.z * dir.z);
-                        if (mag > 1.f)
+                        // FIX P0-1: Use small epsilon instead of mag > 1.f
+                        // Handles segments with small XZ projection (e.g., steep ramps)
+                        if (mag > 0.01f)
                         {
                             sig.first_segment_dir = math::vector3(dir.x / mag, 0.f, dir.z / mag);
                             sig.is_valid = true;
