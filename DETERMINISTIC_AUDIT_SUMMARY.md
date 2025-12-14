@@ -21,7 +21,7 @@
 ### P0: Data Corruption / Silent Failure (FIXED)
 
 #### P0-1: Direction Vector Normalization Threshold Bug
-**File**: `PathStability.h:296-298`
+**File**: `PathStability.h:303-306`
 **Severity**: Ship-blocking
 **Impact**: Steep path segments (small XZ projection) skip normalization → invalid intent signatures → broken change detection
 
@@ -36,8 +36,10 @@ Result: Intent stays invalid despite clear directional intent
 **Fix Applied**:
 ```diff
 - if (mag > 1.f)
-+ if (mag > 0.01f)  // Just avoid div-by-zero, don't re-threshold
++ if (mag > 0.1f)  // 10x SDK comparison epsilon, avoid jitter
 ```
+
+**SDK Validation**: Confirmed `vector3::distance()` is 2D (XZ only), so seg_length and mag measure the same projection. The "steep ramp" scenario cannot occur.
 
 **Test Case**: `test_harness → vertical segment validation`
 

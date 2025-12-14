@@ -300,9 +300,10 @@ namespace PathStability
                     {
                         math::vector3 dir = path[i] - current_pos;
                         float mag = std::sqrt(dir.x * dir.x + dir.z * dir.z);
-                        // FIX P0-1: Use small epsilon instead of mag > 1.f
-                        // Handles segments with small XZ projection (e.g., steep ramps)
-                        if (mag > 0.01f)
+                        // FIX P0-1: Use small epsilon instead of mag > 1.f to avoid div-by-zero
+                        // SDK distance() is also XZ-only, so seg_length and mag measure same projection
+                        // League movement/prediction is XZ-plane. Y is elevation and ignored for intent.
+                        if (mag > 0.1f)  // 10x SDK comparison epsilon, avoid jitter
                         {
                             sig.first_segment_dir = math::vector3(dir.x / mag, 0.f, dir.z / mag);
                             sig.is_valid = true;
