@@ -367,6 +367,7 @@ namespace PredictionTelemetry
         int invalid_spell_radius = 0;                 // Spell radius out of bounds
         int time_rollback_events = 0;                 // Game time rolled backward
         int duplicate_register_cast_calls = 0;        // Duplicate register_cast() with same prediction_id
+        int invalid_impact_time = 0;                  // expected_impact_time <= cast_time (L-1)
     };
 
     class TelemetryLogger
@@ -630,6 +631,13 @@ namespace PredictionTelemetry
             if (!enabled_ || !target || !target->is_valid() || prediction_id == 0)
                 return;
 
+            // L-1 FIX: Validate time ordering
+            if (expected_impact_time <= cast_time)
+            {
+                stats_.invalid_impact_time++;
+                return;  // Abort - time travel not allowed
+            }
+
             // S-3 FIX: Block duplicate register_cast() calls
             // prediction_id is cast-unique; registering it twice is always a bug
             if (active_pending_ids_.count(prediction_id) > 0)
@@ -847,9 +855,6 @@ namespace PredictionTelemetry
 
                 // CRITICAL: Remove from eviction-proof storage to prevent unbounded growth
                 cast_events_.erase(it);
-
-                // S-3: Remove from active pending IDs
-                active_pending_ids_.erase(pending.prediction_id);
             }
             else
             {
@@ -857,6 +862,10 @@ namespace PredictionTelemetry
                 // But track for diagnostics
                 stats_.outcomes_lost_to_event_eviction++;
             }
+
+            // C-2 FIX: Always clean up active_pending_ids_, even if event missing
+            // Prevents ID leak and enforces "pending → terminal" invariant
+            active_pending_ids_.erase(pending.prediction_id);
         }
 
         /**
@@ -921,8 +930,9 @@ namespace PredictionTelemetry
                     if (current_team != pending.target_team || current_hash != pending.target_champion_hash)
                     {
                         // Network ID reused for different entity (death/respawn)
-                        // Treat as lost vision
+                        // M-2 FIX: Clear all visibility state (not just saw_target_visible)
                         pending.saw_target_visible = false;
+                        pending.samples_with_visibility = 0;  // Reset bitmask
                         stats_.network_id_reuse_detected++;
                     }
                     else
@@ -999,9 +1009,19 @@ namespace PredictionTelemetry
             // CANARY METRICS (Red-Team Audit - Data Integrity Checks)
             // =====================================================================
 
-            // Count casts and outcomes from cast_events_ (eviction-proof storage)
+            // C-1 FIX: Count from events_ (finalized) + cast_events_ (pending)
+            // After S-1 fix, finalized outcomes moved to events_, so count both
             int total_casts = 0;
             int total_outcomes = 0;
+
+            // Count finalized outcomes (in events_ after S-1 erase)
+            for (const auto& event : events_)
+            {
+                if (event.did_actually_cast) total_casts++;
+                if (event.outcome_evaluated) total_outcomes++;
+            }
+
+            // Count pending outcomes (still in cast_events_)
             for (const auto& [id, event] : cast_events_)
             {
                 if (event.did_actually_cast) total_casts++;
