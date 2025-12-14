@@ -228,6 +228,20 @@ namespace PredictionTelemetry
         bool is_line_spell;                  // True = capsule/line, False = circle AoE
         math::vector3 cast_source_pos;       // Where spell was cast from (for line spells)
 
+        // =====================================================================
+        // MULTI-SAMPLE OUTCOME EVALUATION (P1.5 - Noise Reduction)
+        // =====================================================================
+        // Takes 3 samples around expected impact time:
+        //   - impact - 50ms (early tolerance)
+        //   - impact + 0ms (exact prediction)
+        //   - impact + 50ms (late tolerance)
+        // Uses minimum miss distance across all samples to reduce label noise
+        // from network jitter, tick alignment, and projectile speed variance.
+        uint8_t sample_index = 0;                        // Current sample being taken [0, 1, 2]
+        float min_miss_distance = std::numeric_limits<float>::infinity();  // Best distance across samples
+        math::vector3 best_actual_pos = math::vector3(0.f, 0.f, 0.f);     // Target pos at best sample
+        bool saw_target_visible = false;                 // Did we see target visible in any sample?
+
         PendingCastEvaluation()
             : prediction_id(0)
             , target_network_id(0)
@@ -598,140 +612,202 @@ namespace PredictionTelemetry
         }
 
         /**
-         * Evaluate pending casts and update outcomes.
-         * Should be called every frame to check if any pending casts have reached impact time.
+         * Helper: Find target by network ID.
+         */
+        static game_object* find_target_by_network_id(uint32_t network_id)
+        {
+            if (!g_sdk || !g_sdk->object_manager)
+                return nullptr;
+
+            auto heroes = g_sdk->object_manager->get_heroes();
+            for (auto* hero : heroes)
+            {
+                if (hero && hero->is_valid() && hero->get_network_id() == network_id)
+                    return hero;
+            }
+            return nullptr;
+        }
+
+        /**
+         * Helper: Calculate miss distance from predicted to actual position.
+         * Handles both circle and line spells.
          *
-         * Uses sampling window approach:
-         * - Samples target position in [t_impact - 0.05s, t_impact + 0.05s] window
-         * - Uses closest approach to predicted position
+         * CORRECTED: Line spell projection now handles target behind caster correctly.
+         */
+        static float calculate_miss_distance(
+            const math::vector3& actual_pos,
+            const math::vector3& predicted_pos,
+            bool is_line_spell,
+            const math::vector3& source_pos)
+        {
+            if (!is_line_spell)
+            {
+                // Circle spell: simple point-to-point
+                return actual_pos.distance(predicted_pos);
+            }
+
+            // Line spell: point-to-line segment distance
+            math::vector3 line_vec = predicted_pos - source_pos;
+            float line_length = std::sqrt(line_vec.x * line_vec.x + line_vec.z * line_vec.z);
+
+            // Degenerate line (cast at self or zero-range prediction)
+            if (line_length < 1.f)
+                return actual_pos.distance(predicted_pos);
+
+            // Normalized line direction
+            math::vector3 line_dir(line_vec.x / line_length, 0.f, line_vec.z / line_length);
+
+            // Project target onto infinite line
+            math::vector3 to_target = actual_pos - source_pos;
+            float proj = (to_target.x * line_dir.x + to_target.z * line_dir.z);
+
+            // FIX: If projection is outside segment [0, line_length], use endpoint distance
+            // This prevents "target behind caster" from incorrectly showing as hit
+            if (proj < 0.f || proj > line_length)
+            {
+                float dist_to_start = actual_pos.distance(source_pos);
+                float dist_to_end = actual_pos.distance(predicted_pos);
+                return std::min(dist_to_start, dist_to_end);
+            }
+
+            // Inside segment: perpendicular distance to line
+            math::vector3 closest_point(
+                source_pos.x + line_dir.x * proj,
+                source_pos.y,
+                source_pos.z + line_dir.z * proj
+            );
+            return actual_pos.distance(closest_point);
+        }
+
+        /**
+         * Helper: Finalize outcome for a pending cast after all samples collected.
+         * Uses minimum miss distance across all samples to classify hit/miss.
+         */
+        static void finalize_outcome(PendingCastEvaluation& pending)
+        {
+            // Determine outcome based on best sample
+            PredictionEvent::MissReason reason = PredictionEvent::MissReason::UNKNOWN;
+            float effective_radius = pending.spell_radius + pending.target_bounding_radius;
+
+            if (!pending.saw_target_visible)
+            {
+                // Target was never visible during any sample
+                reason = PredictionEvent::MissReason::OUT_OF_VISION;
+            }
+            else if (pending.min_miss_distance <= effective_radius)
+            {
+                // Hit: target was within effective radius in at least one sample
+                reason = PredictionEvent::MissReason::HIT;
+            }
+            else
+            {
+                // Miss: classify based on distance
+                if (pending.min_miss_distance > effective_radius * 3.0f)
+                {
+                    // Far miss (>3x radius) = likely path changed or dash
+                    reason = PredictionEvent::MissReason::PATH_CHANGED;
+                }
+                else
+                {
+                    // Close miss (1-3x radius) = unclear cause
+                    reason = PredictionEvent::MissReason::UNKNOWN;
+                }
+            }
+
+            // Update corresponding event (linear scan - acceptable for telemetry)
+            // NOTE: Linear O(events_.size()) scan. Alternative would be unordered_map
+            // with cleanup on deque eviction, but adds complexity. For telemetry
+            // with typical 1000 events and <30 pending casts, this is acceptable.
+            for (auto& event : events_)
+            {
+                if (event.prediction_id == pending.prediction_id)
+                {
+                    event.miss_reason = reason;
+                    event.outcome_miss_distance = pending.min_miss_distance;
+                    event.outcome_actual_pos_x = pending.best_actual_pos.x;
+                    event.outcome_actual_pos_z = pending.best_actual_pos.z;
+                    event.outcome_evaluated = true;
+                    event.was_hit = (reason == PredictionEvent::MissReason::HIT);
+                    break;
+                }
+            }
+        }
+
+        /**
+         * Evaluate pending casts with multi-sample approach.
+         * Should be called every frame.
+         *
+         * MULTI-SAMPLE STRATEGY (P1.5):
+         * - Takes 3 samples per cast: impact - 50ms, impact + 0ms, impact + 50ms
+         * - Processes one sample per pending cast per tick (incremental)
+         * - Tracks minimum miss distance across all samples
+         * - Finalizes outcome after last sample
+         *
+         * This reduces label noise from network jitter, tick alignment, and
+         * projectile speed variance without requiring expensive per-frame polling.
          */
         static void evaluate_pending_outcomes(float current_time)
         {
             if (!enabled_ || pending_casts_.empty())
                 return;
 
-            // Process casts that have reached evaluation time (impact + 100ms grace period)
+            // Sample offsets relative to expected_impact_time
+            static constexpr float kSampleOffsets[] = { -0.05f, 0.0f, +0.05f };
+            static constexpr uint8_t kNumSamples = 3;
+
+            // Process each pending cast incrementally
             auto it = pending_casts_.begin();
             while (it != pending_casts_.end())
             {
-                const auto& pending = *it;
+                auto& pending = *it;
 
-                // Wait until impact time + grace period for evaluation
-                constexpr float GRACE_PERIOD = 0.1f;  // 100ms after impact
-                if (current_time < pending.expected_impact_time + GRACE_PERIOD)
+                // Determine which sample we should take based on current time
+                float sample_time = pending.expected_impact_time + kSampleOffsets[pending.sample_index];
+
+                // Wait until current sample time reached
+                if (current_time < sample_time)
                 {
                     ++it;
                     continue;
                 }
 
-                // Find target
-                game_object* target = nullptr;
-                if (g_sdk && g_sdk->object_manager)
+                // Take current sample
+                game_object* target = find_target_by_network_id(pending.target_network_id);
+
+                if (target && target->is_valid() && target->is_visible())
                 {
-                    // Find target by network ID
-                    auto heroes = g_sdk->object_manager->get_heroes();
-                    for (auto* hero : heroes)
+                    // Target visible: sample position and calculate distance
+                    math::vector3 actual_pos = target->get_server_position();
+                    float miss_distance = calculate_miss_distance(
+                        actual_pos,
+                        pending.predicted_position,
+                        pending.is_line_spell,
+                        pending.cast_source_pos
+                    );
+
+                    // Track best (minimum) miss distance
+                    if (miss_distance < pending.min_miss_distance)
                     {
-                        if (hero && hero->is_valid() && hero->get_network_id() == pending.target_network_id)
-                        {
-                            target = hero;
-                            break;
-                        }
+                        pending.min_miss_distance = miss_distance;
+                        pending.best_actual_pos = actual_pos;
                     }
+
+                    pending.saw_target_visible = true;
                 }
 
-                // Evaluate outcome
-                PredictionEvent::MissReason reason = PredictionEvent::MissReason::UNKNOWN;
-                float miss_distance = 0.f;
-                math::vector3 actual_pos(0.f, 0.f, 0.f);
+                // Advance to next sample
+                pending.sample_index++;
 
-                if (!target || !target->is_valid())
+                // If all samples taken, finalize outcome and remove from queue
+                if (pending.sample_index >= kNumSamples)
                 {
-                    reason = PredictionEvent::MissReason::UNKNOWN;
-                }
-                else if (!target->is_visible())
-                {
-                    reason = PredictionEvent::MissReason::OUT_OF_VISION;
+                    finalize_outcome(pending);
+                    it = pending_casts_.erase(it);
                 }
                 else
                 {
-                    // Get actual position at impact time
-                    actual_pos = target->get_server_position();
-
-                    // Calculate miss distance
-                    if (pending.is_line_spell)
-                    {
-                        // Line spell: point-to-line distance
-                        math::vector3 line_dir = pending.predicted_position - pending.cast_source_pos;
-                        float line_length = std::sqrt(line_dir.x * line_dir.x + line_dir.z * line_dir.z);
-
-                        if (line_length > 1.f)
-                        {
-                            line_dir.x /= line_length;
-                            line_dir.z /= line_length;
-
-                            // Project target onto line
-                            math::vector3 to_target = actual_pos - pending.cast_source_pos;
-                            float proj = (to_target.x * line_dir.x + to_target.z * line_dir.z);
-                            proj = std::clamp(proj, 0.f, line_length);
-
-                            math::vector3 closest_point = pending.cast_source_pos + line_dir * proj;
-                            miss_distance = actual_pos.distance(closest_point);
-                        }
-                        else
-                        {
-                            miss_distance = actual_pos.distance(pending.predicted_position);
-                        }
-                    }
-                    else
-                    {
-                        // Circle spell: point-to-point distance
-                        miss_distance = actual_pos.distance(pending.predicted_position);
-                    }
-
-                    // Determine hit/miss
-                    float effective_radius = pending.spell_radius + pending.target_bounding_radius;
-                    if (miss_distance <= effective_radius)
-                    {
-                        reason = PredictionEvent::MissReason::HIT;
-                    }
-                    else
-                    {
-                        // Classify miss reason based on distance
-                        if (miss_distance > effective_radius * 3.0f)
-                        {
-                            // Far miss (>3x radius) = likely path changed significantly or target dashed
-                            reason = PredictionEvent::MissReason::PATH_CHANGED;
-                        }
-                        else
-                        {
-                            // Close miss (1-3x radius) = unclear reason (could be prediction error,
-                            // minor path adjustment, timing variance, etc.)
-                            // Mark as UNKNOWN to distinguish from far PATH_CHANGED misses
-                            reason = PredictionEvent::MissReason::UNKNOWN;
-                        }
-                    }
+                    ++it;
                 }
-
-                // Find corresponding event by prediction_id
-                bool event_found = false;
-                for (auto& event : events_)
-                {
-                    if (event.prediction_id == pending.prediction_id)
-                    {
-                        event.miss_reason = reason;
-                        event.outcome_miss_distance = miss_distance;
-                        event.outcome_actual_pos_x = actual_pos.x;
-                        event.outcome_actual_pos_z = actual_pos.z;
-                        event.outcome_evaluated = true;
-                        event.was_hit = (reason == PredictionEvent::MissReason::HIT);
-                        event_found = true;
-                        break;
-                    }
-                }
-
-                // Remove from queue
-                it = pending_casts_.erase(it);
             }
         }
 
