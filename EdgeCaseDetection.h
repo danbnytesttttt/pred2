@@ -1780,8 +1780,17 @@ namespace EdgeCases
 
         std::vector<math::vector3> velocity_samples;
         float last_sample_time;
+        float last_velocity_magnitude;  // Track previous magnitude for dash detection
 
-        MovementHistory() : last_sample_time(-999.f) {}
+        MovementHistory() : last_sample_time(-999.f), last_velocity_magnitude(0.f) {}
+
+        // Clear all history (called on vision loss, CC, death)
+        void clear()
+        {
+            velocity_samples.clear();
+            last_sample_time = -999.f;
+            last_velocity_magnitude = 0.f;
+        }
 
         void update(const math::vector3& velocity, float current_time)
         {
@@ -1789,8 +1798,33 @@ namespace EdgeCases
             if (current_time - last_sample_time < SAMPLE_INTERVAL)
                 return;
 
+            // DASH FILTER: Detect and skip dash/blink samples
+            // Dashes have massive velocity spikes that create false reversals
+            float velocity_magnitude = std::sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+
+            if (last_velocity_magnitude > 0.f)
+            {
+                // Velocity spike detection:
+                // - Absolute speed > 1500 u/s = likely dash
+                // - Speed increased by >2x = likely dash start
+                // - Speed decreased by >2x = likely dash end
+                bool is_dash_speed = velocity_magnitude > 1500.f;
+                bool is_dash_accel = velocity_magnitude > last_velocity_magnitude * 2.0f;
+                bool is_dash_decel = last_velocity_magnitude > velocity_magnitude * 2.0f;
+
+                if (is_dash_speed || is_dash_accel || is_dash_decel)
+                {
+                    // Skip this sample - it's a dash/blink artifact
+                    last_velocity_magnitude = velocity_magnitude;
+                    last_sample_time = current_time;
+                    return;
+                }
+            }
+
+            // Valid sample - add to history
             velocity_samples.push_back(velocity);
             last_sample_time = current_time;
+            last_velocity_magnitude = velocity_magnitude;
 
             // Keep only last N samples
             if (velocity_samples.size() > MAX_SAMPLES)
@@ -1851,6 +1885,7 @@ namespace EdgeCases
 
         // Detect alternating oscillation pattern (left-right-left) vs random jitter
         // Oscillating patterns are MORE predictable (aim at center)
+        // Now includes period validation - must be in human juke range (150-600ms)
         bool is_oscillating_pattern() const
         {
             if (velocity_samples.size() < 4)
@@ -1858,6 +1893,8 @@ namespace EdgeCases
 
             // Check last 4 samples for alternating pattern
             int alternations = 0;
+            std::vector<float> reversal_times;
+
             for (size_t i = 0; i < velocity_samples.size() - 1 && i < 3; ++i)
             {
                 const auto& v1 = velocity_samples[velocity_samples.size() - 1 - i];
@@ -1867,11 +1904,33 @@ namespace EdgeCases
 
                 // Opposite directions (negative dot product) = reversal
                 if (dot < 0.f)
+                {
                     alternations++;
+                    float time_ago = i * SAMPLE_INTERVAL;
+                    reversal_times.push_back(time_ago);
+                }
             }
 
             // At least 2 out of 3 transitions are reversals = oscillating
-            return alternations >= 2;
+            if (alternations < 2)
+                return false;
+
+            // PERIOD VALIDATION: Check if period is in human juke range
+            // True juking has 150-600ms period (half-period = 75-300ms)
+            // Pathing has much longer periods (1-3 seconds)
+            if (reversal_times.size() >= 2)
+            {
+                float half_period = reversal_times[0] - reversal_times[1];
+
+                constexpr float MIN_JUKE_HALF_PERIOD = 0.075f;  // 75ms (very fast juking)
+                constexpr float MAX_JUKE_HALF_PERIOD = 0.35f;   // 350ms (slow juking)
+
+                // Period outside human juke range = probably pathing or context change
+                if (half_period < MIN_JUKE_HALF_PERIOD || half_period > MAX_JUKE_HALF_PERIOD)
+                    return false;
+            }
+
+            return true;
         }
 
         // ADVANCED: Predict position at future time by extrapolating oscillation
@@ -2022,7 +2081,7 @@ namespace EdgeCases
             }
 
             if (periods.size() < 2)
-                return 0.5f;  // Not enough data
+                return 0.f;  // Not enough data = unknown quality = assume worst
 
             // Calculate coefficient of variation (CV) of periods
             float mean = 0.f;
@@ -2081,8 +2140,53 @@ namespace EdgeCases
     }
 
     /**
+     * Calculate adaptive juke detection threshold based on game context
+     * Higher threshold = harder to detect (fewer false positives)
+     * Lower threshold = easier to detect (catch subtle juking)
+     */
+    inline float get_adaptive_juke_threshold(game_object* target)
+    {
+        // Base threshold - starts at 0.5 (moderate sensitivity)
+        float threshold = 0.5f;
+
+        // CONTEXT 1: Combat state
+        // Out of combat = variance likely from pathing, not dodging
+        if (target->is_in_combat())
+        {
+            threshold -= 0.05f;  // In combat → easier to detect (0.45)
+        }
+        else
+        {
+            threshold += 0.20f;  // Out of combat → harder to detect (0.70)
+        }
+
+        // CONTEXT 2: Movement speed
+        // Slow champions physically can't juke as effectively
+        float move_speed = target->get_move_speed();
+        if (move_speed < 350.f)
+        {
+            threshold += 0.10f;  // Slow → harder to detect
+        }
+        else if (move_speed > 450.f)
+        {
+            threshold -= 0.05f;  // Fast → easier to detect
+        }
+
+        // CONTEXT 3: Health pressure
+        // Low HP in combat = more likely to be dodging desperately
+        if (target->is_in_combat() && target->get_health_percent() < 0.3f)
+        {
+            threshold -= 0.10f;  // Low HP → easier to detect
+        }
+
+        // Clamp to reasonable range
+        return std::clamp(threshold, 0.35f, 0.80f);
+    }
+
+    /**
      * Detect if target is juking (zigzag erratic movement to dodge skillshots)
      * Uses velocity direction variance + returns AVERAGE velocity for prediction
+     * Now with context-aware threshold and stale data prevention
      */
     inline JukeInfo detect_juke(game_object* target)
     {
@@ -2097,7 +2201,41 @@ namespace EdgeCases
         // Get or create movement history for this target
         auto& history = g_movement_history[target_id];
 
-        // Update history with current velocity
+        // STALE DATA CHECK #1: Clear history if target is CC'd
+        // CC changes behavior context - old juke patterns no longer relevant
+        if (target->is_immobilized() || target->is_stunned() || target->is_rooted() ||
+            target->is_charmed() || target->is_feared() || target->is_taunted())
+        {
+            history.clear();
+            info.is_juking = false;
+            info.predicted_velocity = target->get_velocity();
+            info.confidence_penalty = 1.0f;
+            return info;
+        }
+
+        // STALE DATA CHECK #2: Clear history if target is dead or recalling
+        // Dead/recalling = major behavior reset
+        if (target->is_dead() || target->has_buff("recall") || target->has_buff("teleport_target"))
+        {
+            history.clear();
+            info.is_juking = false;
+            info.predicted_velocity = target->get_velocity();
+            info.confidence_penalty = 1.0f;
+            return info;
+        }
+
+        // STALE DATA CHECK #3: Clear history if target not visible
+        // Vision loss = can't trust old movement data
+        if (!target->is_visible())
+        {
+            history.clear();
+            info.is_juking = false;
+            info.predicted_velocity = target->get_velocity();
+            info.confidence_penalty = 1.0f;
+            return info;
+        }
+
+        // Update history with current velocity (includes dash filtering)
         math::vector3 current_velocity = target->get_velocity();
         history.update(current_velocity, current_time);
 
@@ -2105,10 +2243,12 @@ namespace EdgeCases
         float variance = history.calculate_direction_variance();
         info.direction_variance = variance;
 
-        // Juke detection threshold: variance > 0.5 = significant zigzag
-        constexpr float JUKE_THRESHOLD = 0.5f;
+        // ADAPTIVE THRESHOLD: Context-aware juke detection
+        // In combat + fast + low HP → threshold 0.35 (sensitive)
+        // Out of combat + slow → threshold 0.70 (conservative)
+        float juke_threshold = get_adaptive_juke_threshold(target);
 
-        if (variance > JUKE_THRESHOLD)
+        if (variance > juke_threshold)
         {
             info.is_juking = true;
 
@@ -2174,6 +2314,10 @@ namespace EdgeCases
                 //   Sample multiplier: 0.864x
                 //   Combined: 0.857x (needs more observation time!)
                 info.confidence_penalty *= sample_confidence_multiplier;
+
+                // Enforce absolute minimum confidence after all scaling
+                // Even with worst case (poor pattern + few samples), don't go below 60%
+                info.confidence_penalty = std::max(info.confidence_penalty, 0.60f);
             }
             else
             {
@@ -2186,6 +2330,10 @@ namespace EdgeCases
 
                 // Apply sample-count-based scaling (even more important for random jitter!)
                 info.confidence_penalty *= sample_confidence_multiplier;
+
+                // Enforce absolute minimum confidence after all scaling
+                // Random jitter with few samples = maximum penalty, but still reasonable
+                info.confidence_penalty = std::max(info.confidence_penalty, 0.50f);
             }
         }
         else
