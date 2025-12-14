@@ -1964,11 +1964,8 @@ namespace EdgeCases
             float time_since_reversal = reversal_times[0];
             float time_to_next_reversal = weighted_period - time_since_reversal;
 
-            // IMPROVEMENT 3: ACCELERATION MODELING
-            // Direction changes aren't instant - model brief deceleration period
-            constexpr float REVERSAL_TIME = 0.05f;  // 50ms to reverse direction
-
-            // Integrate position through reversals with acceleration
+            // Integrate position through reversals (INSTANT DIRECTION CHANGES)
+            // League has NO turn rate - direction changes are instant!
             math::vector3 position = current_pos;
             math::vector3 velocity = current_velocity;
             float remaining_time = delta_time;
@@ -1979,19 +1976,10 @@ namespace EdgeCases
             position.z += velocity.z * dt;
             remaining_time -= dt;
 
-            // Continue through reversals
+            // Continue through reversals (instant velocity flip)
             while (remaining_time > 0.001f)
             {
-                // Model acceleration during reversal (50ms transition)
-                if (remaining_time > REVERSAL_TIME)
-                {
-                    // During reversal: decelerate to 0, then accelerate to opposite
-                    // Average velocity during reversal ≈ 0 (cancels out)
-                    // Skip ahead by reversal time with minimal displacement
-                    remaining_time -= REVERSAL_TIME;
-                }
-
-                // Reverse velocity (juke direction change)
+                // Instant reversal (no acceleration/deceleration in League)
                 velocity.x = -velocity.x;
                 velocity.z = -velocity.z;
 
