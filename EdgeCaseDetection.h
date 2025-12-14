@@ -1872,10 +1872,115 @@ namespace EdgeCases
             // At least 2 out of 3 transitions are reversals = oscillating
             return alternations >= 2;
         }
+
+        // ADVANCED: Predict position at future time by extrapolating oscillation
+        // Instead of averaging to center, predicts exact phase of oscillation
+        math::vector3 predict_position_with_oscillation(float delta_time, const math::vector3& current_pos,
+                                                         const math::vector3& current_velocity) const
+        {
+            if (!is_oscillating_pattern() || velocity_samples.size() < 4)
+            {
+                // Fall back to average velocity * time
+                return current_pos + calculate_average_velocity() * delta_time;
+            }
+
+            // Find reversal times to calculate oscillation period
+            std::vector<float> reversal_times;
+            for (size_t i = 0; i < velocity_samples.size() - 1; ++i)
+            {
+                const auto& v1 = velocity_samples[i];
+                const auto& v2 = velocity_samples[i + 1];
+                float dot = v1.x * v2.x + v1.z * v2.z;
+
+                if (dot < 0.f)  // Reversal detected
+                {
+                    // Time ago this reversal happened
+                    float time_ago = (velocity_samples.size() - 1 - i) * SAMPLE_INTERVAL;
+                    reversal_times.push_back(time_ago);
+                }
+            }
+
+            if (reversal_times.size() < 2)
+            {
+                // Not enough reversals - use average
+                return current_pos + calculate_average_velocity() * delta_time;
+            }
+
+            // Calculate average period between reversals
+            float total_period = 0.f;
+            for (size_t i = 0; i < reversal_times.size() - 1; ++i)
+            {
+                total_period += (reversal_times[i] - reversal_times[i + 1]);
+            }
+            float avg_period = total_period / (reversal_times.size() - 1);
+
+            // Prevent division by zero
+            if (avg_period < 0.01f)
+                return current_pos + calculate_average_velocity() * delta_time;
+
+            // Time since last reversal
+            float time_since_reversal = reversal_times[0];
+            float time_to_next_reversal = avg_period - time_since_reversal;
+
+            // Integrate position through reversals
+            math::vector3 position = current_pos;
+            math::vector3 velocity = current_velocity;
+            float remaining_time = delta_time;
+
+            // First segment: travel until next reversal (or delta_time, whichever is shorter)
+            float dt = std::min(remaining_time, time_to_next_reversal);
+            position.x += velocity.x * dt;
+            position.z += velocity.z * dt;
+            remaining_time -= dt;
+
+            // Continue through reversals
+            while (remaining_time > 0.001f)
+            {
+                // Reverse velocity (juke direction change)
+                velocity.x = -velocity.x;
+                velocity.z = -velocity.z;
+
+                // Integrate next segment (full period or remaining time)
+                dt = std::min(remaining_time, avg_period);
+                position.x += velocity.x * dt;
+                position.z += velocity.z * dt;
+                remaining_time -= dt;
+            }
+
+            return position;
+        }
     };
 
     // Global movement history cache (per target)
     static std::unordered_map<uint32_t, MovementHistory> g_movement_history;
+
+    /**
+     * Predict position for juking target using oscillation extrapolation
+     * Returns predicted position accounting for juke reversals
+     */
+    inline math::vector3 predict_juking_position(game_object* target, float prediction_time)
+    {
+        if (!target || !target->is_valid())
+            return target ? target->get_server_position() : math::vector3(0.f, 0.f, 0.f);
+
+        uint32_t target_id = target->get_network_id();
+        auto it = g_movement_history.find(target_id);
+
+        if (it == g_movement_history.end())
+        {
+            // No history - use current position + velocity
+            math::vector3 pos = target->get_server_position();
+            math::vector3 vel = target->get_velocity();
+            return pos + vel * prediction_time;
+        }
+
+        const auto& history = it->second;
+        math::vector3 current_pos = target->get_server_position();
+        math::vector3 current_vel = target->get_velocity();
+
+        // Use oscillation extrapolation if available
+        return history.predict_position_with_oscillation(prediction_time, current_pos, current_vel);
+    }
 
     /**
      * Detect if target is juking (zigzag erratic movement to dodge skillshots)
@@ -1916,20 +2021,21 @@ namespace EdgeCases
             // This is the KEY FIX - we aim at where they ARE on average, not current direction
             info.predicted_velocity = history.calculate_average_velocity();
 
-            // Confidence penalty - MUCH smaller than before
+            // Confidence penalty
             if (info.is_oscillating)
             {
-                // Oscillating pattern = predictable, aim at center with high confidence
-                // variance 0.5 → 0.97x (small penalty)
-                // variance 0.8 → 0.93x
-                // variance 1.0 → 0.90x (10% max penalty)
-                info.confidence_penalty = 1.0f - (variance * 0.1f);
-                info.confidence_penalty = std::clamp(info.confidence_penalty, 0.90f, 1.0f);
+                // Oscillating pattern = VERY predictable (we extrapolate the sine wave!)
+                // variance 0.5 → 0.985x (tiny penalty)
+                // variance 0.8 → 0.976x
+                // variance 1.0 → 0.970x (3% max penalty)
+                // We're not averaging to center anymore - we're predicting exact phase!
+                info.confidence_penalty = 1.0f - (variance * 0.03f);
+                info.confidence_penalty = std::clamp(info.confidence_penalty, 0.97f, 1.0f);
             }
             else
             {
-                // Random jitter = less predictable, larger penalty
-                // variance 0.5 → 0.93x
+                // Random jitter = less predictable (use average, so larger uncertainty)
+                // variance 0.5 → 0.90x
                 // variance 0.8 → 0.84x
                 // variance 1.0 → 0.80x (20% max penalty)
                 info.confidence_penalty = 1.0f - (variance * 0.2f);

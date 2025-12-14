@@ -1388,23 +1388,38 @@ namespace GeometricPred
         );
 
         // JUKE-AWARE PREDICTION:
-        // If target is juking, use AVERAGE velocity (center of oscillation)
+        // If target is juking, EXTRAPOLATE the oscillation pattern (not just average!)
         // Otherwise use normal path following
         math::vector3 predicted_pos;
 
-        if (edge_analysis.juke.is_juking)
+        if (edge_analysis.juke.is_juking && edge_analysis.juke.is_oscillating)
         {
-            // Target is juking - predict using AVERAGE velocity (not current velocity)
-            // This aims at the center of their zigzag pattern
-            math::vector3 current_pos = input.target->get_server_position();
-            predicted_pos = current_pos + edge_analysis.juke.predicted_velocity * prediction_time;
+            // ADVANCED: Target is juking with oscillating pattern
+            // Extrapolate the sine wave to predict where they'll be at impact time
+            // This accounts for juke reversals and phase of oscillation
+            predicted_pos = EdgeCases::predict_juking_position(input.target, prediction_time);
 
             // Ensure prediction stays walkable
             if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(predicted_pos))
             {
-                // Fall back to current position if predicted position is in wall
-                predicted_pos = current_pos;
+                // Fall back to average velocity if extrapolation goes into wall
+                math::vector3 current_pos = input.target->get_server_position();
+                predicted_pos = current_pos + edge_analysis.juke.predicted_velocity * prediction_time;
+
+                // Still in wall? Use current position
+                if (!g_sdk->nav_mesh->is_pathable(predicted_pos))
+                    predicted_pos = current_pos;
             }
+        }
+        else if (edge_analysis.juke.is_juking)
+        {
+            // Juking but not oscillating (random jitter)
+            // Use average velocity (center of movement)
+            math::vector3 current_pos = input.target->get_server_position();
+            predicted_pos = current_pos + edge_analysis.juke.predicted_velocity * prediction_time;
+
+            if (g_sdk && g_sdk->nav_mesh && !g_sdk->nav_mesh->is_pathable(predicted_pos))
+                predicted_pos = current_pos;
         }
         else
         {
@@ -1655,19 +1670,20 @@ namespace GeometricPred
             reaction_window /= 1.08f;  // Modest boost for distracted targets (CSing)
         }
 
-        // JUKING: Small uncertainty penalty for remaining variance
-        // NOTE: We already aim at CENTER of juke pattern (average velocity), so penalty is small
+        // JUKING: Very small penalty for oscillating (we extrapolate precisely!)
+        // NOTE: For oscillating jukes, we extrapolate the sine wave (predict exact phase at impact)
+        //       For random jitter, we use average velocity (center of movement)
         if (edge_analysis.juke.is_juking)
         {
-            // Oscillating pattern (predictable):
-            //   variance 0.5 → penalty 0.97 → +3% harder
-            //   variance 0.8 → penalty 0.93 → +7% harder
-            //   variance 1.0 → penalty 0.90 → +11% harder (max)
+            // Oscillating pattern (extrapolated sine wave - VERY predictable):
+            //   variance 0.5 → penalty 0.985 → +1.5% harder
+            //   variance 0.8 → penalty 0.976 → +2.5% harder
+            //   variance 1.0 → penalty 0.970 → +3.1% harder (tiny penalty!)
             //
-            // Random jitter (less predictable):
-            //   variance 0.5 → penalty 0.93 → +7% harder
+            // Random jitter (average velocity - less predictable):
+            //   variance 0.5 → penalty 0.90 → +11% harder
             //   variance 0.8 → penalty 0.84 → +19% harder
-            //   variance 1.0 → penalty 0.80 → +25% harder (max)
+            //   variance 1.0 → penalty 0.80 → +25% harder
             reaction_window *= (1.0f / edge_analysis.juke.confidence_penalty);
         }
 
