@@ -226,7 +226,9 @@ namespace PathStability
                 {
                     // Meaningful intent change after windup - reset stability
                     time_since_meaningful_change = 0.f;
-                    reference_intent = current_intent;  // Update reference to new intent
+                    // Update reference only if current intent is valid (prevent zero-vector pinning)
+                    if (current_intent.is_valid)
+                        reference_intent = current_intent;
                 }
                 // else: direction consistent, don't reset
             }
@@ -251,7 +253,9 @@ namespace PathStability
                 {
                     // Intent changed - reset timer and update reference
                     time_since_meaningful_change = 0.f;
-                    reference_intent = current_intent;  // Update reference to new intent
+                    // Update reference only if current intent is valid (prevent zero-vector pinning)
+                    if (current_intent.is_valid)
+                        reference_intent = current_intent;
                 }
                 else
                 {
@@ -310,10 +314,13 @@ namespace PathStability
                 }
             }
 
-            // Short-horizon predicted position (0.3s ahead, simple linear)
-            // Tuned to balance fast spells (~0.2s) and slow spells (~0.8s)
-            // Longer horizon captures intent better for slow spells without excessive noise for fast spells
-            constexpr float SHORT_HORIZON = 0.3f;
+            // Short-horizon predicted position (0.2s ahead, simple linear)
+            // KNOWN LIMITATION: Fixed horizon biases intent detection across spell types
+            //   - Fast spells (t_impact ~0.2s): Good alignment
+            //   - Slow spells (t_impact ~0.8s): Under-detects changes (only 25% coverage)
+            // Proper fix requires per-spell horizon (tracker.set_horizon(0.5*t_impact))
+            // but tracker is per-target, not per-spell. Deferred to P2.
+            constexpr float SHORT_HORIZON = 0.2f;
             sig.short_horizon_pos = current_pos + current_vel * SHORT_HORIZON;
 
             return sig;
