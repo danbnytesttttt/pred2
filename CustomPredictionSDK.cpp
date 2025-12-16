@@ -261,6 +261,16 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             }
         }
 
+        // CRITICAL: Reject ally targets (only predict on enemies)
+        if (obj->get_team_id() == spell_data.source->get_team_id())
+        {
+            if (PredictionSettings::get().enable_debug_logging)
+                g_sdk->log_console("[Danny.Prediction] REJECT: Target is ally, not enemy");
+            result.hitchance = pred_sdk::hitchance::any;
+            result.is_valid = false;
+            return result;
+        }
+
         // FIXED: Safe debug logging for spell details
         if (PredictionSettings::get().enable_debug_logging)
         {
