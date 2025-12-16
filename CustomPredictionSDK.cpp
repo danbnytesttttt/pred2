@@ -1,4 +1,5 @@
 #include "CustomPredictionSDK.h"
+#include "GeometricPrediction.h"  // NEW: Lightweight geometric prediction system
 #include "EdgeCaseDetection.h"
 #include "PredictionSettings.h"
 #include "PredictionTelemetry.h"
@@ -338,11 +339,40 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         // Start telemetry timing
         auto telemetry_start = std::chrono::high_resolution_clock::now();
 
-        // Use hybrid prediction system - wrapped in try-catch for safety
-        HybridPred::HybridPredictionResult hybrid_result;
+        // Build GeometricPred input
+        GeometricPred::PredictionInput geo_input;
+        geo_input.source = spell_data.source;
+        geo_input.target = obj;
+
+        // Map spell type to shape
+        switch (spell_data.spell_type)
+        {
+            case pred_sdk::spell_type::linear:
+                geo_input.shape = GeometricPred::SpellShape::Capsule;
+                break;
+            case pred_sdk::spell_type::circular:
+                geo_input.shape = GeometricPred::SpellShape::Circle;
+                break;
+            case pred_sdk::spell_type::vector:
+                geo_input.shape = GeometricPred::SpellShape::Vector;
+                break;
+            default:
+                geo_input.shape = GeometricPred::SpellShape::Capsule;
+                break;
+        }
+
+        geo_input.spell_width = spell_data.radius;
+        geo_input.spell_range = spell_data.range;
+        geo_input.missile_speed = spell_data.projectile_speed;
+        geo_input.cast_delay = spell_data.delay;
+        geo_input.proc_delay = 0.f;  // Can be extended per champion if needed
+        geo_input.cast_range = spell_data.cast_range;  // For vector spells
+
+        // Use geometric prediction system - wrapped in try-catch for safety
+        GeometricPred::PredictionResult geo_result;
         try
         {
-            hybrid_result = HybridPred::PredictionManager::predict(spell_data.source, obj, spell_data);
+            geo_result = GeometricPred::get_prediction(geo_input);
         }
         catch (...)
         {
@@ -363,50 +393,52 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             {
                 std::stringstream ss;
                 ss << "[Danny.Prediction] Target: " << obj->get_char_name()
-                    << " | Valid: " << (hybrid_result.is_valid ? "YES" : "NO")
-                    << " | HitChance: " << (hybrid_result.hit_chance * 100.f) << "% (" << hybrid_result.hit_chance << " raw)";
+                    << " | Valid: " << (geo_result.should_cast ? "YES" : "NO")
+                    << " | HitChance: " << (geo_result.hit_chance_float * 100.f) << "%";
                 g_sdk->log_console(ss.str().c_str());
             }
             catch (...) { /* Ignore logging errors */ }
         }
 
-        if (!hybrid_result.is_valid)
+        if (!geo_result.should_cast || geo_result.hit_chance == GeometricPred::HitChance::Impossible)
         {
-            if (!hybrid_result.reasoning.empty() && PredictionSettings::get().enable_debug_logging)
+            if (geo_result.block_reason && PredictionSettings::get().enable_debug_logging)
             {
-                std::string debug_msg = "[Danny.Prediction] Reason invalid: " + hybrid_result.reasoning;
+                std::string debug_msg = "[Danny.Prediction] Blocked: ";
+                debug_msg += geo_result.block_reason;
                 g_sdk->log_console(debug_msg.c_str());
             }
 
             // Log invalid prediction to telemetry
             if (PredictionSettings::get().enable_telemetry)
             {
-                PredictionTelemetry::TelemetryLogger::log_invalid_prediction(hybrid_result.reasoning);
+                std::string reason = geo_result.block_reason ? geo_result.block_reason : "Unknown";
+                PredictionTelemetry::TelemetryLogger::log_invalid_prediction(reason);
             }
 
             result.hitchance = pred_sdk::hitchance::any;
             return result;
         }
 
-        // Convert hybrid result to pred_data
-        result = convert_to_pred_data(hybrid_result, obj, spell_data);
+        // Convert geometric result to pred_data
+        result = convert_geometric_to_pred_data(geo_result, obj, spell_data);
 
         // Apply fog of war confidence penalty
         if (fog_confidence_multiplier < 1.0f)
         {
             // Reduce hit chance for targets in fog
-            float original_hc = hybrid_result.hit_chance;
-            hybrid_result.hit_chance *= fog_confidence_multiplier;
+            float original_hc = geo_result.hit_chance_float;
+            float penalized_hc = geo_result.hit_chance_float * fog_confidence_multiplier;
 
             // Re-convert to enum with reduced hit chance
-            result.hitchance = convert_hit_chance_to_enum(hybrid_result.hit_chance);
+            result.hitchance = convert_hit_chance_to_enum(penalized_hc);
 
             if (PredictionSettings::get().enable_debug_logging)
             {
                 char fog_msg[256];
                 snprintf(fog_msg, sizeof(fog_msg),
                     "[Danny.Prediction] FOG PENALTY: HC %.0f%% -> %.0f%% (multiplier: %.2f)",
-                    original_hc * 100.f, hybrid_result.hit_chance * 100.f, fog_confidence_multiplier);
+                    original_hc * 100.f, penalized_hc * 100.f, fog_confidence_multiplier);
                 g_sdk->log_console(fog_msg);
             }
         }
@@ -461,35 +493,48 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         if (range_usage > 0.85f)  // Near max range - be more careful
         {
             // Check if target is moving away from the predicted position
-            auto* tracker = HybridPred::PredictionManager::get_tracker(obj);
-            if (tracker)
+            if (obj->is_moving())
             {
-                math::vector3 target_velocity = tracker->get_current_velocity();
-
-                // For vector spells, use direction along the vector, not from player
-                math::vector3 to_predicted;
-                if (spell_data.spell_type == pred_sdk::spell_type::vector)
+                auto path = obj->get_path();
+                if (!path.empty())
                 {
-                    to_predicted = result.cast_position - result.first_cast_position;
-                }
-                else
-                {
-                    to_predicted = result.cast_position - source_pos;
-                }
+                    // Calculate velocity from path direction
+                    math::vector3 current_pos = obj->get_position();
+                    math::vector3 path_direction = path.back() - current_pos;
+                    float path_mag = path_direction.magnitude();
 
-                float to_pred_mag = to_predicted.magnitude();
-
-                if (to_pred_mag > 0.001f)
-                {
-                    math::vector3 to_pred_dir = to_predicted / to_pred_mag;
-                    // Positive = moving away from us (in same direction as predicted pos)
-                    float away_speed = target_velocity.dot(to_pred_dir);
-
-                    if (away_speed > 100.f)  // Moving away at significant speed
+                    if (path_mag > 0.001f)
                     {
-                        // They'll move further during cast animation (use actual spell delay)
-                        float cast_animation_movement = away_speed * spell_data.delay;
-                        effective_range -= cast_animation_movement;
+                        path_direction = path_direction / path_mag;
+                        float move_speed = obj->get_move_speed();
+                        math::vector3 target_velocity = path_direction * move_speed;
+
+                        // For vector spells, use direction along the vector, not from player
+                        math::vector3 to_predicted;
+                        if (spell_data.spell_type == pred_sdk::spell_type::vector)
+                        {
+                            to_predicted = result.cast_position - result.first_cast_position;
+                        }
+                        else
+                        {
+                            to_predicted = result.cast_position - source_pos;
+                        }
+
+                        float to_pred_mag = to_predicted.magnitude();
+
+                        if (to_pred_mag > 0.001f)
+                        {
+                            math::vector3 to_pred_dir = to_predicted / to_pred_mag;
+                            // Positive = moving away from us (in same direction as predicted pos)
+                            float away_speed = target_velocity.dot(to_pred_dir);
+
+                            if (away_speed > 100.f)  // Moving away at significant speed
+                            {
+                                // They'll move further during cast animation (use actual spell delay)
+                                float cast_animation_movement = away_speed * spell_data.delay;
+                                effective_range -= cast_animation_movement;
+                            }
+                        }
                     }
                 }
             }
@@ -560,10 +605,8 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             try
             {
                 PredictionTelemetry::PredictionEvent event;
-                // Start with detailed telemetry data from hybrid prediction
-                event = hybrid_result.telemetry_data;
 
-                // Add timestamp and basic info
+                // Timestamp and basic info
                 event.timestamp = (g_sdk && g_sdk->clock_facade) ? g_sdk->clock_facade->get_game_time() : 0.f;
                 event.target_name = obj->get_char_name();
 
@@ -578,12 +621,11 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 }
 
                 event.spell_slot = spell_data.spell_slot;
-                event.hit_chance = hybrid_result.hit_chance;
-                event.confidence = hybrid_result.confidence_score;
-                event.physics_contribution = hybrid_result.physics_contribution;
-                event.behavior_contribution = hybrid_result.behavior_contribution;
-                // FIX: Use server position for accurate telemetry distance
-                event.distance = spell_data.source->get_position().distance(obj->get_server_position());
+                event.hit_chance = geo_result.hit_chance_float;
+                event.confidence = geo_result.hit_chance_float;  // GeometricPred uses single confidence value
+                event.physics_contribution = 1.0f;  // GeometricPred is pure physics (no behavior)
+                event.behavior_contribution = 0.0f;
+                event.distance = geo_result.distance_to_target;
                 event.computation_time_ms = computation_time_ms;
 
                 // Spell configuration data (for diagnosing misconfigured spells)
@@ -592,36 +634,34 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 event.spell_delay = spell_data.delay;
                 event.spell_speed = spell_data.projectile_speed;
 
-                // Movement and prediction offset data
-                // FIX: Use server position for accurate offset calculation
-                math::vector3 current_pos = obj->get_server_position();
-                math::vector3 predicted_pos = result.cast_position;
-                event.prediction_offset = predicted_pos.distance(current_pos);
-                event.target_velocity = obj->get_move_speed();
+                // Movement and prediction offset data (from GeometricPred result)
+                event.prediction_offset = geo_result.prediction_offset;
+                event.target_velocity = geo_result.target_velocity;
+                event.target_is_moving = geo_result.target_is_moving;
 
-                // Check if target is moving by examining path
-                auto path = obj->get_path();
-                event.target_is_moving = (path.size() > 1);
-
-                // Extract edge case info from reasoning
-                if (hybrid_result.reasoning.find("STASIS") != std::string::npos)
+                // Extract edge case info from GeometricPred result
+                if (geo_result.is_stasis)
+                {
                     event.edge_case = "stasis";
-                else if (hybrid_result.reasoning.find("CHANNEL") != std::string::npos ||
-                    hybrid_result.reasoning.find("RECALL") != std::string::npos)
+                }
+                else if (geo_result.is_channeling)
+                {
                     event.edge_case = "channeling";
-                else if (hybrid_result.reasoning.find("DASH") != std::string::npos)
+                }
+                else if (geo_result.is_dash)
                 {
                     event.edge_case = "dash";
                     event.was_dash = true;
                 }
                 else
-                    event.edge_case = "normal";
+                {
+                    event.edge_case = geo_result.edge_case_type ? geo_result.edge_case_type : "normal";
+                }
 
                 // Check for stationary/animation lock
-                event.was_stationary = hybrid_result.reasoning.find("STATIONARY") != std::string::npos;
-                event.was_animation_locked = hybrid_result.reasoning.find("animation") != std::string::npos ||
-                    hybrid_result.reasoning.find("LOCKED") != std::string::npos;
-                event.collision_detected = false;  // Will be updated if collision check fails
+                event.was_stationary = !geo_result.target_is_moving;
+                event.was_animation_locked = geo_result.is_animation_locked;
+                event.collision_detected = geo_result.minion_collision;
 
                 PredictionTelemetry::TelemetryLogger::log_prediction(event);
             }
@@ -651,10 +691,9 @@ math::vector3 CustomPredictionSDK::predict_on_path(game_object* obj, float time,
         if (!obj || !obj->is_valid())
             return math::vector3{};
 
-        // FIX: Use the smart segment-walking predictor
-        // This matches what the actual casting logic uses
-        // Prevents "Visual Lie" where drawn line goes through walls but cast doesn't
-        return HybridPred::PhysicsPredictor::predict_on_path(obj, time);
+        // Use GeometricPred's smart path predictor
+        // This handles path staleness, acceleration, and destination clamping
+        return GeometricPred::predict_linear_path(obj, time);
     }
     catch (...)
     {
@@ -763,7 +802,7 @@ float CustomPredictionSDK::CustomPredictionUtils::get_spell_hit_time(
     if (!data.source || !data.source->is_valid())
         return 0.f;
 
-    return HybridPred::PhysicsPredictor::compute_arrival_time(
+    return GeometricPred::Utils::compute_arrival_time(
         data.source->get_position(),
         pos,
         data.projectile_speed,
@@ -799,38 +838,30 @@ float CustomPredictionSDK::CustomPredictionUtils::get_spell_escape_time(
 // HELPER FUNCTIONS
 // =============================================================================
 
-pred_sdk::pred_data CustomPredictionSDK::convert_to_pred_data(
-    const HybridPred::HybridPredictionResult& hybrid_result,
+pred_sdk::pred_data CustomPredictionSDK::convert_geometric_to_pred_data(
+    const GeometricPred::PredictionResult& geo_result,
     game_object* target,
     const pred_sdk::spell_data& spell_data)
 {
     pred_sdk::pred_data result{};
 
     // Copy positions
-    result.cast_position = hybrid_result.cast_position;
-    result.first_cast_position = hybrid_result.first_cast_position;  // For vector spells (Viktor E, Rumble R, Irelia E)
-    result.predicted_position = hybrid_result.cast_position;
+    result.cast_position = geo_result.cast_position;
+    result.first_cast_position = geo_result.first_cast_position;  // For vector spells (Viktor E, Rumble R, Irelia E)
+    result.predicted_position = geo_result.cast_position;
     result.target = target;
-    result.is_valid = hybrid_result.is_valid;
+    result.is_valid = geo_result.should_cast;
 
     // Convert hit chance to enum
-    result.hitchance = convert_hit_chance_to_enum(hybrid_result.hit_chance);
+    result.hitchance = convert_hit_chance_to_enum(geo_result.hit_chance_float);
 
-    // Calculate hit time
-    if (spell_data.source && spell_data.source->is_valid())
-    {
-        result.intersection_time = HybridPred::PhysicsPredictor::compute_arrival_time(
-            spell_data.source->get_position(),
-            hybrid_result.cast_position,
-            spell_data.projectile_speed,
-            spell_data.delay
-        );
-    }
+    // Calculate hit time (use time_to_impact from geometric prediction)
+    result.intersection_time = geo_result.time_to_impact;
 
     // Update hit chance display (if enabled)
     if (target && target->is_valid() && PredictionSettings::get().enable_hit_chance_display)
     {
-        update_hit_chance_display(target->get_network_id(), hybrid_result.hit_chance);
+        update_hit_chance_display(target->get_network_id(), geo_result.hit_chance_float);
     }
 
     return result;
@@ -1036,14 +1067,41 @@ float CustomPredictionSDK::calculate_target_score(
     if (edge_cases.blocked_by_windwall)
         return 0.f;  // Can't hit through windwall
 
-    // Get hybrid prediction for this target
-    HybridPred::HybridPredictionResult pred_result =
-        HybridPred::PredictionManager::predict(spell_data.source, target, spell_data);
+    // Get geometric prediction for this target
+    GeometricPred::PredictionInput geo_input;
+    geo_input.source = spell_data.source;
+    geo_input.target = target;
 
-    if (!pred_result.is_valid)
+    // Map spell type to shape
+    switch (spell_data.spell_type)
+    {
+        case pred_sdk::spell_type::linear:
+            geo_input.shape = GeometricPred::SpellShape::Capsule;
+            break;
+        case pred_sdk::spell_type::circular:
+            geo_input.shape = GeometricPred::SpellShape::Circle;
+            break;
+        case pred_sdk::spell_type::vector:
+            geo_input.shape = GeometricPred::SpellShape::Vector;
+            break;
+        default:
+            geo_input.shape = GeometricPred::SpellShape::Capsule;
+            break;
+    }
+
+    geo_input.spell_width = spell_data.radius;
+    geo_input.spell_range = spell_data.range;
+    geo_input.missile_speed = spell_data.projectile_speed;
+    geo_input.cast_delay = spell_data.delay;
+    geo_input.proc_delay = 0.f;
+    geo_input.cast_range = spell_data.cast_range;
+
+    GeometricPred::PredictionResult pred_result = GeometricPred::get_prediction(geo_input);
+
+    if (!pred_result.should_cast)
         return 0.f;
 
-    float score = pred_result.hit_chance;
+    float score = pred_result.hit_chance_float;
 
     // Apply edge case priority multipliers (HUGE impact)
     score *= edge_cases.priority_multiplier;

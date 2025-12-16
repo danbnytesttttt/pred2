@@ -249,7 +249,7 @@ namespace Prediction
         }
 
         // Clean up all subsystems (always safe to call)
-        HybridPred::PredictionManager::clear();
+        // GeometricPred is stateless - no cleanup needed
         FogOfWarTracker::clear();
         PredictionVisuals::clear();
 

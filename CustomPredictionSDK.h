@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sdk.hpp"
-#include "HybridPrediction.h"
+#include "GeometricPrediction.h"
 #include <string>
 
 /**
@@ -39,7 +39,7 @@
  * }
  *
  * extern "C" __declspec(dllexport) void PluginUnload() {
- *     HybridPred::PredictionManager::clear();
+ *     // GeometricPred is stateless - no cleanup needed
  * }
  *
  * =============================================================================
@@ -208,10 +208,10 @@ private:
     // =========================================================================
 
     /**
-     * Convert hybrid prediction result to pred_sdk::pred_data
+     * Convert geometric prediction result to pred_sdk::pred_data
      */
-    pred_sdk::pred_data convert_to_pred_data(
-        const HybridPred::HybridPredictionResult& hybrid_result,
+    pred_sdk::pred_data convert_geometric_to_pred_data(
+        const GeometricPred::PredictionResult& geo_result,
         game_object* target,
         const pred_sdk::spell_data& spell_data
     );
@@ -257,7 +257,7 @@ inline CustomPredictionSDK::CustomPredictionSDK()
 
 inline CustomPredictionSDK::~CustomPredictionSDK()
 {
-    HybridPred::PredictionManager::clear();
+    // GeometricPred is stateless - no cleanup needed
 }
 
 inline pred_sdk::utils* CustomPredictionSDK::util()
@@ -267,5 +267,6 @@ inline pred_sdk::utils* CustomPredictionSDK::util()
 
 inline void CustomPredictionSDK::update_trackers()
 {
-    HybridPred::PredictionManager::update();
+    // GeometricPred is stateless - no per-frame updates needed
+    // FogOfWarTracker updates are handled per-prediction, not globally
 }
