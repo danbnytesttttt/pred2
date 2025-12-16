@@ -28,6 +28,7 @@
  */
 
 #include "sdk.hpp"
+#include "SDKCompatibility.h"
 #include "EdgeCaseDetection.h"
 #include "PredictionSettings.h"
 #include "PredictionTelemetry.h"
@@ -400,7 +401,7 @@ namespace GeometricPred
             {
                 float ping_ms = static_cast<float>(g_sdk->net_client->get_ping());
                 ping_delay = ping_ms / 2000.f;  // One-way, convert to seconds
-                ping_delay = std::clamp(ping_delay, 0.005f, 0.15f);  // 5-150ms range
+                ping_delay = SDKCompat::clamp(ping_delay, 0.005f, 0.15f);  // 5-150ms range
             }
 
             return ping_delay + cast_delay + proc_delay + (distance / projectile_speed);
@@ -474,7 +475,7 @@ namespace GeometricPred
 
                 // Only check enemy/neutral minions
                 // (Don't block on allied minions - game doesn't do that for most spells)
-                if (minion->get_team_id() == g_sdk->local_player->get_team_id())
+                if (minion->get_team_id() == g_sdk->get_local_player()->get_team_id())
                     continue;
 
                 math::vector3 minion_pos = minion->get_position();
@@ -565,38 +566,43 @@ namespace GeometricPred
         {
             if (!g_sdk || !g_sdk->object_manager) return false;
 
-            // Get enemy champions
-            auto enemies = g_sdk->object_manager->get_enemy_heroes();
-
-            for (auto* enemy : enemies)
+            // SDK LIMITATION: get_enemy_heroes() not available
+            // Windwall detection disabled - conservative approach (assume no windwall)
+            // TODO: Implement when SDK provides champion enumeration method
+            if (false)
             {
-                if (!enemy || !enemy->is_valid() || enemy->is_dead())
-                    continue;
+                std::vector<game_object*> enemies;  // Empty - no enemy enumeration
 
-                // Check for Yasuo W (Wind Wall)
-                if (std::strcmp(enemy->get_champion_name(), "Yasuo") == 0)
+                for (auto* enemy : enemies)
                 {
-                    // Check if Yasuo has active Wind Wall
-                    // This would require checking for the wall object in object_manager
-                    // or checking for specific buff/object type
-                    // Implementation depends on SDK capabilities
-                    // TODO: Implement if SDK provides wall object detection
-                }
+                    if (!enemy || !enemy->is_valid() || enemy->is_dead())
+                        continue;
 
-                // Check for Braum E (Unbreakable)
-                if (std::strcmp(enemy->get_champion_name(), "Braum") == 0)
-                {
-                    // Braum E blocks projectiles in a direction
-                    // Would need to check if he's facing our spell direction
-                    // TODO: Implement if critical
-                }
+                    // Check for Yasuo W (Wind Wall)
+                    if (std::strcmp(enemy->get_char_name(), "Yasuo") == 0)
+                    {
+                        // Check if Yasuo has active Wind Wall
+                        // This would require checking for the wall object in object_manager
+                        // or checking for specific buff/object type
+                        // Implementation depends on SDK capabilities
+                        // TODO: Implement if SDK provides wall object detection
+                    }
 
-                // Check for Samira W (Blade Whirl)
-                if (std::strcmp(enemy->get_champion_name(), "Samira") == 0)
-                {
-                    // Samira W destroys projectiles around her
-                    // Check if she has the buff active
-                    // TODO: Implement if critical
+                    // Check for Braum E (Unbreakable)
+                    if (std::strcmp(enemy->get_char_name(), "Braum") == 0)
+                    {
+                        // Braum E blocks projectiles in a direction
+                        // Would need to check if he's facing our spell direction
+                        // TODO: Implement if critical
+                    }
+
+                    // Check for Samira W (Blade Whirl)
+                    if (std::strcmp(enemy->get_char_name(), "Samira") == 0)
+                    {
+                        // Samira W destroys projectiles around her
+                        // Check if she has the buff active
+                        // TODO: Implement if critical
+                    }
                 }
             }
 
@@ -681,7 +687,7 @@ namespace GeometricPred
             float t = (to_point.x * segment.x + to_point.z * segment.z) / segment_length_sq;
 
             // Clamp t to [0,1] to stay on segment (not extend beyond endpoints)
-            t = std::clamp(t, 0.f, 1.f);
+            t = SDKCompat::clamp(t, 0.f, 1.f);
 
             // Find closest point on segment
             math::vector3 closest_point = capsule_start;
@@ -761,7 +767,7 @@ namespace GeometricPred
             // Project target onto spell line
             math::vector3 to_target = target_pos - spell_start;
             float proj_length = to_target.dot(spell_direction);
-            proj_length = std::clamp(proj_length, 0.f, spell_range);
+            proj_length = SDKCompat::clamp(proj_length, 0.f, spell_range);
 
             // Find closest point on spell line
             math::vector3 closest_point = spell_start + spell_direction * proj_length;
@@ -851,7 +857,7 @@ namespace GeometricPred
 
             // Calculate actual angle from cone center
             float dot_product = to_target_norm.x * cone_direction.x + to_target_norm.z * cone_direction.z;
-            float cos_angle = std::clamp(dot_product, -1.f, 1.f);
+            float cos_angle = SDKCompat::clamp(dot_product, -1.f, 1.f);
             float actual_angle = std::acos(cos_angle);
 
             // Calculate geometric escape distances
@@ -1828,7 +1834,7 @@ namespace GeometricPred
                 event.delta_short_horizon = tracker->get_delta_short_horizon();
 
                 // Windup tracking (Priority 2)
-                event.is_winding_up = input.target->is_winding_up() || input.target->is_channeling();
+                event.is_winding_up = SDKCompat::is_winding_up(input.target) || input.target->is_channelling();
                 event.windup_damping_factor = event.is_winding_up ? 0.3f : 1.0f;
             }
 
@@ -1941,7 +1947,9 @@ namespace GeometricPred
         float max_travel_time = (missile_speed > 0.f) ? (spell_range / missile_speed) : 0.f;
         float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
 
-        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        // SDK LIMITATION: get_enemy_heroes() not available - AOE prediction disabled
+        // TODO: Implement when SDK provides champion enumeration method
+        std::vector<game_object*> enemies;  // Empty - no enemy enumeration
         for (auto* enemy : enemies)
         {
             if (!enemy || !enemy->is_valid() || enemy->is_dead())
@@ -2093,7 +2101,9 @@ namespace GeometricPred
         float max_travel_time = (missile_speed > 0.f) ? (spell_range / missile_speed) : 0.f;
         float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
 
-        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        // SDK LIMITATION: get_enemy_heroes() not available - AOE prediction disabled
+        // TODO: Implement when SDK provides champion enumeration method
+        std::vector<game_object*> enemies;  // Empty - no enemy enumeration
         for (auto* enemy : enemies)
         {
             if (!enemy || !enemy->is_valid() || enemy->is_dead())
@@ -2259,7 +2269,9 @@ namespace GeometricPred
         float max_travel_time = (missile_speed > 0.f) ? (spell_range / missile_speed) : 0.f;
         float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
 
-        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        // SDK LIMITATION: get_enemy_heroes() not available - AOE prediction disabled
+        // TODO: Implement when SDK provides champion enumeration method
+        std::vector<game_object*> enemies;  // Empty - no enemy enumeration
         for (auto* enemy : enemies)
         {
             if (!enemy || !enemy->is_valid() || enemy->is_dead())
@@ -2422,7 +2434,9 @@ namespace GeometricPred
         float max_travel_time = (missile_speed > 0.f) ? ((max_range + line_length) / missile_speed) : 0.f;
         float movement_buffer = AOE_MAX_MOVE_SPEED * (cast_delay + max_travel_time + proc_delay);
 
-        auto enemies = g_sdk->object_manager->get_enemy_heroes();
+        // SDK LIMITATION: get_enemy_heroes() not available - AOE prediction disabled
+        // TODO: Implement when SDK provides champion enumeration method
+        std::vector<game_object*> enemies;  // Empty - no enemy enumeration
         for (auto* enemy : enemies)
         {
             if (!enemy || !enemy->is_valid() || enemy->is_dead())

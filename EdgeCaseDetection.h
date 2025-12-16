@@ -1654,10 +1654,12 @@ namespace EdgeCases
                 float estimated_dps = LANE_BASE_DPS;
 
                 // Higher DPS if minion is under tower (tower shots = massive burst)
-                if (g_sdk && g_sdk->object_manager)
+                // SDK LIMITATION: get_enemy_turrets() not available - conservative estimate
+                if (false && g_sdk && g_sdk->object_manager)
                 {
-                    // Check if minion is near an enemy tower - use SDK for actual tower stats
-                    auto towers = g_sdk->object_manager->get_enemy_turrets();
+                    // Disabled: SDK doesn't provide get_enemy_turrets() method
+                    // Using conservative minion DPS estimate instead
+                    std::vector<game_object*> towers;  // Empty - no tower check
                     for (auto* tower : towers)
                     {
                         if (tower && tower->is_valid() && !tower->is_dead())
@@ -1881,7 +1883,7 @@ namespace EdgeCases
 
             // avg_mag close to 1.0 = consistent direction
             // avg_mag close to 0.0 = directions cancel out (zigzag)
-            return std::clamp(1.f - avg_mag, 0.f, 1.f);
+            return SDKCompat::clamp(1.f - avg_mag, 0.f, 1.f);
         }
 
         // Detect alternating oscillation pattern (left-right-left) vs random jitter
@@ -2103,7 +2105,7 @@ namespace EdgeCases
             float cv = stddev / std::max(mean, 0.01f);
 
             // Quality score: 1.0 = perfect (CV=0), 0.0 = random (CV>0.5)
-            float quality = std::clamp(1.0f - (cv * 2.0f), 0.f, 1.f);
+            float quality = SDKCompat::clamp(1.0f - (cv * 2.0f), 0.f, 1.f);
 
             return quality;
         }
@@ -2152,7 +2154,9 @@ namespace EdgeCases
 
         // CONTEXT 1: Combat state
         // Out of combat = variance likely from pathing, not dodging
-        if (target->is_in_combat())
+        // SDK doesn't have is_in_combat() - use conservative assumption (out of combat)
+        bool in_combat = SDKCompat::is_in_combat(target);
+        if (in_combat)
         {
             threshold -= 0.05f;  // In combat → easier to detect (0.45)
         }
@@ -2175,13 +2179,14 @@ namespace EdgeCases
 
         // CONTEXT 3: Health pressure
         // Low HP in combat = more likely to be dodging desperately
-        if (target->is_in_combat() && target->get_health_percent() < 0.3f)
+        float health_percent = SDKCompat::get_health_percent(target);
+        if (in_combat && health_percent < 0.3f)
         {
             threshold -= 0.10f;  // Low HP → easier to detect
         }
 
         // Clamp to reasonable range
-        return std::clamp(threshold, 0.35f, 0.80f);
+        return SDKCompat::clamp(threshold, 0.35f, 0.80f);
     }
 
     /**
@@ -2204,8 +2209,16 @@ namespace EdgeCases
 
         // STALE DATA CHECK #1: Clear history if target is CC'd
         // CC changes behavior context - old juke patterns no longer relevant
-        if (target->is_immobilized() || target->is_stunned() || target->is_rooted() ||
-            target->is_charmed() || target->is_feared() || target->is_taunted())
+        bool is_ccd = target->has_buff_of_type(buff_type::stun) ||
+                      target->has_buff_of_type(buff_type::snare) ||
+                      target->has_buff_of_type(buff_type::charm) ||
+                      target->has_buff_of_type(buff_type::fear) ||
+                      target->has_buff_of_type(buff_type::taunt) ||
+                      target->has_buff_of_type(buff_type::suppression) ||
+                      target->has_buff_of_type(buff_type::knockup) ||
+                      target->has_buff_of_type(buff_type::knockback);
+
+        if (is_ccd)
         {
             history.clear();
             info.is_juking = false;
@@ -2216,7 +2229,7 @@ namespace EdgeCases
 
         // STALE DATA CHECK #2: Clear history if target is dead or recalling
         // Dead/recalling = major behavior reset
-        if (target->is_dead() || target->has_buff("recall") || target->has_buff("teleport_target"))
+        if (target->is_dead() || SDKCompat::has_buff(target, "recall") || SDKCompat::has_buff(target, "teleport_target"))
         {
             history.clear();
             info.is_juking = false;
@@ -2307,7 +2320,7 @@ namespace EdgeCases
                 float adjusted_penalty = base_penalty * (1.0f - quality_reduction);
 
                 info.confidence_penalty = 1.0f - adjusted_penalty;
-                info.confidence_penalty = std::clamp(info.confidence_penalty, 0.97f, 1.0f);
+                info.confidence_penalty = SDKCompat::clamp(info.confidence_penalty, 0.97f, 1.0f);
 
                 // Apply sample-count-based scaling
                 // Example: Perfect pattern with only 10 samples:
@@ -2327,7 +2340,7 @@ namespace EdgeCases
                 // variance 0.8 → 0.84x
                 // variance 1.0 → 0.80x (20% max penalty)
                 info.confidence_penalty = 1.0f - (variance * 0.2f);
-                info.confidence_penalty = std::clamp(info.confidence_penalty, 0.80f, 1.0f);
+                info.confidence_penalty = SDKCompat::clamp(info.confidence_penalty, 0.80f, 1.0f);
 
                 // Apply sample-count-based scaling (even more important for random jitter!)
                 info.confidence_penalty *= sample_confidence_multiplier;

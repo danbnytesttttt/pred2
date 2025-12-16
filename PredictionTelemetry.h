@@ -9,6 +9,8 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include "sdk.hpp"
+#include "SDKCompatibility.h"
 
 /**
  * =============================================================================
@@ -682,7 +684,7 @@ namespace PredictionTelemetry
             }
 
             // Validation: Target mismatch detection
-            if (found_event->target_name != target->get_champion_name())
+            if (found_event->target_name != target->get_char_name())
             {
                 stats_.prediction_id_target_mismatches++;
                 return;  // Abort - wrong target for this prediction_id
@@ -711,8 +713,8 @@ namespace PredictionTelemetry
             PendingCastEvaluation pending;
             pending.prediction_id = prediction_id;
             pending.target_network_id = target->get_network_id();
-            pending.target_team = static_cast<uint8_t>(target->get_team());
-            pending.target_champion_hash = hash_champion_name(target->get_champion_name());
+            pending.target_team = static_cast<uint8_t>(target->get_team_id());
+            pending.target_champion_hash = hash_champion_name(target->get_char_name());
             pending.cast_time = cast_time;
             pending.expected_impact_time = expected_impact_time;
             pending.predicted_position = predicted_position;
@@ -924,8 +926,8 @@ namespace PredictionTelemetry
                 if (target && target->is_valid() && target->is_visible())
                 {
                     // P0-B: Validate target identity (network_id reuse protection)
-                    uint8_t current_team = static_cast<uint8_t>(target->get_team());
-                    uint32_t current_hash = hash_champion_name(target->get_champion_name());
+                    uint8_t current_team = static_cast<uint8_t>(target->get_team_id());
+                    uint32_t current_hash = hash_champion_name(target->get_char_name());
 
                     if (current_team != pending.target_team || current_hash != pending.target_champion_hash)
                     {

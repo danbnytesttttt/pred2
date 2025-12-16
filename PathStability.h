@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <cmath>
 #include "sdk.hpp"
+#include "SDKCompatibility.h"
 
 namespace PathStability
 {
@@ -60,7 +61,7 @@ namespace PathStability
             // FRAME-TO-FRAME CHANGE (for immediate direction shifts)
             // ===================================================================
             float dot_prev = first_segment_dir.dot(prev.first_segment_dir);
-            dot_prev = std::clamp(dot_prev, -1.f, 1.f);
+            dot_prev = SDKCompat::clamp(dot_prev, -1.f, 1.f);
             float angle_change_prev = std::acos(dot_prev);
 
             float pos_drift_prev = short_horizon_pos.distance(prev.short_horizon_pos);
@@ -77,7 +78,7 @@ namespace PathStability
             if (ref.is_valid)
             {
                 float dot_ref = first_segment_dir.dot(ref.first_segment_dir);
-                dot_ref = std::clamp(dot_ref, -1.f, 1.f);
+                dot_ref = SDKCompat::clamp(dot_ref, -1.f, 1.f);
                 float angle_change_ref = std::acos(dot_ref);
 
                 float pos_drift_ref = short_horizon_pos.distance(ref.short_horizon_pos);
@@ -163,7 +164,7 @@ namespace PathStability
 
             // Clamp delta_time to prevent negative (time rollback) or huge (freeze) values
             // Max 0.25s = 4 FPS minimum, prevents massive jumps from pauses
-            delta_time = std::clamp(delta_time, 0.f, 0.25f);
+            delta_time = SDKCompat::clamp(delta_time, 0.f, 0.25f);
 
             last_update_time = current_time;
 
@@ -223,7 +224,7 @@ namespace PathStability
             }
 
             // Windup state machine
-            bool in_windup_now = target->is_winding_up() || target->is_channeling();
+            bool in_windup_now = SDKCompat::is_winding_up(target) || target->is_channelling();
             bool just_exited_windup = was_in_windup && !in_windup_now;
 
             if (just_exited_windup)
@@ -344,7 +345,7 @@ namespace PathStability
                 return 0.f;
 
             float dot = current_intent.first_segment_dir.dot(previous_intent.first_segment_dir);
-            dot = std::clamp(dot, -1.f, 1.f);
+            dot = SDKCompat::clamp(dot, -1.f, 1.f);
             return std::acos(dot);
         }
 
@@ -372,14 +373,14 @@ namespace PathStability
         // Required stability scales with t_impact
         // Shorter spells need less confirmation
         // Longer spells need more evidence
-        float required = std::clamp(0.6f * t_impact, 0.10f, 0.40f);
+        float required = SDKCompat::clamp(0.6f * t_impact, 0.10f, 0.40f);
 
-        float ratio = std::clamp(time_stable / required, 0.f, 1.f);
+        float ratio = SDKCompat::clamp(time_stable / required, 0.f, 1.f);
 
         // Knee-curve: early stability is almost meaningless, then rapid reward
         // smoothstep(0.55, 0.95, ratio) creates harsh early penalty, fast reward near stable
         auto smoothstep = [](float edge0, float edge1, float x) {
-            float t = std::clamp((x - edge0) / (edge1 - edge0), 0.f, 1.f);
+            float t = SDKCompat::clamp((x - edge0) / (edge1 - edge0), 0.f, 1.f);
             return t * t * (3.f - 2.f * t);
         };
 
@@ -404,7 +405,7 @@ namespace PathStability
         constexpr float TRANSITION_START = 0.20f;
         constexpr float TRANSITION_DURATION = 0.10f;
 
-        float t = std::clamp((t_impact - TRANSITION_START) / TRANSITION_DURATION, 0.f, 1.f);
+        float t = SDKCompat::clamp((t_impact - TRANSITION_START) / TRANSITION_DURATION, 0.f, 1.f);
         float floor = FLOOR_FAST + (FLOOR_SLOW - FLOOR_FAST) * t;
 
         // Apply calibration: finalHC = baseHC * (floor + (1-floor) * persistence)
