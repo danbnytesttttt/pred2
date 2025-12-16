@@ -1057,6 +1057,10 @@ float CustomPredictionSDK::calculate_target_score(
     if (!target || !target->is_valid())
         return 0.f;
 
+    // Defensive: Validate spell_data.source (should be validated by caller, but check anyway)
+    if (!spell_data.source || !spell_data.source->is_valid())
+        return 0.f;
+
     // Analyze edge cases for this target
     EdgeCases::EdgeCaseAnalysis edge_cases = EdgeCases::analyze_target(target, spell_data.source);
 
