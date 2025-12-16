@@ -627,6 +627,15 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 return result;
             }
 
+            // Re-validate SDK (clock_facade could have been destroyed)
+            if (!g_sdk || !g_sdk->clock_facade)
+            {
+                // Can't log if SDK is invalid, just return
+                result.is_valid = false;
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
+
             float game_time = g_sdk->clock_facade->get_game_time();
             float raw_hc = geo_result.hit_chance_float;
 

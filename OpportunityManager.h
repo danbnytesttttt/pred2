@@ -144,7 +144,17 @@ namespace HybridPred
                 if (hit_chance >= BYPASS_HC) return { true, hit_chance, "HIGH_CONFIDENCE" };
 
                 // 2. DATA UPDATE
-                uint32_t id = target->get_network_id();
+                uint32_t id = 0;
+                try
+                {
+                    id = target->get_network_id();
+                }
+                catch (...)
+                {
+                    // get_network_id() crashed - use pointer as ID
+                    id = reinterpret_cast<uint32_t>(reinterpret_cast<uintptr_t>(target) & 0xFFFFFFFF);
+                }
+
                 auto& history = histories_[id];
 
                 auto prev_trend = history.get_trend();
