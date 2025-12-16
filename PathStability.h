@@ -22,7 +22,7 @@
 
 #include <unordered_map>
 #include <cmath>
-#include "sdk.h"
+#include "sdk.hpp"
 
 namespace PathStability
 {
