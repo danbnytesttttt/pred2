@@ -274,16 +274,18 @@ namespace PredictionVisuals
             // Draw champion name
             g_sdk->renderer->add_text(
                 champion_name,
-                math::vector2(settings.debug_text_x, settings.debug_text_y),
                 18.0f,  // Font size
+                math::vector2(settings.debug_text_x, settings.debug_text_y),
+                0,  // flags
                 settings.debug_text_color
             );
 
             // Draw hitchance below champion name
             g_sdk->renderer->add_text(
                 hitchance_str,
-                math::vector2(settings.debug_text_x, settings.debug_text_y + 20.0f),
                 16.0f,  // Slightly smaller font
+                math::vector2(settings.debug_text_x, settings.debug_text_y + 20.0f),
+                0,  // flags
                 settings.debug_text_color
             );
         }
@@ -326,8 +328,9 @@ namespace PredictionVisuals
 
                 g_sdk->renderer->add_text(
                     text,
-                    math::vector2(settings.debug_text_x, y_offset),
                     16.0f,
+                    math::vector2(settings.debug_text_x, y_offset),
+                    0,  // flags
                     settings.debug_text_color
                 );
 
