@@ -69,8 +69,8 @@ namespace FogOfWarTracker
             if (g_sdk)
             {
                 char msg[256];
-                snprintf(msg, sizeof(msg), "[FogTracker] %s entered fog at time %.1fs",
-                    key.c_str(), current_time);
+                snprintf(msg, sizeof(msg), "[FogTracker] Target (ID:%u) entered fog at time %.1fs",
+                    key, current_time);
                 g_sdk->log_console(msg);
             }
         }
@@ -80,8 +80,8 @@ namespace FogOfWarTracker
             if (g_sdk)
             {
                 char msg[256];
-                snprintf(msg, sizeof(msg), "[FogTracker] %s became visible again at time %.1fs",
-                    key.c_str(), current_time);
+                snprintf(msg, sizeof(msg), "[FogTracker] Target (ID:%u) became visible again at time %.1fs",
+                    key, current_time);
                 g_sdk->log_console(msg);
             }
         }
@@ -126,8 +126,8 @@ namespace FogOfWarTracker
             if (g_sdk)
             {
                 char msg[256];
-                snprintf(msg, sizeof(msg), "[FogTracker] Blocking prediction for %s - in fog and fog predictions disabled",
-                    key.c_str());
+                snprintf(msg, sizeof(msg), "[FogTracker] Blocking prediction for target (ID:%u) - in fog and fog predictions disabled",
+                    key);
                 g_sdk->log_console(msg);
             }
             return { false, 0.f };
@@ -142,8 +142,8 @@ namespace FogOfWarTracker
             if (g_sdk)
             {
                 char msg[256];
-                snprintf(msg, sizeof(msg), "[FogTracker] Blocking prediction for %s - in fog for %.2fs (max: %.2fs)",
-                    key.c_str(), time_in_fog, settings.max_fog_prediction_time);
+                snprintf(msg, sizeof(msg), "[FogTracker] Blocking prediction for target (ID:%u) - in fog for %.2fs (max: %.2fs)",
+                    key, time_in_fog, settings.max_fog_prediction_time);
                 g_sdk->log_console(msg);
             }
             return { false, 0.f };
@@ -153,8 +153,8 @@ namespace FogOfWarTracker
         if (g_sdk)
         {
             char msg[256];
-            snprintf(msg, sizeof(msg), "[FogTracker] Allowing fog prediction for %s - in fog for %.2fs (confidence multiplier: %.2f)",
-                key.c_str(), time_in_fog, settings.fog_confidence_multiplier);
+            snprintf(msg, sizeof(msg), "[FogTracker] Allowing fog prediction for target (ID:%u) - in fog for %.2fs (confidence multiplier: %.2f)",
+                key, time_in_fog, settings.fog_confidence_multiplier);
             g_sdk->log_console(msg);
         }
 
