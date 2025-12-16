@@ -16,6 +16,9 @@ namespace HybridPred
 
     class HitChanceHistory
     {
+    public:
+        enum class Trend { Stable, Rising, Falling };
+
     private:
         static constexpr int BUFFER_SIZE = 32; // ~0.25s history at 120 FPS
         std::array<float, BUFFER_SIZE> buffer_{};
@@ -26,7 +29,6 @@ namespace HybridPred
         float last_update_time_ = 0.f;
         float peak_hc_ = 0.f;
 
-        enum class Trend { Stable, Rising, Falling };
         Trend current_trend_ = Trend::Stable;
 
     public:
