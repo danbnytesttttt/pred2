@@ -2568,7 +2568,7 @@ namespace EdgeCases
             analysis.priority_multiplier *= 0.7f;  // Prefer unshielded targets
 
         if (analysis.blocked_by_windwall)
-            analysis.confidence_multiplier *= 0.2f;  // Will be blocked by windwall
+            analysis.confidence_multiplier = 0.0f;  // Windwall is binary - spell will be deleted
 
         if (analysis.blocked_by_terrain)
             analysis.confidence_multiplier *= 0.1f;  // Will be blocked by terrain (Azir R, Taliyah R)

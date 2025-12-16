@@ -613,7 +613,10 @@ namespace GeometricPred
         /**
          * ESCAPE DISTANCE CALCULATION (CIRCLE) - TERRAIN AWARE
          * How far must target run to escape a circular AoE?
-         * Checks 8 radial escape directions and returns shortest WALKABLE path
+         * Checks 8 escape directions and calculates actual distance to circle edge for each
+         * Returns shortest WALKABLE path
+         *
+         * IMPROVED: Calculates per-direction distance instead of reusing radial distance
          */
         inline float calculate_escape_distance_circle(
             const math::vector3& target_pos,
@@ -621,34 +624,66 @@ namespace GeometricPred
             float spell_radius,
             float target_radius)
         {
-            // Distance from target center to spell edge
+            // Distance from target center to spell edge (radial - for quick check)
             float distance_to_center = distance_2d(target_pos, spell_center);
-            float distance_to_exit = spell_radius + target_radius - distance_to_center;
+            float radial_distance = spell_radius + target_radius - distance_to_center;
 
             // Already outside
-            if (distance_to_exit <= 0.f)
+            if (radial_distance <= 0.f)
                 return 0.f;
 
-            // No navmesh available - return geometric distance
+            // No navmesh available - return geometric distance (radial is shortest)
             if (!g_sdk || !g_sdk->nav_mesh)
-                return distance_to_exit;
+                return radial_distance;
 
-            // Check 8 radial escape directions (N, NE, E, SE, S, SW, W, NW)
-            // Find shortest walkable escape path
+            // Check 8 escape directions (N, NE, E, SE, S, SW, W, NW)
+            // Calculate actual distance to circle edge for EACH direction
             constexpr int NUM_DIRECTIONS = 8;
             constexpr float SAFETY_MARGIN = 20.f;
             float shortest_walkable = 999999.f;
+
+            // Vector from spell center to target
+            math::vector3 to_target = target_pos - spell_center;
+            float effective_radius = spell_radius + target_radius;
 
             for (int i = 0; i < NUM_DIRECTIONS; ++i)
             {
                 float angle = (i * 3.14159f * 2.f) / NUM_DIRECTIONS;
                 math::vector3 escape_dir(std::cos(angle), 0.f, std::sin(angle));
-                math::vector3 escape_point = target_pos + escape_dir * (distance_to_exit + SAFETY_MARGIN);
+
+                // Calculate distance to circle edge in THIS direction
+                // Solve: |target_pos + t*escape_dir - spell_center| = effective_radius
+                // Let V = to_target (vector from center to current position)
+                // We want: |V + t*D|² = R²
+                // Expanding: |V|² + 2t(V·D) + t² = R²
+                // Quadratic: t² + 2(V·D)t + (|V|² - R²) = 0
+                // Solution: t = -(V·D) + sqrt((V·D)² - |V|² + R²)
+
+                float vx = to_target.x;
+                float vz = to_target.z;
+                float dx = escape_dir.x;
+                float dz = escape_dir.z;
+
+                float v_mag_sq = vx * vx + vz * vz;
+                float v_dot_d = vx * dx + vz * dz;
+                float discriminant = v_dot_d * v_dot_d - v_mag_sq + effective_radius * effective_radius;
+
+                // If discriminant < 0, no intersection (shouldn't happen for point inside circle)
+                if (discriminant < 0.f)
+                    continue;
+
+                float distance_in_direction = -v_dot_d + std::sqrt(discriminant);
+
+                // Must be positive (moving away from current position)
+                if (distance_in_direction < 0.f)
+                    continue;
+
+                // Check if escape point is walkable
+                math::vector3 escape_point = target_pos + escape_dir * (distance_in_direction + SAFETY_MARGIN);
 
                 if (g_sdk->nav_mesh->is_pathable(escape_point))
                 {
-                    shortest_walkable = std::min(shortest_walkable, distance_to_exit);
-                    break;  // Found a walkable path, geometric distance is accurate
+                    shortest_walkable = std::min(shortest_walkable, distance_in_direction);
                 }
             }
 
