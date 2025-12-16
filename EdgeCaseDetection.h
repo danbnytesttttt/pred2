@@ -1654,12 +1654,9 @@ namespace EdgeCases
                 float estimated_dps = LANE_BASE_DPS;
 
                 // Higher DPS if minion is under tower (tower shots = massive burst)
-                // SDK LIMITATION: get_enemy_turrets() not available - conservative estimate
-                if (false && g_sdk && g_sdk->object_manager)
+                if (g_sdk && g_sdk->object_manager && source)
                 {
-                    // Disabled: SDK doesn't provide get_enemy_turrets() method
-                    // Using conservative minion DPS estimate instead
-                    std::vector<game_object*> towers;  // Empty - no tower check
+                    auto towers = SDKCompat::get_enemy_turrets(g_sdk->object_manager, source);
                     for (auto* tower : towers)
                     {
                         if (tower && tower->is_valid() && !tower->is_dead())

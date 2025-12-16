@@ -110,9 +110,14 @@ namespace SDKCompat
      */
     inline bool is_winding_up(game_object* obj)
     {
-        // SDK doesn't have this method directly
-        // Best approximation: check if in attack/spell animation
-        return false;  // Conservative: assume not winding up
+        if (!obj) return false;
+
+        // Check if actively casting a spell
+        auto* active_cast = obj->get_active_spell_cast();
+        if (active_cast)
+            return true;
+
+        return false;
     }
 
     /**
@@ -152,26 +157,44 @@ namespace SDKCompat
     /**
      * Get enemy heroes
      */
-    inline std::vector<game_object*> get_enemy_heroes(object_manager* mgr)
+    inline std::vector<game_object*> get_enemy_heroes(object_manager* mgr, game_object* local_player)
     {
         std::vector<game_object*> result;
-        if (!mgr) return result;
+        if (!mgr || !local_player) return result;
 
-        // SDK likely has get_enemy_team() or similar
-        // For now, return empty vector - needs SDK-specific implementation
+        int my_team = local_player->get_team_id();
+        auto all_heroes = mgr->get_heroes();
+
+        for (auto* hero : all_heroes)
+        {
+            if (hero && hero->is_valid() && !hero->is_dead() && hero->get_team_id() != my_team)
+            {
+                result.push_back(hero);
+            }
+        }
+
         return result;
     }
 
     /**
      * Get enemy turrets
      */
-    inline std::vector<game_object*> get_enemy_turrets(object_manager* mgr)
+    inline std::vector<game_object*> get_enemy_turrets(object_manager* mgr, game_object* local_player)
     {
         std::vector<game_object*> result;
-        if (!mgr) return result;
+        if (!mgr || !local_player) return result;
 
-        // SDK likely has get_turrets() or similar
-        // For now, return empty vector - needs SDK-specific implementation
+        int my_team = local_player->get_team_id();
+        auto all_turrets = mgr->get_turrets();
+
+        for (auto* turret : all_turrets)
+        {
+            if (turret && turret->is_valid() && !turret->is_dead() && turret->get_team_id() != my_team)
+            {
+                result.push_back(turret);
+            }
+        }
+
         return result;
     }
 
