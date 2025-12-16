@@ -134,55 +134,63 @@ namespace HybridPred
             bool is_urgent,
             float game_time)
         {
-            // CRITICAL: Validate game object before any access
-            if (!target || !target->is_valid()) return { false, 0.f, "INVALID_TARGET" };
-
-            // 1. HARD BYPASS (Speed)
-            if (is_urgent) return { true, hit_chance, "URGENT_STATE" };
-            if (hit_chance >= BYPASS_HC) return { true, hit_chance, "HIGH_CONFIDENCE" };
-
-            // 2. DATA UPDATE
-            uint32_t id = target->get_network_id();
-            auto& history = histories_[id];
-
-            auto prev_trend = history.get_trend();
-            history.add_sample(hit_chance, game_time);
-            auto curr_trend = history.get_trend();
-
-            // 3. COLD START (First 35ms)
-            if (history.get_sample_count() < 5)
+            try
             {
-                if (hit_chance > 0.70f) return { true, hit_chance, "COLD_START_GOOD" };
-                return { false, hit_chance, "GATHERING_DATA" };
-            }
+                // CRITICAL: Validate game object before any access
+                if (!target || !target->is_valid()) return { false, 0.f, "INVALID_TARGET" };
 
-            // 4. PEAK DETECTION (Accuracy)
-            bool was_rising = (prev_trend == HitChanceHistory::Trend::Rising);
-            bool is_dropping = (curr_trend == HitChanceHistory::Trend::Falling);
+                // 1. HARD BYPASS (Speed)
+                if (is_urgent) return { true, hit_chance, "URGENT_STATE" };
+                if (hit_chance >= BYPASS_HC) return { true, hit_chance, "HIGH_CONFIDENCE" };
 
-            if (was_rising && is_dropping && hit_chance > MIN_PEAK_QUALITY)
-            {
-                return { true, hit_chance, "PEAK_DETECTED" };
-            }
+                // 2. DATA UPDATE
+                uint32_t id = target->get_network_id();
+                auto& history = histories_[id];
 
-            // 5. PLATEAU DETECTION (Consistency)
-            if (curr_trend == HitChanceHistory::Trend::Stable)
-            {
-                if (history.get_average(5) > PLATEAU_THRESHOLD)
+                auto prev_trend = history.get_trend();
+                history.add_sample(hit_chance, game_time);
+                auto curr_trend = history.get_trend();
+
+                // 3. COLD START (First 35ms)
+                if (history.get_sample_count() < 5)
                 {
-                    return { true, hit_chance, "PLATEAU_FIRE" };
+                    if (hit_chance > 0.70f) return { true, hit_chance, "COLD_START_GOOD" };
+                    return { false, hit_chance, "GATHERING_DATA" };
                 }
-            }
 
-            // 6. TIMEOUT (Feel)
-            if (game_time - history.get_start_time() > MAX_WAIT_TIME)
+                // 4. PEAK DETECTION (Accuracy)
+                bool was_rising = (prev_trend == HitChanceHistory::Trend::Rising);
+                bool is_dropping = (curr_trend == HitChanceHistory::Trend::Falling);
+
+                if (was_rising && is_dropping && hit_chance > MIN_PEAK_QUALITY)
+                {
+                    return { true, hit_chance, "PEAK_DETECTED" };
+                }
+
+                // 5. PLATEAU DETECTION (Consistency)
+                if (curr_trend == HitChanceHistory::Trend::Stable)
+                {
+                    if (history.get_average(5) > PLATEAU_THRESHOLD)
+                    {
+                        return { true, hit_chance, "PLATEAU_FIRE" };
+                    }
+                }
+
+                // 6. TIMEOUT (Feel)
+                if (game_time - history.get_start_time() > MAX_WAIT_TIME)
+                {
+                    if (hit_chance > 0.50f) return { true, hit_chance, "TIMEOUT_ACCEPT" };
+
+                    if (hit_chance < 0.30f) history.reset(game_time);
+                }
+
+                return { false, hit_chance, "WAITING" };
+            }
+            catch (...)
             {
-                if (hit_chance > 0.50f) return { true, hit_chance, "TIMEOUT_ACCEPT" };
-
-                if (hit_chance < 0.30f) history.reset(game_time);
+                // CRITICAL: Exception in OpportunityManager - fail safe by allowing cast
+                return { true, hit_chance, "EXCEPTION_BYPASS" };
             }
-
-            return { false, hit_chance, "WAITING" };
         }
     };
 }

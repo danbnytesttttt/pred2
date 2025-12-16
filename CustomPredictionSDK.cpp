@@ -615,7 +615,18 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         // =====================================================================
         // All validations passed - now check if THIS is the right moment to cast
         // OpportunityManager implements peak detection to avoid premature firing
+        try
         {
+            // Re-validate target before OpportunityManager (could have become invalid during prediction)
+            if (!obj || !obj->is_valid())
+            {
+                if (PredictionSettings::get().enable_debug_logging)
+                    g_sdk->log_console("[Danny.Prediction] Target invalidated before OpportunityManager");
+                result.is_valid = false;
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
+
             float game_time = g_sdk->clock_facade->get_game_time();
             float raw_hc = geo_result.hit_chance_float;
 
@@ -657,6 +668,13 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                     decision.final_hit_chance * 100.f, decision.reason);
                 g_sdk->log_console(debug_msg);
             }
+        }
+        catch (...)
+        {
+            // CRITICAL: OpportunityManager crashed - bypass it and allow cast
+            if (PredictionSettings::get().enable_debug_logging)
+                g_sdk->log_console("[Danny.Prediction] WARNING: OpportunityManager exception caught, bypassing");
+            // Continue with prediction (don't block the cast due to OpportunityManager crash)
         }
 
         // Log successful prediction to telemetry (wrapped in try-catch for safety)
