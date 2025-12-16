@@ -387,7 +387,10 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
         }
         catch (...)
         {
-            // Prediction system crashed - return invalid result
+            // CRITICAL: GeometricPred crashed - log for debugging
+            if (PredictionSettings::get().enable_debug_logging && g_sdk)
+                g_sdk->log_console("[Danny.Prediction] EXCEPTION inside GeometricPred::get_prediction()");
+
             result.hitchance = pred_sdk::hitchance::any;
             result.is_valid = false;
             return result;

@@ -61,6 +61,7 @@ void __fastcall on_draw()
                 // Collect visible enemies with hitchances
                 game_object* visible_enemies[5] = {nullptr};
                 float hitchances[5] = {0.0f};
+                std::string name_storage[5];  // owns memory
                 const char* names[5] = {nullptr};
                 int count = 0;
 
@@ -80,7 +81,8 @@ void __fastcall on_draw()
                     {
                         visible_enemies[count] = enemy;
                         hitchances[count] = it->second * 100.0f;  // Convert to percentage
-                        names[count] = enemy->get_char_name().c_str();
+                        name_storage[count] = enemy->get_char_name();  // copy string (owns memory)
+                        names[count] = name_storage[count].c_str();     // stable pointer
                         count++;
                     }
                 }
@@ -123,6 +125,12 @@ void __fastcall on_draw()
 
                     // Convert to screen space
                     math::vector2 screen_pos = g_sdk->renderer->world_to_screen(enemy_pos);
+
+                    // Validate screen position (reject invalid/offscreen)
+                    if ((screen_pos.x == 0.f && screen_pos.y == 0.f) ||
+                        std::isnan(screen_pos.x) || std::isnan(screen_pos.y) ||
+                        std::isinf(screen_pos.x) || std::isinf(screen_pos.y))
+                        continue;
 
                     // Format text
                     char text_buffer[32];

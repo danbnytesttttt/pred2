@@ -30,7 +30,7 @@ namespace FogOfWarTracker
         math::vector3 last_known_velocity;  // Velocity when we last saw them
     };
 
-    inline std::unordered_map<std::string, VisibilityData> g_visibility_data;
+    inline std::unordered_map<uint32_t, VisibilityData> g_visibility_data;  // Key by network_id (unique)
 
     // Settings
     struct FogSettings
@@ -54,7 +54,7 @@ namespace FogOfWarTracker
         if (!target || !target->is_valid())
             return;
 
-        std::string key = target->get_char_name();
+        uint32_t key = target->get_network_id();  // Use network_id (unique per entity)
         auto& data = g_visibility_data[key];
 
         bool currently_visible = target->is_visible();
@@ -104,7 +104,7 @@ namespace FogOfWarTracker
         if (!target || !target->is_valid())
             return { false, 0.f };
 
-        std::string key = target->get_char_name();
+        uint32_t key = target->get_network_id();
         auto it = g_visibility_data.find(key);
 
         // No tracking data yet - assume visible
@@ -169,7 +169,7 @@ namespace FogOfWarTracker
         if (!target || !target->is_valid())
             return 999.f;
 
-        std::string key = target->get_char_name();
+        uint32_t key = target->get_network_id();
         auto it = g_visibility_data.find(key);
 
         if (it == g_visibility_data.end())
