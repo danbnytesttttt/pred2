@@ -707,7 +707,7 @@ math::vector3 CustomPredictionSDK::predict_on_path(game_object* obj, float time,
 
 pred_sdk::collision_ret CustomPredictionSDK::collides(
     const math::vector3& end_point,
-    pred_sdk::spell_data spell_data,
+    const pred_sdk::spell_data& spell_data,
     const game_object* target_obj)
 {
     pred_sdk::collision_ret result{};
