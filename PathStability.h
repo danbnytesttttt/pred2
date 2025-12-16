@@ -224,7 +224,7 @@ namespace PathStability
             }
 
             // Windup state machine
-            bool in_windup_now = SDKCompat::is_winding_up(target) || SDKCompat::is_channeling(target) target;
+            bool in_windup_now = SDKCompat::is_winding_up(target) || SDKCompat::is_channeling(target);
             bool just_exited_windup = was_in_windup && !in_windup_now;
 
             if (just_exited_windup)

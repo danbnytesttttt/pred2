@@ -1874,8 +1874,6 @@ namespace GeometricPred
         return result;
     }
 
-} // namespace GeometricPred
-
     // =========================================================================
     // MULTI-TARGET AOE PREDICTION
     // =========================================================================
