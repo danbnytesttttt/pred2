@@ -151,8 +151,8 @@ namespace HybridPred
                 }
                 catch (...)
                 {
-                    // get_network_id() crashed - use pointer as ID
-                    id = reinterpret_cast<uint32_t>(reinterpret_cast<uintptr_t>(target) & 0xFFFFFFFF);
+                    // get_network_id() crashed - use pointer as ID (truncate to 32-bit)
+                    id = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(target));
                 }
 
                 auto& history = histories_[id];

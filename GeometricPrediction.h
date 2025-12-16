@@ -1805,7 +1805,7 @@ namespace GeometricPred
         if (PredictionSettings::get().enable_telemetry)
         {
             PredictionTelemetry::PredictionEvent event;
-            event.timestamp = g_sdk->clock_facade ? g_sdk->clock_facade->get_game_time() : 0.f;
+            event.timestamp = (g_sdk && g_sdk->clock_facade) ? g_sdk->clock_facade->get_game_time() : 0.f;
             event.target_name = input.target->get_char_name();
 
             // Log spell shape type

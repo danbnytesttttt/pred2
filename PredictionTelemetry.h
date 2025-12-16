@@ -911,6 +911,15 @@ namespace PredictionTelemetry
                     continue;
                 }
 
+                // Bounds check sample_index (defensive programming against corruption)
+                if (pending.sample_index >= kNumSamples)
+                {
+                    finalize_outcome(pending);
+                    it = pending_casts_.erase(it);
+                    stats_.pending_casts_timed_out++;
+                    continue;
+                }
+
                 // Determine which sample we should take based on current time
                 float sample_time = pending.expected_impact_time + kSampleOffsets[pending.sample_index];
 

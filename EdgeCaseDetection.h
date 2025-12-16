@@ -2280,7 +2280,7 @@ namespace EdgeCases
             // 15 samples (750ms) = medium confidence (3-4 cycles)
             // 30 samples (1500ms) = high confidence (5-7 cycles)
             float sample_confidence_multiplier = 1.0f;
-            int num_samples = history.velocity_samples.size();
+            int num_samples = static_cast<int>(history.velocity_samples.size());
 
             if (num_samples < MovementHistory::MIN_SAMPLES_FOR_PREDICTION)
             {
