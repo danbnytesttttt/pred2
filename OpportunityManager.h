@@ -134,7 +134,8 @@ namespace HybridPred
             bool is_urgent,
             float game_time)
         {
-            if (!target) return { false, 0.f, "INVALID" };
+            // CRITICAL: Validate game object before any access
+            if (!target || !target->is_valid()) return { false, 0.f, "INVALID_TARGET" };
 
             // 1. HARD BYPASS (Speed)
             if (is_urgent) return { true, hit_chance, "URGENT_STATE" };
