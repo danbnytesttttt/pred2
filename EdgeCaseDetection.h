@@ -3,6 +3,7 @@
 #include "sdk.hpp"
 #include "hp_sdk.hpp"  // Health prediction for ghost minion check
 #include "StandalonePredictionSDK.h"  // MUST be included AFTER sdk.hpp for compatibility
+#include "SDKCompatibility.h"  // SDK API compatibility layer
 #include "PredictionSettings.h"
 #include <vector>
 #include <string>
