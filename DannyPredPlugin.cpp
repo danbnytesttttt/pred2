@@ -79,7 +79,7 @@ void __fastcall on_draw()
                     {
                         visible_enemies[count] = enemy;
                         hitchances[count] = it->second * 100.0f;  // Convert to percentage
-                        names[count] = enemy->get_char_name();
+                        names[count] = enemy->get_char_name().c_str();
                         count++;
                     }
                 }

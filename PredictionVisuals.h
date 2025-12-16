@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "sdk.hpp"
 
@@ -272,7 +272,7 @@ namespace PredictionVisuals
             snprintf(hitchance_str, sizeof(hitchance_str), "%.1f%%", hitchance_percent);
 
             // Draw champion name
-            g_sdk->renderer->add_text_2d(
+            g_sdk->renderer->add_text(
                 champion_name,
                 math::vector2(settings.debug_text_x, settings.debug_text_y),
                 18.0f,  // Font size
@@ -280,7 +280,7 @@ namespace PredictionVisuals
             );
 
             // Draw hitchance below champion name
-            g_sdk->renderer->add_text_2d(
+            g_sdk->renderer->add_text(
                 hitchance_str,
                 math::vector2(settings.debug_text_x, settings.debug_text_y + 20.0f),
                 16.0f,  // Slightly smaller font
@@ -324,7 +324,7 @@ namespace PredictionVisuals
                 char text[128];
                 snprintf(text, sizeof(text), "%s: %.1f%%", names[i], hitchances[i]);
 
-                g_sdk->renderer->add_text_2d(
+                g_sdk->renderer->add_text(
                     text,
                     math::vector2(settings.debug_text_x, y_offset),
                     16.0f,

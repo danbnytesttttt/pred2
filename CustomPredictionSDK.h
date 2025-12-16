@@ -83,7 +83,7 @@ public:
     /**
      * Check collision with environment/units
      */
-    collision_ret collides(const math::vector3& end_point, const pred_sdk::spell_data& spell_data, const game_object* target) override;
+    collision_ret collides(const math::vector3& end_point, pred_sdk::spell_data spell_data, const game_object* target) override;
 
     // =========================================================================
     // AOE PREDICTION (MULTI-TARGET)

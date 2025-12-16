@@ -402,7 +402,7 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
 
         if (!geo_result.should_cast || geo_result.hit_chance == GeometricPred::HitChance::Impossible)
         {
-            if (geo_result.block_reason && PredictionSettings::get().enable_debug_logging)
+            if (!geo_result.block_reason.empty() && PredictionSettings::get().enable_debug_logging)
             {
                 std::string debug_msg = "[Danny.Prediction] Blocked: ";
                 debug_msg += geo_result.block_reason;
@@ -412,7 +412,7 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
             // Log invalid prediction to telemetry
             if (PredictionSettings::get().enable_telemetry)
             {
-                std::string reason = geo_result.block_reason ? geo_result.block_reason : "Unknown";
+                std::string reason = !geo_result.block_reason.empty() ? geo_result.block_reason : "Unknown";
                 PredictionTelemetry::TelemetryLogger::log_invalid_prediction(reason);
             }
 
@@ -655,7 +655,7 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 }
                 else
                 {
-                    event.edge_case = geo_result.edge_case_type ? geo_result.edge_case_type : "normal";
+                    event.edge_case = !geo_result.edge_case_type.empty() ? geo_result.edge_case_type : "normal";
                 }
 
                 // Check for stationary/animation lock
@@ -707,7 +707,7 @@ math::vector3 CustomPredictionSDK::predict_on_path(game_object* obj, float time,
 
 pred_sdk::collision_ret CustomPredictionSDK::collides(
     const math::vector3& end_point,
-    const pred_sdk::spell_data& spell_data,
+    pred_sdk::spell_data spell_data,
     const game_object* target_obj)
 {
     pred_sdk::collision_ret result{};
@@ -716,15 +716,19 @@ pred_sdk::collision_ret CustomPredictionSDK::collides(
     try
     {
         if (spell_data.forbidden_collisions.empty())
+        {
             return result;
+        }
 
         if (!spell_data.source || !spell_data.source->is_valid())
+        {
             return result;
+        }
 
         math::vector3 start = spell_data.source->get_position();
 
         // Simple collision check
-        if (check_collision_simple(start, end_point, spell_data, target_obj))
+        if (this->check_collision_simple(start, end_point, spell_data, target_obj))
         {
             result.collided = true;
             result.collided_units.clear(); // Simplified - would need actual collision units
