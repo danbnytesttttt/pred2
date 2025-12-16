@@ -4,6 +4,7 @@
 #include "PredictionVisuals.h"
 #include "PredictionTelemetry.h"
 #include "FogOfWarTracker.h"
+#include "OpportunityManager.h"
 
 CustomPredictionSDK customPrediction;
 
@@ -252,6 +253,7 @@ namespace Prediction
         // GeometricPred is stateless - no cleanup needed
         FogOfWarTracker::clear();
         PredictionVisuals::clear();
+        HybridPred::OpportunityManager::clear();
 
         if (g_sdk && PredictionSettings::get().enable_debug_logging)
             g_sdk->log_console("[Danny.Prediction] Unloaded - all subsystems cleared");

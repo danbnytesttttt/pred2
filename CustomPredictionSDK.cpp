@@ -5,6 +5,7 @@
 #include "PredictionTelemetry.h"
 #include "PredictionVisuals.h"
 #include "FogOfWarTracker.h"
+#include "OpportunityManager.h"  // Opportunity window detection for peak hit chances
 #include "StandalonePredictionSDK.h"  // For math::is_zero
 #include <algorithm>
 #include <limits>
@@ -597,6 +598,55 @@ pred_sdk::pred_data CustomPredictionSDK::predict(game_object* obj, pred_sdk::spe
                 }
             }
             catch (...) { /* Ignore collision check errors */ }
+        }
+
+        // =====================================================================
+        // OPPORTUNITY WINDOW DETECTION
+        // =====================================================================
+        // All validations passed - now check if THIS is the right moment to cast
+        // OpportunityManager implements peak detection to avoid premature firing
+        {
+            float game_time = g_sdk->clock_facade->get_game_time();
+            float raw_hc = geo_result.hit_chance_float;
+
+            // Determine if this is an urgent situation (bypass waiting)
+            bool is_urgent = (!geo_result.edge_case_type.empty() && geo_result.edge_case_type != "normal")
+                          || geo_result.is_stasis
+                          || geo_result.is_channeling
+                          || geo_result.is_animation_locked
+                          || (geo_result.hit_chance_float >= 0.85f);
+
+            auto decision = HybridPred::OpportunityManager::get().evaluate(
+                obj, raw_hc, is_urgent, game_time
+            );
+
+            if (!decision.should_cast)
+            {
+                // OpportunityManager says wait for a better opportunity
+                if (PredictionSettings::get().enable_debug_logging)
+                {
+                    char debug_msg[256];
+                    snprintf(debug_msg, sizeof(debug_msg),
+                        "[Danny.Prediction] OpportunityManager: WAITING (HC: %.0f%%, Reason: %s)",
+                        decision.final_hit_chance * 100.f, decision.reason);
+                    g_sdk->log_console(debug_msg);
+                }
+
+                // Return invalid result - wait for peak
+                result.is_valid = false;
+                result.hitchance = pred_sdk::hitchance::any;
+                return result;
+            }
+
+            // OpportunityManager approved - log the decision
+            if (PredictionSettings::get().enable_debug_logging)
+            {
+                char debug_msg[256];
+                snprintf(debug_msg, sizeof(debug_msg),
+                    "[Danny.Prediction] OpportunityManager: CAST NOW (HC: %.0f%%, Reason: %s)",
+                    decision.final_hit_chance * 100.f, decision.reason);
+                g_sdk->log_console(debug_msg);
+            }
         }
 
         // Log successful prediction to telemetry (wrapped in try-catch for safety)
