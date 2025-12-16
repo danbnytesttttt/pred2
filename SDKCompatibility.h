@@ -97,12 +97,18 @@ namespace SDKCompat
     }
 
     /**
-     * Check if channeling (uses is_channelling from SDK)
+     * Check if channeling (casting a channeled spell)
      */
     inline bool is_channeling(game_object* obj)
     {
-        // Note: SDK uses British spelling "channelling"
-        return obj ? obj->is_channelling() : false;
+        if (!obj) return false;
+
+        // Check if actively casting (channeling uses active_spell_cast)
+        auto* active_cast = obj->get_active_spell_cast();
+        if (active_cast)
+            return true;
+
+        return false;
     }
 
     /**
@@ -207,7 +213,7 @@ namespace SDKCompat
      */
     inline game_object* local_player(core_sdk* sdk)
     {
-        return sdk ? sdk->get_local_player() : nullptr;
+        return sdk ? sdk->object_manager->get_local_player() : nullptr;
     }
 
     // =========================================================================

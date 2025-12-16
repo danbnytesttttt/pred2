@@ -1654,9 +1654,12 @@ namespace EdgeCases
                 float estimated_dps = LANE_BASE_DPS;
 
                 // Higher DPS if minion is under tower (tower shots = massive burst)
-                if (g_sdk && g_sdk->object_manager && source)
+                if (g_sdk && g_sdk->object_manager)
                 {
-                    auto towers = SDKCompat::get_enemy_turrets(g_sdk->object_manager, source);
+                    auto* local = g_sdk->object_manager->get_local_player();
+                    if (local)
+                    {
+                        auto towers = SDKCompat::get_enemy_turrets(g_sdk->object_manager, local);
                     for (auto* tower : towers)
                     {
                         if (tower && tower->is_valid() && !tower->is_dead())
@@ -1675,6 +1678,7 @@ namespace EdgeCases
                                 break;
                             }
                         }
+                    }
                     }
                 }
 

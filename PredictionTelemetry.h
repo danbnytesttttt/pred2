@@ -11,6 +11,7 @@
 #include <iomanip>
 #include "sdk.hpp"
 #include "SDKCompatibility.h"
+#include "PathStability.h"
 
 /**
  * =============================================================================

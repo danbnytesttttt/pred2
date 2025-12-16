@@ -190,8 +190,8 @@ namespace GeometricPred
         uint64_t prediction_id;       // Unique ID for linking with telemetry and cast tracking
 
         // Debug
-        const char* block_reason;     // Why we can't cast (if Impossible)
-        const char* edge_case_type;   // "normal", "stasis", "dash", "channeling"
+        std::string block_reason;     // Why we can't cast (if Impossible)
+        std::string edge_case_type;   // "normal", "stasis", "dash", "channeling"
 
         PredictionResult()
             : cast_position{}, first_cast_position{}, hit_chance(HitChance::Impossible), should_cast(false),
@@ -204,7 +204,7 @@ namespace GeometricPred
               target_velocity(0.f), stasis_wait_time(0.f), computation_time_ms(0.f),
               baseline_hc(0.f), persistence(1.f), calibrated_hc(0.f),
               prediction_id(0),
-              block_reason(nullptr), edge_case_type("normal")
+              block_reason(""), edge_case_type("normal")
         {}
     };
 
@@ -267,7 +267,7 @@ namespace GeometricPred
             if (!target) return false;
 
             // Check invulnerability buff
-            if (target->has_buff_of_type(buff_type::invulnerable))
+            if (target->has_buff_of_type(buff_type::invulnerability))
                 return true;
 
             // Check untargetable state (Fizz E, Vlad W, Yi Q, Elise E, Xayah R, Kayn R)
@@ -299,7 +299,8 @@ namespace GeometricPred
             {
                 if (!buff || !buff->is_active()) continue;
 
-                const char* name = buff->get_name();
+                std::string name_str = buff->get_name();
+                const char* name = name_str.c_str();
                 if (name && (
                     std::strstr(name, "SivirE") ||
                     std::strstr(name, "SivirShield") ||
@@ -475,7 +476,7 @@ namespace GeometricPred
 
                 // Only check enemy/neutral minions
                 // (Don't block on allied minions - game doesn't do that for most spells)
-                if (minion->get_team_id() == g_sdk->get_local_player()->get_team_id())
+                if (minion->get_team_id() == g_sdk->object_manager->get_local_player()->get_team_id())
                     continue;
 
                 math::vector3 minion_pos = minion->get_position();
@@ -566,7 +567,7 @@ namespace GeometricPred
         {
             if (!g_sdk || !g_sdk->object_manager) return false;
 
-            auto* local_player = g_sdk->get_local_player();
+            auto* local_player = g_sdk->object_manager->get_local_player();
             if (!local_player) return false;
 
             // Get enemy champions and check for windwall abilities
@@ -578,7 +579,7 @@ namespace GeometricPred
                     continue;
 
                 // Check for Yasuo W (Wind Wall)
-                if (std::strcmp(enemy->get_char_name(), "Yasuo") == 0)
+                if (std::strcmp(enemy->get_char_name().c_str(), "Yasuo") == 0)
                 {
                     // Check if Yasuo has active Wind Wall
                     // This would require checking for the wall object in object_manager
@@ -588,7 +589,7 @@ namespace GeometricPred
                 }
 
                 // Check for Braum E (Unbreakable)
-                if (std::strcmp(enemy->get_char_name(), "Braum") == 0)
+                if (std::strcmp(enemy->get_char_name().c_str(), "Braum") == 0)
                 {
                     // Braum E blocks projectiles in a direction
                     // Would need to check if he's facing our spell direction
@@ -596,7 +597,7 @@ namespace GeometricPred
                 }
 
                 // Check for Samira W (Blade Whirl)
-                if (std::strcmp(enemy->get_char_name(), "Samira") == 0)
+                if (std::strcmp(enemy->get_char_name().c_str(), "Samira") == 0)
                 {
                     // Samira W destroys projectiles around her
                     // Check if she has the buff active
@@ -1832,7 +1833,7 @@ namespace GeometricPred
                 event.delta_short_horizon = tracker->get_delta_short_horizon();
 
                 // Windup tracking (Priority 2)
-                event.is_winding_up = SDKCompat::is_winding_up(input.target) || input.target->is_channelling();
+                event.is_winding_up = SDKCompat::is_winding_up(input.target) || SDKCompat::is_channeling(input.target);
                 event.windup_damping_factor = event.is_winding_up ? 0.3f : 1.0f;
             }
 
